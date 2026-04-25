@@ -1,0 +1,1031 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>投資儀表板 · 永豐金</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-treemap@3.1.0/dist/chartjs-chart-treemap.min.js"></script>
+<style>
+  :root {
+    --bg: oklch(98% 0 0);
+    --surface: oklch(100% 0 0);
+    --ink: oklch(20% 0.01 250);
+    --muted: oklch(55% 0.02 250);
+    --line: oklch(92% 0.005 250);
+    --accent: oklch(58% 0.18 255);
+    --accent2: oklch(70% 0.14 60);
+    --pos: oklch(60% 0.15 145);
+    --neg: oklch(60% 0.18 25);
+    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.06);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: oklch(16% 0.01 250);
+      --surface: oklch(22% 0.01 250);
+      --ink: oklch(96% 0 0);
+      --muted: oklch(72% 0.01 250);
+      --line: oklch(28% 0.01 250);
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--ink);
+    padding: clamp(16px, 3vw, 32px);
+  }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+    margin-bottom: 24px; flex-wrap: wrap;
+  }
+  h1 { font-size: clamp(20px, 3vw, 28px); margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin-bottom: 16px;
+  }
+  .grid.hero {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    margin-bottom: 16px;
+  }
+  .grid.hero .card { padding: 20px 22px; }
+  .grid.hero .card .value { font-size: clamp(24px, 3vw, 34px); }
+  .input {
+    padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line);
+    background: transparent; color: var(--ink); font-size: 12px; min-width: 140px;
+  }
+  .input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .tx-pos { color: var(--pos); }
+  .tx-neg { color: var(--neg); }
+  .cat-pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 11px; background: color-mix(in oklch, var(--accent) 15%, transparent);
+    color: var(--accent);
+  }
+  .cat-buy  { background: color-mix(in oklch, var(--neg) 15%, transparent); color: var(--neg); }
+  .cat-sell { background: color-mix(in oklch, var(--pos) 15%, transparent); color: var(--pos); }
+  .cat-div  { background: color-mix(in oklch, var(--accent2) 18%, transparent); color: var(--accent2); }
+  .card {
+    background: var(--surface); border-radius: var(--radius);
+    padding: 18px 20px; box-shadow: var(--shadow);
+    border: 1px solid var(--line);
+  }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .card .value { font-size: clamp(20px, 2.5vw, 28px); font-weight: 600; margin-top: 6px; letter-spacing: -0.01em; }
+  .card .delta { font-size: 13px; margin-top: 4px; color: var(--muted); }
+  .pos { color: var(--pos); }
+  .neg { color: var(--neg); }
+  .charts {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    margin-bottom: 24px;
+  }
+  .chart-card { background: var(--surface); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+  .chart-card h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+  .chart-wrap { position: relative; height: 280px; }
+  .chart-wrap.tall { height: 380px; }
+  .charts.compact { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child, th.l, td.l { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; }
+  th:hover { color: var(--ink); }
+  tr:hover td { background: color-mix(in oklch, var(--accent) 6%, transparent); }
+  .month-picker, .filter-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+  .filter-bar { gap: 16px; }
+  .filter-group { display: flex; gap: 4px; align-items: center; }
+  .filter-group .lbl { color: var(--muted); font-size: 12px; margin-right: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .pill {
+    padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+    background: transparent; color: var(--muted); font-size: 12px; cursor: pointer;
+    transition: all .15s ease;
+  }
+  .pill:hover { color: var(--ink); }
+  .pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .spark { display: inline-block; vertical-align: middle; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 24px; line-height: 1.7; }
+  footer code { background: var(--line); padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>投資儀表板</h1>
+    <div class="sub">永豐金證券 · 台股 + 複委託 · USD 視為投資、TWD 銀行視為現金</div>
+  </div>
+  <div class="sub" id="period-meta"></div>
+</header>
+
+<section class="grid hero" id="kpi-hero"></section>
+<section class="grid" id="kpi"></section>
+
+<section class="charts">
+  <div class="chart-card">
+    <h2>累計 TWR（%）</h2>
+    <div class="chart-wrap"><canvas id="twrChart"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h2>月報酬貢獻（pp · 台股 + 美股）</h2>
+    <div class="chart-wrap"><canvas id="monthlyChart"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h2>月度資產配置（TWD · 含現金）</h2>
+    <div class="chart-wrap"><canvas id="allocChart"></canvas></div>
+  </div>
+</section>
+
+<section class="charts compact">
+  <div class="chart-card">
+    <h2>當月持倉占比</h2>
+    <div class="chart-wrap"><canvas id="holdingsPie"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h2>損益排行（個股 · 已實現＋未實現＋配息）</h2>
+    <div class="filter-bar" id="pnl-filters">
+      <div class="filter-group">
+        <span class="lbl">市場</span>
+        <button class="pill active" data-mkt="tw">台股</button>
+        <button class="pill" data-mkt="us">美股</button>
+      </div>
+      <div class="filter-group">
+        <span class="lbl">範圍</span>
+        <button class="pill active" data-scope="all">全部</button>
+        <button class="pill" data-scope="held">持有中</button>
+      </div>
+    </div>
+    <div class="chart-wrap tall"><canvas id="pnlBar"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h2 id="treemap-title">持倉熱圖（面積＝市值，色相＝損益%）</h2>
+    <div class="filter-bar" id="tree-filters">
+      <div class="filter-group">
+        <span class="lbl">市場</span>
+        <button class="pill active" data-mkt="tw">台股</button>
+        <button class="pill" data-mkt="us">美股</button>
+      </div>
+      <div class="filter-group">
+        <span class="lbl">範圍</span>
+        <button class="pill active" data-scope="held">持有中</button>
+        <button class="pill" data-scope="all">全部（面積＝|損益|）</button>
+      </div>
+    </div>
+    <div class="chart-wrap tall"><canvas id="treemap"></canvas></div>
+  </div>
+</section>
+
+<section class="chart-card" style="margin-bottom:24px">
+  <h2>持倉明細</h2>
+  <div class="filter-bar">
+    <div class="filter-group" id="market-filter">
+      <span class="lbl">市場</span>
+      <button class="pill active" data-mkt="all">全部</button>
+      <button class="pill" data-mkt="tw">台股</button>
+      <button class="pill" data-mkt="us">美股</button>
+    </div>
+  </div>
+  <div class="month-picker" id="month-picker"></div>
+  <div style="overflow-x:auto"><table id="holdings-table"></table></div>
+</section>
+
+<section class="chart-card" style="margin-bottom:24px">
+  <h2>交易明細</h2>
+  <div class="sub" style="margin-bottom:8px">每筆證券交易、配息與銀行投資相關現金流。可依月份、市場、類型、代號／名稱篩選。</div>
+  <div class="filter-bar">
+    <div class="filter-group" id="tx-venue">
+      <span class="lbl">市場</span>
+      <button class="pill active" data-v="all">全部</button>
+      <button class="pill" data-v="TW">台股</button>
+      <button class="pill" data-v="Foreign">複委託</button>
+      <button class="pill" data-v="Bank">銀行</button>
+    </div>
+    <div class="filter-group" id="tx-side">
+      <span class="lbl">類型</span>
+      <button class="pill active" data-s="all">全部</button>
+      <button class="pill" data-s="buy">買進</button>
+      <button class="pill" data-s="sell">賣出</button>
+      <button class="pill" data-s="div">股利／折讓</button>
+      <button class="pill" data-s="fx">換匯</button>
+      <button class="pill" data-s="bank">銀行交易</button>
+    </div>
+    <div class="filter-group">
+      <span class="lbl">月份</span>
+      <select id="tx-month" class="input"><option value="all">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <span class="lbl">搜尋</span>
+      <input id="tx-search" class="input" placeholder="代號 / 名稱" />
+    </div>
+    <div class="filter-group" style="margin-left:auto">
+      <span class="sub" id="tx-summary"></span>
+    </div>
+  </div>
+  <div style="overflow-x:auto; max-height: 520px"><table id="tx-table"></table></div>
+</section>
+
+<section class="chart-card" style="margin-bottom:24px">
+  <h2>個股分析（跨月彙整）</h2>
+  <div class="sub" style="margin-bottom:8px">資料源為交易明細（含已結清個股，如同月買進並賣出的部位）。已實現損益＝賣出金額 − 加權平均成本 × 賣出股數；未實現損益僅在仍持有時顯示。迷你圖為該股累計現金流。點擊欄位標題可排序。受上方市場篩選影響。</div>
+  <div style="overflow-x:auto"><table id="per-stock-table"></table></div>
+</section>
+
+<footer>
+  資料來源：<code>data/portfolio.json</code>（重新產生：<code>python3 parse_statements.py</code>）。
+  <strong>邊界定義</strong>：TWD 銀行 = 現金；其餘（台股 + 複委託 + USD 存款 + USD 持倉）= 投資。
+  <strong>反事實淨值</strong> = 將銀行 TWD 帳上每筆 <code>股票款 / 折讓款 / 手機換匯</code> 反向回填的結果，等於「若從未投資的 TWD 餘額」。
+  <strong>投資淨損益</strong> = 真實 − 反事實，不依賴券商側 <code>客戶淨收付</code> 的彙總，逐筆可驗證。
+  TWR 採月度 Modified Dietz；XIRR 以月中作為現金流日期；首月 TWR 強制為 0%。
+  融資（margin）僅以資自備款計入投資現金流，與銀行 <code>股票款</code> 對齊；融資金額不計入。
+  已知缺口：台股配息（集保撥入若不在 永豐 TWD 帳）目前未自動歸到投資側。
+</footer>
+
+<script>
+// Escape any string before injecting into HTML.
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+));
+const fmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const fmt2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (v) => (v == null ? "—" : (v * 100).toFixed(2) + "%");
+const signed = (v) => (v >= 0 ? "+" : "") + fmt.format(v);
+
+// SVG sparkline — single small inline SVG, no Chart.js instance per row.
+function sparkline(values, w = 90, h = 24) {
+  const clean = values.filter(v => Number.isFinite(v));
+  if (clean.length < 2) return "";
+  const min = Math.min(...clean), max = Math.max(...clean);
+  const span = max - min || 1;
+  const stepX = w / (values.length - 1);
+  const pts = values.map((v, i) => {
+    const x = i * stepX;
+    const y = h - ((v - min) / span) * (h - 4) - 2;
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  const last = values[values.length - 1], first = clean[0];
+  const color = last >= first ? "var(--pos)" : "var(--neg)";
+  return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">'
+    + '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts + '"/></svg>';
+}
+
+const marketLabel = (mkt, sub) => mkt === "tw" ? "台股 " + sub : mkt === "us" ? "美股 " + sub : mkt + " " + sub;
+
+// Build a flat per-month holding list with TWD-normalized fields.
+function flattenHoldings(m) {
+  const fx = m.fx_usd_twd || 0;
+  const tw = (m.tw?.holdings ?? []).map(h => ({
+    market: "tw", sub: h.type, code: h.code, name: h.name, qty: h.qty,
+    cost_twd: h.cost, mkt_twd: h.mkt_value, pnl_twd: h.unrealized_pnl,
+    pnl_pct: h.cost ? h.unrealized_pnl / h.cost : 0, ccy: "TWD",
+  }));
+  const fgn = (m.foreign?.holdings ?? []).map(h => {
+    const rate = h.ccy === "USD" ? fx : 0;
+    return {
+      market: h.ccy === "USD" ? "us" : "other", sub: h.ccy,
+      code: h.code, name: h.name, qty: h.qty,
+      cost_twd: h.cost * rate, mkt_twd: h.mkt_value * rate, pnl_twd: h.unrealized_pnl * rate,
+      pnl_pct: h.cost ? h.unrealized_pnl / h.cost : 0, ccy: h.ccy,
+    };
+  });
+  return [...tw, ...fgn];
+}
+
+const state = {
+  marketFilter: "all",
+  monthIndex: 0,
+  stockSort: { key: "mkt_twd", dir: -1 },
+  txSort: { key: "date", dir: -1 },
+  txFilters: { venue: "all", side: "all", month: "all", search: "" },
+};
+
+// Map bank category → human label for the side column.
+const BANK_CAT_LABEL = {
+  salary: "薪資", transfer: "轉帳", interest: "利息",
+  rebate: "折讓款", tw_dividend: "ACH股息", foreign_dividend: "海外股息", fx_convert: "換匯",
+  stock_settle_tw: "股票款", stock_settle_fx: "股款交割", other: "其他",
+};
+
+// Classify a trade row into one of buy / sell / div / fx for filter pills.
+function txKind(t) {
+  if (t.venue === "Bank") {
+    if (t.category === "fx_convert") return "fx";
+    if (t.category === "rebate" || t.category === "tw_dividend" || t.category === "foreign_dividend") return "div";
+    return "bank";   // salary / transfer / interest / other — surfaced via 銀行交易 pill
+  }
+  if (t.side === "股利") return "div";
+  if (t.side?.includes("買") || t.side === "買進") return "buy";
+  if (t.side?.includes("賣") || t.side === "賣出") return "sell";
+  return null;
+}
+
+(async () => {
+  const data = await fetch("data/portfolio.json").then(r => r.json());
+  const months = data.months;
+  if (!months.length) return;
+  state.monthIndex = months.length - 1;
+
+  const labels = months.map(m => m.month);
+  const twr = months.map(m => (m.cum_twr ?? 0) * 100);
+  const tw_mv = months.map(m => m.tw_market_value_twd);
+  const fgn_mv = months.map(m => m.foreign_market_value_twd);
+  const usd_cash = months.map(m => m.bank?.cash_foreign_twd ?? 0);
+  const twd_cash = months.map(m => m.bank?.cash_twd ?? 0);
+
+  // Per-segment Modified Dietz monthly return, then convert to
+  // contribution-to-portfolio-return (segment_return × segment_weight_at_start).
+  // Contributions are additive in pp, so the stacked bar's total height ≈
+  // total period return. Month 1 is forced to 0 (no prior equity baseline),
+  // matching the parent metric.
+  const segReturn = (vStart, vEnd, flow) => {
+    const denom = vStart + 0.5 * flow;
+    if (!denom || vStart <= 0) return 0;
+    return (vEnd - vStart - flow) / denom;
+  };
+  const twContrib = [];
+  const fgnContrib = [];
+  for (let i = 0; i < months.length; i++) {
+    if (i === 0) { twContrib.push(0); fgnContrib.push(0); continue; }
+    const prev = months[i - 1], cur = months[i];
+    const tw_flow = cur.tw?.net_cashflow_twd ?? 0;
+    const fgn_usd_flow = (cur.foreign?.cashflow_by_ccy?.USD ?? 0);
+    const fx = cur.fx_usd_twd || prev.fx_usd_twd || 0;
+    const fgn_flow = fgn_usd_flow * fx;
+    const tw_r = segReturn(prev.tw_market_value_twd, cur.tw_market_value_twd, tw_flow);
+    const fgn_r = segReturn(prev.foreign_market_value_twd, cur.foreign_market_value_twd, fgn_flow);
+    const total_v = (prev.tw_market_value_twd || 0) + (prev.foreign_market_value_twd || 0);
+    const tw_w = total_v ? prev.tw_market_value_twd / total_v : 0;
+    const fgn_w = total_v ? prev.foreign_market_value_twd / total_v : 0;
+    twContrib.push(tw_r * tw_w * 100);
+    fgnContrib.push(fgn_r * fgn_w * 100);
+  }
+
+  const last = months[months.length - 1];
+  const sum = data.summary ?? {};
+  const k = sum.kpis ?? {};
+  const cum = sum.cumulative_flows ?? {};
+
+  const kpi = (label, value, delta, cls) => `
+    <div class="card">
+      <div class="label">${esc(label)}</div>
+      <div class="value ${esc(cls || '')}">${esc(value)}</div>
+      <div class="delta">${esc(delta || '')}</div>
+    </div>`;
+
+  // All values below originate from parsed PDF data; esc() in kpi() escapes every
+  // interpolation. setHTML() is a thin wrapper to satisfy the project's safety pattern.
+  const setHTML = (id, html) => { document.getElementById(id).innerHTML = html; };
+
+  setHTML("kpi-hero", [
+    kpi("真實淨值",
+        "NT$ " + fmt.format(k.real_now_twd ?? 0),
+        "TWD 銀行 + 證券 + USD"),
+    kpi("反事實淨值（若從未投資）",
+        "NT$ " + fmt.format(k.counterfactual_twd ?? 0),
+        "TWD 銀行 ＋ 投資現金流回填"),
+    kpi("投資淨損益",
+        "NT$ " + signed(k.profit_twd ?? 0),
+        "真實 − 反事實",
+        (k.profit_twd ?? 0) >= 0 ? "pos" : "neg"),
+  ].join(""));
+
+  setHTML("kpi", [
+    kpi("台股市值", "NT$ " + fmt.format(k.brokerage_tw_mv_twd ?? 0), `截至 ${k.as_of}`),
+    kpi("複委託市值（TWD）", "NT$ " + fmt.format(k.brokerage_foreign_mv_twd ?? 0), "USD × 月底匯率"),
+    kpi("USD 銀行存款（TWD）", "NT$ " + fmt.format(k.bank_usd_in_twd_now ?? 0), "視為投資資產"),
+    kpi("TWD 銀行現金", "NT$ " + fmt.format(k.bank_twd_now ?? 0), "現金（不在投資內）"),
+    kpi("USD/TWD", k.fx_usd_twd ? k.fx_usd_twd.toFixed(3) : "—", `截至 ${k.as_of}`),
+    kpi("累計 TWR", pct(last.cum_twr), "Modified Dietz", (last.cum_twr ?? 0) >= 0 ? "pos" : "neg"),
+    kpi("XIRR（年化）", pct(last.xirr), "money-weighted", (last.xirr ?? 0) >= 0 ? "pos" : "neg"),
+    kpi("累計換匯（→USD）", "NT$ " + fmt.format(cum.fx_to_usd_twd ?? 0), `回兌 ${fmt.format(cum.fx_to_twd_twd ?? 0)}`),
+  ].join(""));
+
+  document.getElementById("period-meta").textContent = `${months[0].month} → ${last.month}`;
+
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  Chart.defaults.color = css("--muted");
+  Chart.defaults.borderColor = css("--line");
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+
+  // Cumulative TWR
+  new Chart(document.getElementById("twrChart"), {
+    type: "line",
+    data: { labels, datasets: [{ label: "累計 TWR %", data: twr, borderColor: css("--accent"), backgroundColor: "rgba(80,120,255,.1)", fill: true, tension: 0.3, pointRadius: 3 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { callback: v => v.toFixed(1) + "%" } } } },
+  });
+
+  // Monthly returns — stacked contribution-to-return (pp)
+  new Chart(document.getElementById("monthlyChart"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "台股", data: twContrib, backgroundColor: css("--accent"), stack: "r", borderRadius: 3 },
+        { label: "美股", data: fgnContrib, backgroundColor: css("--accent2"), stack: "r", borderRadius: 3 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y >= 0 ? "+" : ""}${c.parsed.y.toFixed(2)}pp` } },
+      },
+      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => v.toFixed(1) + "pp" } } },
+    },
+  });
+
+  // Allocation stacked — adds USD cash + TWD cash so the bar shows full balance sheet
+  new Chart(document.getElementById("allocChart"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "台股", data: tw_mv, backgroundColor: css("--accent"), stack: "x" },
+        { label: "美股（USD→TWD）", data: fgn_mv, backgroundColor: css("--pos"), stack: "x" },
+        { label: "USD 現金", data: usd_cash, backgroundColor: css("--accent2"), stack: "x" },
+        { label: "TWD 現金", data: twd_cash, backgroundColor: css("--muted"), stack: "x" },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: c => `${c.dataset.label}: NT$ ${fmt.format(c.parsed.y)}` } } },
+      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => fmt.format(v) } } },
+    },
+  });
+
+  // ---------- Holdings pie / P&L bar / Treemap ----------
+  // Diverging color: red (loss) → neutral → green (gain), clamped at ±50%.
+  const pnlColor = (pct) => {
+    if (!Number.isFinite(pct)) return css("--muted");
+    const t = Math.max(-1, Math.min(1, pct / 0.5));
+    if (t >= 0) return `oklch(62% ${(0.05 + 0.15 * t).toFixed(3)} 145)`;
+    return `oklch(62% ${(0.05 + 0.15 * -t).toFixed(3)} 25)`;
+  };
+
+  // Distinct categorical hues for the holdings pie — cycle through OKLCH so
+  // adjacent slices stay perceptually distinct regardless of count.
+  const palette = (n) => Array.from({ length: n }, (_, i) =>
+    `oklch(65% 0.15 ${Math.round((i * 360) / n)})`);
+
+  const lastMonth = months[months.length - 1];
+  const lastHoldings = flattenHoldings(lastMonth)
+    .filter(h => h.mkt_twd > 0)
+    .sort((a, b) => b.mkt_twd - a.mkt_twd);
+
+  // Holdings pie (current month)
+  const pieColors = palette(lastHoldings.length);
+  new Chart(document.getElementById("holdingsPie"), {
+    type: "doughnut",
+    data: {
+      labels: lastHoldings.map(h => `${h.code || h.name} ${h.name}`),
+      datasets: [{ data: lastHoldings.map(h => h.mkt_twd), backgroundColor: pieColors, borderWidth: 1, borderColor: css("--surface") }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "55%",
+      plugins: {
+        legend: { position: "right", labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: { callbacks: {
+          label: c => {
+            const total = c.dataset.data.reduce((a, b) => a + b, 0);
+            const pct = total ? (c.parsed / total * 100).toFixed(1) : 0;
+            return `${c.label}: NT$ ${fmt.format(c.parsed)} (${pct}%)`;
+          },
+        } },
+      },
+    },
+  });
+
+  // P&L ranking + treemap share the same per-ticker source.
+  const perTickerAll = buildPerTicker().filter(r => Math.abs(r.total_pnl) > 1 || r.held_qty > 0.0001);
+  const lastHoldingKeys = new Set(lastHoldings.map(h => `${h.market}|${h.code || h.name}`));
+
+  const pnlFilters = { market: "tw", scope: "all" };   // 4 views: tw/us × all/held
+  const treeFilters = { market: "tw", scope: "held" }; // 4 views: tw/us × held/all
+
+  let pnlChart = null, treeChart = null;
+
+  function renderPnlBar() {
+    const rows = perTickerAll
+      .filter(r => r.market === pnlFilters.market)
+      .filter(r => pnlFilters.scope === "all" || r.held_qty > 0.0001)
+      .sort((a, b) => b.total_pnl - a.total_pnl);
+
+    const cfg = {
+      type: "bar",
+      data: {
+        labels: rows.map(r => `${r.code || ""} ${r.name}`.trim()),
+        datasets: [{
+          label: "總損益（TWD）",
+          data: rows.map(r => r.total_pnl),
+          backgroundColor: rows.map(r => r.total_pnl >= 0 ? css("--pos") : css("--neg")),
+          borderRadius: 3,
+        }],
+      },
+      options: {
+        indexAxis: "y", responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: c => {
+            const r = rows[c.dataIndex];
+            return [
+              `總損益: ${signed(c.parsed.x)} TWD`,
+              `已實現: ${signed(r.realized_pnl)}  未實現: ${signed(r.unrealized_pnl)}`,
+              `配息: ${fmt.format(r.div_twd)}  報酬率: ${pct(r.pnl_pct)}`,
+            ];
+          } } },
+        },
+        scales: { x: { ticks: { callback: v => fmt.format(v) } }, y: { ticks: { font: { size: 11 } } } },
+      },
+    };
+    if (pnlChart) pnlChart.destroy();
+    pnlChart = new Chart(document.getElementById("pnlBar"), cfg);
+  }
+
+  function renderTreemap() {
+    const heldOnly = treeFilters.scope === "held";
+    const sized = heldOnly
+      ? perTickerAll
+          .filter(r => r.market === treeFilters.market)
+          .filter(r => lastHoldingKeys.has(`${r.market}|${r.code || r.name}`) && r.mkt_twd > 0)
+          .map(r => ({
+            label: `${r.code || ""} ${r.name}`.trim(),
+            value: r.mkt_twd,
+            pnl_pct: r.pnl_pct, pnl_twd: r.total_pnl,
+            metric_label: "市值",
+          }))
+      : perTickerAll
+          .filter(r => r.market === treeFilters.market)
+          .filter(r => Math.abs(r.total_pnl) > 1)
+          .map(r => ({
+            label: `${r.code || ""} ${r.name}`.trim(),
+            value: Math.abs(r.total_pnl),
+            pnl_pct: r.pnl_pct, pnl_twd: r.total_pnl,
+            metric_label: "|損益|",
+          }));
+
+    document.getElementById("treemap-title").textContent = heldOnly
+      ? "持倉熱圖（面積＝市值，色相＝損益%）"
+      : "績效熱圖（面積＝|損益|，色相＝損益%）";
+
+    const cfg = {
+      type: "treemap",
+      data: {
+        datasets: [{
+          tree: sized, key: "value",
+          labels: {
+            display: true, color: "#fff", font: { size: 11, weight: "600" },
+            formatter: (ctx) => {
+              const d = ctx.raw?._data; if (!d) return "";
+              return [d.label, "NT$ " + fmt.format(d.value), pct(d.pnl_pct)];
+            },
+          },
+          backgroundColor: (ctx) => {
+            const d = ctx.raw?._data;
+            return d ? pnlColor(d.pnl_pct) : css("--muted");
+          },
+          borderColor: css("--surface"), borderWidth: 1, spacing: 1,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: {
+            title: (items) => items[0]?.raw?._data?.label || "",
+            label: (item) => {
+              const d = item.raw?._data; if (!d) return "";
+              return [`${d.metric_label}: NT$ ${fmt.format(d.value)}`, `總損益: ${signed(d.pnl_twd)} (${pct(d.pnl_pct)})`];
+            },
+          } },
+        },
+      },
+    };
+    if (treeChart) treeChart.destroy();
+    treeChart = new Chart(document.getElementById("treemap"), cfg);
+  }
+
+  // Wire up the per-card pill toggles. Each card has two filter-groups; the
+  // active pill within each group drives one axis of the 2×2 view matrix.
+  const wireToggle = (containerId, state, onChange) => {
+    document.getElementById(containerId).addEventListener("click", e => {
+      const btn = e.target.closest(".pill");
+      if (!btn) return;
+      const group = btn.parentElement;
+      group.querySelectorAll(".pill").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      if (btn.dataset.mkt) state.market = btn.dataset.mkt;
+      if (btn.dataset.scope) state.scope = btn.dataset.scope;
+      onChange();
+    });
+  };
+  wireToggle("pnl-filters", pnlFilters, renderPnlBar);
+  wireToggle("tree-filters", treeFilters, renderTreemap);
+
+  renderPnlBar();
+  renderTreemap();
+
+  // Month picker
+  const picker = document.getElementById("month-picker");
+  picker.innerHTML = months.map((m, i) =>
+    `<button class="pill ${i === months.length - 1 ? "active" : ""}" data-i="${i}">${esc(m.month)}</button>`
+  ).join("");
+  picker.addEventListener("click", e => {
+    const btn = e.target.closest(".pill");
+    if (!btn) return;
+    picker.querySelectorAll(".pill").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.monthIndex = +btn.dataset.i;
+    renderHoldings();
+  });
+
+  // Market filter
+  const marketBar = document.getElementById("market-filter");
+  marketBar.addEventListener("click", e => {
+    const btn = e.target.closest(".pill");
+    if (!btn) return;
+    marketBar.querySelectorAll(".pill").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.marketFilter = btn.dataset.mkt;
+    renderHoldings();
+    renderPerStock();
+  });
+
+  const applyMarketFilter = (rows) =>
+    state.marketFilter === "all" ? rows : rows.filter(r => r.market === state.marketFilter);
+
+  function renderHoldings() {
+    const m = months[state.monthIndex];
+    const all = applyMarketFilter(flattenHoldings(m));
+    const tbl = document.getElementById("holdings-table");
+    if (!all.length) { tbl.innerHTML = "<tbody><tr><td>無持倉。</td></tr></tbody>"; return; }
+    const rows = all.map(h => `
+      <tr>
+        <td>${esc(marketLabel(h.market, h.sub))}</td>
+        <td>${esc(h.code)}</td><td>${esc(h.name)}</td>
+        <td>${fmt2.format(h.qty)}</td>
+        <td>${fmt.format(h.cost_twd)}</td>
+        <td>${fmt.format(h.mkt_twd)}</td>
+        <td class="${h.pnl_twd >= 0 ? 'pos' : 'neg'}">${signed(h.pnl_twd)}</td>
+        <td class="${h.pnl_twd >= 0 ? 'pos' : 'neg'}">${pct(h.pnl_pct)}</td>
+      </tr>`).join("");
+    tbl.innerHTML = `
+      <thead><tr>
+        <th class="l">市場</th><th class="l">代號</th><th class="l">名稱</th>
+        <th>股數</th><th>成本（TWD）</th><th>市值（TWD）</th>
+        <th>未實現損益</th><th>%</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>`;
+  }
+
+  // Per-ticker aggregation built from the trade ledger (sum.all_trades), so
+  // round-trip positions closed within a single month (which leave no row in
+  // the brokerage's month-end holdings table) still appear here. Codes are
+  // resolved server-side in parse_statements.py via holdings + the manual
+  // override file data/tw_ticker_map.json — no fuzzy matching here.
+  //
+  // Realized P&L for a closed lot: sum(net_twd) is already signed (negative
+  // for buys incl. fees, positive for sells net of fees/tax). For partially
+  // closed positions, weighted-average cost separates realized from unrealized.
+  function buildPerTicker() {
+    const trades = sum.all_trades ?? [];
+    const byKey = new Map();
+
+    for (const t of trades) {
+      const market = t.venue === "Foreign" ? (t.ccy === "USD" ? "us" : "other") : "tw";
+      // Group by code when present (stable across name-spelling drift), else
+      // by name as fallback for the rare unmapped TW row.
+      const id = t.code || t.name;
+      const key = `${market}|${id}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          market, sub: market === "tw" ? "現股" : t.ccy,
+          code: t.code || "", name: t.name, ccy: t.ccy,
+          buy_qty: 0, buy_cost_twd: 0,
+          sell_qty: 0, sell_proceeds_twd: 0,
+          div_twd: 0, n_trades: 0,
+          firstDate: t.date, lastDate: t.date,
+          monthly_net: {},
+        });
+      }
+      const r = byKey.get(key);
+      // Prefer the longest seen name (PDF abbreviates inconsistently across rows).
+      if (t.name && t.name.length > r.name.length) r.name = t.name;
+      r.code = r.code || t.code || "";
+      r.n_trades++;
+      if (t.date < r.firstDate) r.firstDate = t.date;
+      if (t.date > r.lastDate) r.lastDate = t.date;
+      r.monthly_net[t.month] = (r.monthly_net[t.month] || 0) + (t.net_twd || 0);
+
+      if (t.side === "股利") {
+        r.div_twd += t.net_twd || 0;
+      } else if (/買/.test(t.side)) {
+        r.buy_qty += t.qty || 0;
+        r.buy_cost_twd += -(t.net_twd || 0);
+      } else if (/賣/.test(t.side)) {
+        r.sell_qty += t.qty || 0;
+        r.sell_proceeds_twd += t.net_twd || 0;
+      }
+    }
+
+    // Latest holdings snapshot, keyed by (market|code), for unrealized P&L on
+    // still-held positions. With codes pre-populated on trades, this is now a
+    // straight code lookup — no name normalization needed.
+    const latestByCode = new Map();
+    for (let i = months.length - 1; i >= 0; i--) {
+      flattenHoldings(months[i]).forEach(h => {
+        const k = `${h.market}|${h.code}`;
+        if (h.code && !latestByCode.has(k)) {
+          latestByCode.set(k, { qty: h.qty, mkt_twd: h.mkt_twd, sub: h.sub });
+        }
+      });
+    }
+
+    return [...byKey.values()].map(r => {
+      const held_qty = r.buy_qty - r.sell_qty;
+      const avg_cost = r.buy_qty > 0 ? r.buy_cost_twd / r.buy_qty : 0;
+      const cost_of_sold = avg_cost * r.sell_qty;
+      const realized_pnl = r.sell_proceeds_twd - cost_of_sold;
+      const remaining_cost = avg_cost * held_qty;
+
+      const h = r.code ? latestByCode.get(`${r.market}|${r.code}`) : null;
+      const code = r.code;
+      let sub = h?.sub || r.sub;
+      let mkt_twd = 0, unrealized_pnl = 0;
+      if (held_qty > 0.0001 && h) {
+        mkt_twd = h.mkt_twd;
+        unrealized_pnl = mkt_twd - remaining_cost;
+      }
+
+      const total_pnl = realized_pnl + unrealized_pnl + r.div_twd;
+      const pnl_pct = r.buy_cost_twd > 0 ? total_pnl / r.buy_cost_twd : 0;
+
+      // Sparkline: cumulative net cashflow per month for this ticker. Down on
+      // buys (cash out), flat when held, up on sells (cash in).
+      let cum = 0;
+      const cumSeries = months.map(m => (cum += r.monthly_net[m.month] || 0));
+
+      return {
+        market: r.market, sub, code, name: r.name, ccy: r.ccy,
+        n_trades: r.n_trades,
+        held_qty,
+        buy_cost_twd: r.buy_cost_twd,
+        sell_proceeds_twd: r.sell_proceeds_twd,
+        div_twd: r.div_twd,
+        realized_pnl, unrealized_pnl, mkt_twd,
+        total_pnl, pnl_pct,
+        closed: held_qty < 0.0001,
+        firstDate: r.firstDate, lastDate: r.lastDate,
+        series: cumSeries,
+      };
+    });
+  }
+
+  function renderPerStock() {
+    let rows = applyMarketFilter(buildPerTicker());
+    const { key, dir } = state.stockSort;
+    rows.sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+    });
+    const tbl = document.getElementById("per-stock-table");
+    if (!rows.length) { setHTML("per-stock-table", "<tbody><tr><td>無資料。</td></tr></tbody>"); return; }
+
+    const arrow = (k) => state.stockSort.key === k ? (state.stockSort.dir === -1 ? " ↓" : " ↑") : "";
+    const cls = v => v >= 0 ? "pos" : "neg";
+    const cell = v => v ? `<span class="${cls(v)}">${signed(v)}</span>` : "—";
+
+    const trs = rows.map(r => `
+      <tr${r.closed ? ' style="opacity:.7"' : ""}>
+        <td>${esc(marketLabel(r.market, r.sub))}</td>
+        <td>${esc(r.code)}</td>
+        <td>${esc(r.name)}${r.closed ? ' <span class="sub">（已結清）</span>' : ""}</td>
+        <td>${r.n_trades}</td>
+        <td>${r.held_qty > 0.0001 ? fmt2.format(r.held_qty) : "—"}</td>
+        <td>${fmt.format(r.buy_cost_twd)}</td>
+        <td>${fmt.format(r.sell_proceeds_twd)}</td>
+        <td>${r.div_twd ? fmt.format(r.div_twd) : "—"}</td>
+        <td>${cell(r.realized_pnl)}</td>
+        <td>${r.held_qty > 0.0001 ? cell(r.unrealized_pnl) : "—"}</td>
+        <td class="${cls(r.total_pnl)}"><strong>${signed(r.total_pnl)}</strong></td>
+        <td class="${cls(r.total_pnl)}">${pct(r.pnl_pct)}</td>
+        <td>${sparkline(r.series)}</td>
+        <td>${esc(r.firstDate)} → ${esc(r.lastDate)}</td>
+      </tr>`).join("");
+
+    setHTML("per-stock-table", `
+      <thead><tr>
+        <th class="l" data-k="market">市場${arrow("market")}</th>
+        <th class="l" data-k="code">代號${arrow("code")}</th>
+        <th class="l" data-k="name">名稱${arrow("name")}</th>
+        <th data-k="n_trades">交易次數${arrow("n_trades")}</th>
+        <th data-k="held_qty">持股${arrow("held_qty")}</th>
+        <th data-k="buy_cost_twd">累計買入${arrow("buy_cost_twd")}</th>
+        <th data-k="sell_proceeds_twd">累計賣出${arrow("sell_proceeds_twd")}</th>
+        <th data-k="div_twd">配息${arrow("div_twd")}</th>
+        <th data-k="realized_pnl">已實現${arrow("realized_pnl")}</th>
+        <th data-k="unrealized_pnl">未實現${arrow("unrealized_pnl")}</th>
+        <th data-k="total_pnl">總損益${arrow("total_pnl")}</th>
+        <th data-k="pnl_pct">%${arrow("pnl_pct")}</th>
+        <th>累計現金流</th>
+        <th class="l" data-k="firstDate">期間${arrow("firstDate")}</th>
+      </tr></thead>
+      <tbody>${trs}</tbody>`);
+
+    tbl.querySelectorAll("th[data-k]").forEach(th => {
+      th.addEventListener("click", () => {
+        const k = th.dataset.k;
+        if (state.stockSort.key === k) state.stockSort.dir *= -1;
+        else state.stockSort = { key: k, dir: -1 };
+        renderPerStock();
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Transaction ledger
+  // ---------------------------------------------------------------------
+  // Build a unified row list: securities trades + dividends + bank investment txs.
+  function buildAllTxRows() {
+    const rows = [...(sum.all_trades ?? [])];
+    months.forEach(m => {
+      (m.bank?.tx_twd ?? []).forEach(tx => {
+        // 股票款 is a bank-side aggregate of broker per-trade rows — always skip
+        // to avoid duplicates. All other categories are surfaced; non-investment
+        // ones (salary / transfer / interest / other) are gated by the showBank
+        // toggle in applyTxFilters().
+        if (tx.category === "stock_settle_tw") return;
+        rows.push({
+          month: m.month, date: tx.date, venue: "Bank",
+          side: BANK_CAT_LABEL[tx.category] || tx.summary,
+          code: "", name: [tx.summary, tx.memo].filter(Boolean).join(" · "),
+          qty: 0, price: 0, ccy: "TWD",
+          gross_twd: 0, fee_twd: 0, tax_twd: 0,
+          net_twd: tx.signed_amount,
+          category: tx.category,
+        });
+      });
+      (m.bank?.tx_foreign ?? []).forEach(tx => {
+        // USD bank's stock_settle mirrors foreign-broker trades already captured.
+        // Surface 換匯 always; surface other USD bank events under showBank.
+        if (tx.category === "stock_settle_fx") return;
+        const fx = m.fx_usd_twd || 0;
+        rows.push({
+          month: m.month, date: tx.date, venue: "Bank",
+          side: BANK_CAT_LABEL[tx.category] || tx.summary,
+          code: "", name: [tx.summary, tx.memo].filter(Boolean).join(" · ") + " (USD)",
+          qty: 0, price: 0, ccy: tx.ccy,
+          gross_twd: 0, fee_twd: 0, tax_twd: 0,
+          net_twd: tx.signed_amount * fx,
+          category: tx.category,
+        });
+      });
+    });
+    return rows;
+  }
+
+  const allTxRows = buildAllTxRows();
+
+  // Populate month dropdown
+  const monthSel = document.getElementById("tx-month");
+  months.slice().reverse().forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.month; opt.textContent = m.month;
+    monthSel.appendChild(opt);
+  });
+
+  // Bank categories that count as "personal" (gated by showBank toggle).
+  const PERSONAL_BANK_CATS = new Set(["salary", "transfer", "interest", "other"]);
+
+  function applyTxFilters(rows) {
+    const f = state.txFilters;
+    // Personal bank rows (薪資/轉帳/利息/其他) only show when the user explicitly
+    // picks 銀行交易 in the 類型 filter; otherwise hide them so the ledger stays
+    // focused on investment-related activity.
+    const showBank = f.side === "bank";
+    return rows.filter(r => {
+      if (!showBank && r.venue === "Bank" && PERSONAL_BANK_CATS.has(r.category)) return false;
+      if (f.venue !== "all" && r.venue !== f.venue) return false;
+      if (f.month !== "all" && r.month !== f.month) return false;
+      if (f.side !== "all" && txKind(r) !== f.side) return false;
+      if (f.search) {
+        const q = f.search.toLowerCase();
+        const hay = (r.code + " " + r.name + " " + r.side).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderTxTable() {
+    let rows = applyTxFilters(allTxRows);
+    const { key, dir } = state.txSort;
+    rows.sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+    });
+
+    const arrow = (key2) =>
+      state.txSort.key === key2 ? (state.txSort.dir === -1 ? " ↓" : " ↑") : "";
+
+    const sideClass = (r) => {
+      const k2 = txKind(r);
+      if (k2 === "buy") return "cat-buy";
+      if (k2 === "sell") return "cat-sell";
+      if (k2 === "div") return "cat-div";
+      return "";
+    };
+
+    const totals = rows.reduce((a, r) => ({
+      gross: a.gross + (r.gross_twd || 0),
+      fee:   a.fee   + (r.fee_twd   || 0),
+      tax:   a.tax   + (r.tax_twd   || 0),
+      net:   a.net   + (r.net_twd   || 0),
+    }), { gross: 0, fee: 0, tax: 0, net: 0 });
+    document.getElementById("tx-summary").textContent =
+      `${rows.length} 筆 · 淨額合計 ${signed(totals.net)} · 手續費 ${fmt.format(totals.fee)}`;
+
+    const trs = rows.slice(0, 1000).map(r => `
+      <tr>
+        <td class="l">${esc(r.month)}</td>
+        <td class="l">${esc(r.date)}</td>
+        <td class="l">${esc(r.venue)}</td>
+        <td class="l"><span class="cat-pill ${esc(sideClass(r))}">${esc(r.side)}</span></td>
+        <td class="l">${esc(r.code || "—")}</td>
+        <td class="l">${esc(r.name || "")}</td>
+        <td>${r.qty ? fmt2.format(r.qty) : ""}</td>
+        <td>${r.price ? (r.ccy === "TWD" ? fmt.format(r.price) : fmt2.format(r.price)) : ""}</td>
+        <td>${r.gross_twd ? fmt.format(r.gross_twd) : ""}</td>
+        <td>${r.fee_twd ? fmt.format(r.fee_twd) : ""}</td>
+        <td>${r.tax_twd ? fmt.format(r.tax_twd) : ""}</td>
+        <td class="${r.net_twd >= 0 ? 'tx-pos' : 'tx-neg'}">${signed(r.net_twd)}</td>
+      </tr>`).join("");
+
+    const tbl = document.getElementById("tx-table");
+    tbl.innerHTML = `
+      <thead><tr>
+        <th class="l" data-k="month">月份${arrow("month")}</th>
+        <th class="l" data-k="date">日期${arrow("date")}</th>
+        <th class="l" data-k="venue">市場${arrow("venue")}</th>
+        <th class="l" data-k="side">類型${arrow("side")}</th>
+        <th class="l" data-k="code">代號${arrow("code")}</th>
+        <th class="l" data-k="name">名稱${arrow("name")}</th>
+        <th data-k="qty">股數${arrow("qty")}</th>
+        <th data-k="price">單價${arrow("price")}</th>
+        <th data-k="gross_twd">毛額（TWD）${arrow("gross_twd")}</th>
+        <th data-k="fee_twd">手續費${arrow("fee_twd")}</th>
+        <th data-k="tax_twd">稅${arrow("tax_twd")}</th>
+        <th data-k="net_twd">淨額（TWD）${arrow("net_twd")}</th>
+      </tr></thead>
+      <tbody>${trs}</tbody>
+      <tfoot><tr style="font-weight:600;background:color-mix(in oklch, var(--accent) 6%, transparent)">
+        <td class="l" colspan="6">合計（${rows.length} 筆${rows.length > 1000 ? "，僅顯示前 1000 列" : ""}）</td>
+        <td></td><td></td>
+        <td>${fmt.format(totals.gross)}</td>
+        <td>${fmt.format(totals.fee)}</td>
+        <td>${fmt.format(totals.tax)}</td>
+        <td class="${totals.net >= 0 ? 'tx-pos' : 'tx-neg'}">${signed(totals.net)}</td>
+      </tr></tfoot>`;
+
+    tbl.querySelectorAll("th[data-k]").forEach(th => {
+      th.addEventListener("click", () => {
+        const k2 = th.dataset.k;
+        if (state.txSort.key === k2) state.txSort.dir *= -1;
+        else state.txSort = { key: k2, dir: -1 };
+        renderTxTable();
+      });
+    });
+  }
+
+  // Wire up tx filter pills + inputs
+  document.getElementById("tx-venue").addEventListener("click", e => {
+    const btn = e.target.closest(".pill"); if (!btn) return;
+    e.currentTarget.querySelectorAll(".pill").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.txFilters.venue = btn.dataset.v;
+    renderTxTable();
+  });
+  document.getElementById("tx-side").addEventListener("click", e => {
+    const btn = e.target.closest(".pill"); if (!btn) return;
+    e.currentTarget.querySelectorAll(".pill").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.txFilters.side = btn.dataset.s;
+    renderTxTable();
+  });
+  monthSel.addEventListener("change", e => {
+    state.txFilters.month = e.target.value;
+    renderTxTable();
+  });
+  document.getElementById("tx-search").addEventListener("input", e => {
+    state.txFilters.search = e.target.value.trim();
+    renderTxTable();
+  });
+  renderHoldings();
+  renderPerStock();
+  renderTxTable();
+})();
+</script>
+</body>
+</html>
