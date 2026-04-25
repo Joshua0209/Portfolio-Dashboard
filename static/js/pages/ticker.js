@@ -8,7 +8,13 @@
 
   async function init() {
     window.charts.applyDefaults();
-    const data = await window.api.get(`/api/tickers/${encodeURIComponent(code)}`);
+    let data;
+    try {
+      data = await window.api.get(`/api/tickers/${encodeURIComponent(code)}`);
+    } catch (e) {
+      showEmpty();
+      return;
+    }
     if (!data || data.error) {
       showEmpty();
       return;
@@ -27,8 +33,11 @@
 
   function renderKPIs(data) {
     const cur = data.current;
+    const lastSeen = data.last_seen_month;
     setText("kpi-qty", cur ? fmt.int(cur.qty) : "0");
-    setText("kpi-status", cur ? "Open position" : "Closed");
+    setText("kpi-status", data.is_open
+      ? "Open position"
+      : lastSeen ? `Closed · last seen ${fmt.month(lastSeen)}` : "Never held");
     setText("kpi-avg", cur ? fmt.num(cur.avg_cost, 2) : "—");
     setText("kpi-cost", cur ? `${fmt.twd(cur.cost_twd)} basis` : "—");
 

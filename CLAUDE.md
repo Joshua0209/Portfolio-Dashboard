@@ -1,7 +1,7 @@
 # Sinopac Investment Dashboard
 
 Personal investment performance dashboard built from Sinopac (永豐金) monthly PDF statements.
-Pipeline: encrypted PDFs → decrypt → parse → JSON → static HTML/Chart.js dashboard.
+Pipeline: encrypted PDFs → decrypt → parse → JSON → **Flask backend + multi-page dashboard**.
 
 ## Layout
 
@@ -16,7 +16,28 @@ investment/
 ├── parse_statements.py           # Step 2: extract holdings + flows → data/portfolio.json
 ├── data/portfolio.json           # Parsed dataset consumed by the dashboard
 ├── data/tw_ticker_map.json       # Manual TW name→code overrides (see below)
-└── index.html                    # Step 3: dashboard (Chart.js via CDN)
+├── app.py                        # Flask entrypoint
+├── app/                          # Backend application package
+│   ├── __init__.py               # create_app(), routes, blueprint registration
+│   ├── data_store.py             # Mtime-cached portfolio.json loader
+│   ├── analytics.py              # Drawdown, Sharpe, HHI, FX P&L, sectors
+│   ├── filters.py                # Jinja currency/percent/date filters
+│   └── api/                      # 10 blueprints, all under /api/*
+│       ├── summary.py            # KPIs, equity curve, allocation
+│       ├── holdings.py           # Current/historical positions, sectors
+│       ├── performance.py        # TWR/XIRR/drawdown/rolling/attribution
+│       ├── transactions.py       # Trade log + monthly aggregates
+│       ├── cashflows.py          # Real vs counterfactual, bank ledger
+│       ├── dividends.py          # Distributions + rebates
+│       ├── risk.py               # Concentration, leverage, drawdown
+│       ├── fx.py                 # USD/TWD curve, FX P&L attribution
+│       ├── tax.py                # Realized + unrealized P&L by ticker
+│       └── tickers.py            # Per-security drill-down
+├── templates/                    # Jinja2 page templates (10 pages)
+├── static/                       # css/, js/ (vanilla; no build step)
+│   ├── css/{tokens,app}.css      # Design system + components
+│   └── js/{api,charts,format,app}.js + pages/*.js
+└── legacy/index.html             # Pre-rebuild single-page dashboard (kept for reference)
 ```
 
 ## Refresh workflow
@@ -37,10 +58,13 @@ python3 decrypt_pdfs.py
 # 3. parse → data/portfolio.json
 python3 parse_statements.py
 
-# 4. view dashboard (must serve over HTTP — fetch() blocks file://)
-python3 -m http.server 8000
-# then open http://localhost:8000/
+# 4. start the Flask dashboard (refreshes data automatically when JSON updates)
+python3 app.py
+# then open http://127.0.0.1:8000/
 ```
+
+The Flask app watches `data/portfolio.json` mtime — re-running `parse_statements.py`
+while the server is up reloads data on the next request without a restart.
 
 ## Password env
 
@@ -95,8 +119,50 @@ position, add an entry and re-run `parse_statements.py`.
   `parse_statements.py:main`).
 - **Dividends (TW)**: 累計配息 column captured per holding but not yet flowed
   through the cashflow ledger. Foreign dividends ARE counted via 應收/付.
-- **The fetch() requirement**: opening `index.html` directly (file://) fails
-  because browsers block local JSON fetches. Always use a local server.
+- **The fetch() requirement**: opening static HTML directly (file://) fails
+  because browsers block local JSON fetches. Always use the Flask app or a local server.
+- **Sector mapping**: `app/analytics.py` has a hand-curated heuristic in
+  `_TW_SECTOR_HINTS` and `_US_SECTOR_HINTS`. Unmapped tickers fall through
+  to "TW Equity (other)" / "US Equity (other)". Extend the dicts as needed
+  — there's no external API call.
+
+## Dashboard pages (URL → purpose)
+
+| URL | Purpose |
+|---|---|
+| `/` | KPI hero, equity curve, allocation donut, top movers, recent activity |
+| `/holdings` | Sortable table, treemap-style position map, sector breakdown, CSV export |
+| `/performance` | TWR/XIRR, monthly returns, drawdown, rolling 3/6/12M, venue attribution |
+| `/risk` | Drawdown curve, HHI concentration, top-5/10 share, leverage exposure |
+| `/fx` | USD/TWD curve, FX-attributable P&L, currency exposure stack |
+| `/transactions` | Filterable trade log, monthly volume + fee charts, CSV export |
+| `/cashflows` | Real vs counterfactual chart, monthly waterfall, bank ledger |
+| `/dividends` | Monthly income, top payers, full distribution log |
+| `/tax` | Per-ticker realized + unrealized P&L, win rate, CSV export |
+| `/ticker/<code>` | Position over time, cost vs MV chart, trades, dividends |
+
+## API surface
+
+All endpoints return `{"ok": true, "data": ...}`. Errors are HTTP non-200.
+Convention: TWD unless field name says otherwise; foreign positions show
+both `_local` and `_twd` values where relevant.
+
+```
+GET /api/health
+GET /api/summary
+GET /api/holdings/{current,sectors,timeline}
+GET /api/holdings/snapshot/<month>
+GET /api/performance/{timeseries,rolling,attribution}
+GET /api/transactions[?venue=&side=&code=&month=&q=]
+GET /api/transactions/aggregates
+GET /api/cashflows/{monthly,cumulative,bank}
+GET /api/dividends
+GET /api/risk
+GET /api/fx
+GET /api/tax
+GET /api/tickers
+GET /api/tickers/<code>
+```
 
 ## Adding a new statement type
 
@@ -107,7 +173,8 @@ substring (`證券月對帳單`, `複委託`, `銀行綜合`). To add a new type
    month record.
 2. Add a filename branch in `main()` to populate `files_by_month[ym][...]`.
 3. Decide if it's inside-portfolio (affects equity & flows) or external.
-4. Bump dashboard's `index.html` if you want a new visualization.
+4. Surface the new fields in the relevant `app/api/*.py` blueprint and
+   wire up a chart in the matching `templates/*.html` + `static/js/pages/*.js`.
 
 ## Files NOT to commit
 

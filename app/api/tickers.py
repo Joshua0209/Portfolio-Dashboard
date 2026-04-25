@@ -84,7 +84,11 @@ def ticker_detail(code: str):
 
     realized = analytics.realized_pnl_by_ticker({code: t})[0]
 
-    current = position_history[-1] if position_history else None
+    # Is this position still open at the most recent month?
+    last_month = s.months[-1]["month"] if s.months else None
+    last_entry = position_history[-1] if position_history else None
+    is_open = bool(last_entry and last_entry["month"] == last_month)
+    current = last_entry if is_open else None
 
     return envelope({
         "code": code,
@@ -94,4 +98,6 @@ def ticker_detail(code: str):
         "position_history": position_history,
         "dividends": dividends,
         "current": current,
+        "is_open": is_open,
+        "last_seen_month": last_entry["month"] if last_entry else None,
     })
