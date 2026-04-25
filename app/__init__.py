@@ -43,8 +43,10 @@ def create_app(data_path: Path | str | None = None) -> Flask:
         store = app.extensions["store"]
         return {
             "ok": True,
-            "months_loaded": len(store.months),
-            "as_of": store.as_of,
+            "data": {
+                "months_loaded": len(store.months),
+                "as_of": store.as_of,
+            },
         }
 
     @app.get("/")

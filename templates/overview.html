@@ -1,3 +1,97 @@
 {% extends "base.html" %}
-{% block heading %}overview{% endblock %}
-{% block content %}<div class="page-stub" data-page="overview">Loading…</div>{% endblock %}
+{% block title %}Overview · Sinopac Portfolio{% endblock %}
+{% block heading %}Overview{% endblock %}
+{% block subtitle %}Snapshot of where your capital sits and how it's compounding.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi kpi-hero">
+    <span class="kpi-label">Portfolio equity</span>
+    <span class="kpi-value" id="kpi-equity">—</span>
+    <span class="kpi-sub">
+      <span id="kpi-equity-sub" class="text-mute">—</span>
+    </span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Net profit</span>
+    <span class="kpi-value" id="kpi-profit">—</span>
+    <span class="kpi-sub" id="kpi-profit-sub">vs. counterfactual capital</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Time-weighted return</span>
+    <span class="kpi-value" id="kpi-twr">—</span>
+    <span class="kpi-sub">since <span id="kpi-twr-since">—</span></span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Money-weighted (XIRR)</span>
+    <span class="kpi-value" id="kpi-xirr">—</span>
+    <span class="kpi-sub">annualized, deposit-aware</span>
+  </div>
+</div>
+
+<div class="section card-grid" style="grid-template-columns: 1.6fr 1fr;">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Equity curve</h3>
+      <span class="card-sub" id="equity-range">—</span>
+    </div>
+    <div class="chart-box h-320"><canvas id="chart-equity"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Allocation</h3>
+      <span class="card-sub" id="alloc-total">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-alloc"></canvas></div>
+    <div id="alloc-legend" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Top winners</h3>
+      <a href="/holdings" class="card-sub">All holdings →</a>
+    </div>
+    <div id="winners-list" class="flex-col gap-2"></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Top losers</h3>
+      <a href="/holdings" class="card-sub">All holdings →</a>
+    </div>
+    <div id="losers-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Recent activity</h3>
+      <a href="/transactions" class="card-sub">Transaction log →</a>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="activity-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Venue</th>
+            <th>Side</th>
+            <th>Code</th>
+            <th>Name</th>
+            <th class="num">Qty</th>
+            <th class="num">Price</th>
+            <th class="num">Net (TWD)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/overview.js') }}"></script>
+{% endblock %}
