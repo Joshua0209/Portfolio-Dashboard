@@ -1,3 +1,48 @@
 {% extends "base.html" %}
-{% block heading %}dividends{% endblock %}
-{% block content %}<div class="page-stub" data-page="dividends">Loading…</div>{% endblock %}
+{% block title %}Dividends · Sinopac Portfolio{% endblock %}
+{% block heading %}Dividends{% endblock %}
+{% block subtitle %}Income received from foreign holdings and TW account rebates.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-3 section">
+  <div class="kpi"><span class="kpi-label">Total received</span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub" id="kpi-total-sub">across all currencies</span></div>
+  <div class="kpi"><span class="kpi-label">Events</span><span class="kpi-value" id="kpi-count">—</span><span class="kpi-sub">distributions + rebates</span></div>
+  <div class="kpi"><span class="kpi-label">Distinct payers</span><span class="kpi-value" id="kpi-payers">—</span><span class="kpi-sub">positions paying income</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly income (TWD)</h3>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Top payers</h3>
+    </div>
+    <div id="top-payers" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">All distributions</h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="div-table">
+        <thead><tr>
+          <th>Month</th><th>Date</th><th>Code</th><th>Name / type</th><th>Ccy</th>
+          <th class="num">Amount (local)</th><th class="num">Amount (TWD)</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/dividends.js') }}"></script>
+{% endblock %}

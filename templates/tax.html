@@ -1,3 +1,63 @@
 {% extends "base.html" %}
-{% block heading %}tax{% endblock %}
-{% block content %}<div class="page-stub" data-page="tax">Loading…</div>{% endblock %}
+{% block title %}Tax / P&amp;L · Sinopac Portfolio{% endblock %}
+{% block heading %}Tax &amp; P&amp;L</span>{% endblock %}
+{% block subtitle %}Realized vs unrealized gains by ticker — using statement-basis average cost.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi"><span class="kpi-label">Realized P&amp;L</span><span class="kpi-value" id="kpi-real">—</span><span class="kpi-sub">closed lots</span></div>
+  <div class="kpi"><span class="kpi-label">Unrealized P&amp;L</span><span class="kpi-value" id="kpi-unreal">—</span><span class="kpi-sub">open positions</span></div>
+  <div class="kpi"><span class="kpi-label">Total P&amp;L</span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub">realized + unrealized</span></div>
+  <div class="kpi"><span class="kpi-label">Win rate</span><span class="kpi-value" id="kpi-win">—</span><span class="kpi-sub" id="kpi-win-sub">winners / total closed</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Top realized winners</h3></div>
+    <div id="winners-list" class="flex-col gap-2"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Top realized losers</h3></div>
+    <div id="losers-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Per-ticker P&amp;L</h3>
+      <div class="toolbar" style="margin: 0;">
+        <input id="q" class="input" placeholder="Search…" style="width:200px;" />
+        <select id="filter" class="select">
+          <option value="">All</option>
+          <option value="closed">Fully closed</option>
+          <option value="open">Open positions</option>
+          <option value="winners">Winners only</option>
+          <option value="losers">Losers only</option>
+        </select>
+        <button id="export-tax" class="btn">Export CSV</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="tax-table">
+        <thead><tr>
+          <th>Code</th><th>Name</th>
+          <th class="num">Buy qty</th><th class="num">Sell qty</th>
+          <th class="num">Avg buy (TWD)</th>
+          <th class="num">Cost of sold</th>
+          <th class="num">Proceeds</th>
+          <th class="num">Fees</th><th class="num">Tax</th>
+          <th class="num">Realized</th>
+          <th class="num">Unrealized</th>
+          <th class="num">Total P&amp;L</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/tax.js') }}"></script>
+{% endblock %}

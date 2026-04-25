@@ -1,3 +1,72 @@
 {% extends "base.html" %}
-{% block heading %}cashflows{% endblock %}
-{% block content %}<div class="page-stub" data-page="cashflows">Loading…</div>{% endblock %}
+{% block title %}Cashflows · Sinopac Portfolio{% endblock %}
+{% block heading %}Cashflows{% endblock %}
+{% block subtitle %}Capital injected into the portfolio vs. equity actually compounded.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-3 section">
+  <div class="kpi">
+    <span class="kpi-label">Real equity</span>
+    <span class="kpi-value" id="kpi-real">—</span>
+    <span class="kpi-sub">today</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Counterfactual</span>
+    <span class="kpi-value" id="kpi-cf">—</span>
+    <span class="kpi-sub">if never invested</span>
+  </div>
+  <div class="kpi kpi-hero">
+    <span class="kpi-label">Net profit</span>
+    <span class="kpi-value" id="kpi-profit">—</span>
+    <span class="kpi-sub" id="kpi-profit-pct">—</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Real vs counterfactual</h3>
+      <span class="card-sub">cumulative external flows = "what your money would be doing nothing"</span>
+    </div>
+    <div class="chart-box h-320"><canvas id="chart-cf"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly flows</h3>
+      <span class="card-sub">positive = into portfolio</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Cumulative breakdown</h3>
+      <span class="card-sub">where capital came from / went</span>
+    </div>
+    <div id="breakdown-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Bank ledger</h3>
+      <span class="card-sub">capital source — external to portfolio</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="bank-table">
+        <thead><tr>
+          <th>Month</th><th>Date</th><th>Category</th><th>Counterparty / memo</th><th>Ccy</th><th class="num">Amount</th><th class="num">FX</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/cashflows.js') }}"></script>
+{% endblock %}

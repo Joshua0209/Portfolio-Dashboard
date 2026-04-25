@@ -1,3 +1,53 @@
 {% extends "base.html" %}
-{% block heading %}ticker{% endblock %}
-{% block content %}<div class="page-stub" data-page="ticker">Loading…</div>{% endblock %}
+{% block title %}{{ code }} · Sinopac Portfolio{% endblock %}
+{% block heading %}<span class="mono" id="ticker-code">{{ code }}</span>{% endblock %}
+{% block subtitle %}<span class="text-mute" id="ticker-name"></span> · <a href="/holdings" class="text-mute">← Back to holdings</a>{% endblock %}
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi"><span class="kpi-label">Current qty</span><span class="kpi-value" id="kpi-qty">—</span><span class="kpi-sub" id="kpi-status">—</span></div>
+  <div class="kpi"><span class="kpi-label">Avg cost (TWD)</span><span class="kpi-value" id="kpi-avg">—</span><span class="kpi-sub" id="kpi-cost">—</span></div>
+  <div class="kpi"><span class="kpi-label">Realized P&amp;L</span><span class="kpi-value" id="kpi-real">—</span><span class="kpi-sub" id="kpi-real-pct">—</span></div>
+  <div class="kpi"><span class="kpi-label">Unrealized P&amp;L</span><span class="kpi-value" id="kpi-unreal">—</span><span class="kpi-sub" id="kpi-unreal-pct">—</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Position over time</h3></div>
+    <div class="chart-box h-260"><canvas id="chart-pos"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Cost vs market value</h3></div>
+    <div class="chart-box h-260"><canvas id="chart-pnl"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Trade history</h3></div>
+    <div class="table-wrap">
+      <table class="data" id="trade-table">
+        <thead><tr>
+          <th>Date</th><th>Side</th>
+          <th class="num">Qty</th><th class="num">Price</th>
+          <th class="num">Gross (TWD)</th><th class="num">Fee</th><th class="num">Net (TWD)</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Dividends</h3></div>
+    <div class="table-wrap">
+      <table class="data" id="div-table">
+        <thead><tr><th>Month</th><th>Date</th><th>Ccy</th><th class="num">Local</th><th class="num">TWD</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>window.TICKER_CODE = {{ code|tojson }};</script>
+<script src="{{ url_for('static', filename='js/pages/ticker.js') }}"></script>
+{% endblock %}

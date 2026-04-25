@@ -1,3 +1,35 @@
 {% extends "base.html" %}
-{% block heading %}fx{% endblock %}
-{% block content %}<div class="page-stub" data-page="fx">Loading…</div>{% endblock %}
+{% block title %}Currency · Sinopac Portfolio{% endblock %}
+{% block heading %}Currency exposure{% endblock %}
+{% block subtitle %}USD/TWD rate, foreign book share, FX-attributable P&amp;L.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi"><span class="kpi-label">Current USD/TWD</span><span class="kpi-value" id="kpi-cur">—</span><span class="kpi-sub" id="kpi-first">—</span></div>
+  <div class="kpi"><span class="kpi-label">Foreign exposure</span><span class="kpi-value" id="kpi-fx">—</span><span class="kpi-sub" id="kpi-fx-twd">—</span></div>
+  <div class="kpi"><span class="kpi-label">FX-attributed P&amp;L</span><span class="kpi-value" id="kpi-fx-pnl">—</span><span class="kpi-sub">since first month</span></div>
+  <div class="kpi"><span class="kpi-label">Δ rate</span><span class="kpi-value" id="kpi-drate">—</span><span class="kpi-sub">first → last</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">USD/TWD rate</h3></div>
+    <div class="chart-box h-260"><canvas id="chart-rate"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">FX P&amp;L (cumulative)</h3></div>
+    <div class="chart-box h-260"><canvas id="chart-fx-pnl"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Currency exposure over time</h3></div>
+    <div class="chart-box h-320"><canvas id="chart-ccy"></canvas></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/fx.js') }}"></script>
+{% endblock %}

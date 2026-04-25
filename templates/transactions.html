@@ -1,3 +1,57 @@
 {% extends "base.html" %}
-{% block heading %}transactions{% endblock %}
-{% block content %}<div class="page-stub" data-page="transactions">Loading…</div>{% endblock %}
+{% block title %}Transactions · Sinopac Portfolio{% endblock %}
+{% block heading %}Transactions{% endblock %}
+{% block subtitle %}Every trade booked across TW securities and foreign brokerage.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi"><span class="kpi-label">Trades</span><span class="kpi-value" id="kpi-n">—</span><span class="kpi-sub">all time</span></div>
+  <div class="kpi"><span class="kpi-label">Bought (TWD)</span><span class="kpi-value" id="kpi-buy">—</span><span class="kpi-sub">gross of fees</span></div>
+  <div class="kpi"><span class="kpi-label">Sold (TWD)</span><span class="kpi-value" id="kpi-sell">—</span><span class="kpi-sub">gross of fees</span></div>
+  <div class="kpi"><span class="kpi-label">Fees + tax</span><span class="kpi-value" id="kpi-cost">—</span><span class="kpi-sub" id="kpi-drag">—</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Trade volume by month</h3>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-volume"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Fees + tax by month</h3>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-fees"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Trade log</h3>
+      <div class="toolbar" style="margin: 0;">
+        <input id="q" class="input" placeholder="Search code or name…" style="width:200px;" />
+        <select id="venue" class="select"><option value="">All venues</option><option>TW</option><option>Foreign</option></select>
+        <select id="month" class="select"><option value="">All months</option></select>
+        <button id="export-tx" class="btn">Export CSV</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="tx-table">
+        <thead><tr>
+          <th>Date</th><th>Venue</th><th>Side</th><th>Code</th><th>Name</th>
+          <th class="num">Qty</th><th class="num">Price</th><th>Ccy</th>
+          <th class="num">Gross (TWD)</th><th class="num">Fee</th><th class="num">Tax</th><th class="num">Net (TWD)</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="text-mute text-tiny" id="tx-count" style="padding-top: 8px;"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/transactions.js') }}"></script>
+{% endblock %}

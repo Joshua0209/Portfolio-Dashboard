@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from flask import Blueprint, request
 
+from .. import analytics
 from ._helpers import envelope, store
 
 bp = Blueprint("holdings", __name__, url_prefix="/api/holdings")
@@ -103,6 +104,20 @@ def timeline():
             "foreign_mv_twd": m.get("foreign_market_value_twd", 0),
         })
     return envelope(out)
+
+
+@bp.get("/sectors")
+def sectors():
+    s = store()
+    if not s.months:
+        return envelope([])
+    last = s.months[-1]
+    rows = _holdings_for_month(last)
+    total = sum(r["mkt_value_twd"] for r in rows) or 1
+    for r in rows:
+        r["weight"] = r["mkt_value_twd"] / total
+    breakdown = analytics.sector_breakdown(rows)
+    return envelope(breakdown)
 
 
 @bp.get("/snapshot/<month>")

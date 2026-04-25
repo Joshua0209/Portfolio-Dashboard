@@ -1,0 +1,266 @@
+/**
+ * Performance page: TWR/XIRR, drawdown, monthly returns, rolling returns, attribution.
+ */
+(function () {
+  document.addEventListener("DOMContentLoaded", () => init().catch(showError));
+
+  async function init() {
+    window.charts.applyDefaults();
+
+    const [ts, rolling, attr] = await Promise.all([
+      window.api.get("/api/performance/timeseries"),
+      window.api.get("/api/performance/rolling"),
+      window.api.get("/api/performance/attribution"),
+    ]);
+
+    renderKPIs(ts);
+    renderCumChart(ts);
+    renderMonthlyChart(ts);
+    renderDrawdown(ts);
+    renderRolling(rolling);
+    renderAttribution(attr);
+    renderTable(ts);
+  }
+
+  function renderKPIs(ts) {
+    setTextColor("kpi-twr", fmt.pct(ts.twr_total), ts.twr_total);
+    if (ts.xirr === null || ts.xirr === undefined) {
+      setText("kpi-xirr", "—");
+    } else {
+      setTextColor("kpi-xirr", fmt.pct(ts.xirr), ts.xirr);
+    }
+    setText("kpi-vol", fmt.pctAbs(ts.annualized_volatility, 1));
+    const sharpe = ts.sharpe_annualized || 0;
+    setTextColor("kpi-sharpe", sharpe.toFixed(2), sharpe);
+  }
+
+  function setText(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  }
+
+  function setTextColor(id, v, signal) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = v;
+    el.className = "kpi-value " + fmt.tone(signal);
+  }
+
+  function renderCumChart(ts) {
+    const ctx = document.getElementById("chart-cum").getContext("2d");
+    const labels = ts.monthly.map((m) => fmt.month(m.month));
+    const cum = ts.monthly.map((m) => (m.cum_twr || 0) * 100);
+    const eq = ts.monthly.map((m) => m.equity_twd);
+
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Cumulative TWR (%)",
+            data: cum,
+            yAxisID: "y",
+            borderColor: charts.cssVar("--accent"),
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.35,
+            fill: true,
+            backgroundColor: (c) => c.chart.chartArea
+              ? charts.gradientFill(c.chart.ctx, c.chart.chartArea, charts.cssVar("--accent"), 0.2)
+              : "transparent",
+          },
+          {
+            label: "Equity (TWD)",
+            data: eq,
+            yAxisID: "y2",
+            borderColor: charts.cssVar("--c2"),
+            borderDash: [4, 4],
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.35,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: (c) => c.datasetIndex === 0
+                ? `TWR: ${c.parsed.y.toFixed(2)}%`
+                : `Equity: ${fmt.twd(c.parsed.y)}`,
+            },
+          },
+          legend: { position: "top", align: "end" },
+        },
+        scales: {
+          y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } },
+          y2: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: (v) => fmt.twdCompact(v) } },
+        },
+      },
+    });
+  }
+
+  function renderMonthlyChart(ts) {
+    const ctx = document.getElementById("chart-monthly").getContext("2d");
+    const labels = ts.monthly.map((m) => fmt.month(m.month));
+    const data = ts.monthly.map((m) => (m.period_return || 0) * 100);
+    const colors = data.map((v) => v >= 0 ? charts.cssVar("--pos") : charts.cssVar("--neg"));
+
+    document.getElementById("month-stats").textContent =
+      `${ts.positive_months} positive · ${ts.negative_months} negative`;
+
+    new Chart(ctx, {
+      type: "bar",
+      data: { labels, datasets: [{ label: "Period return", data, backgroundColor: colors, borderRadius: 3 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (c) => `${c.parsed.y.toFixed(2)}%` } },
+        },
+        scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
+      },
+    });
+  }
+
+  function renderDrawdown(ts) {
+    const ctx = document.getElementById("chart-dd").getContext("2d");
+    const labels = ts.monthly.map((m) => fmt.month(m.month));
+    const dd = ts.monthly.map((m) => (m.drawdown || 0) * 100);
+
+    document.getElementById("dd-max").textContent = `Max: ${fmt.pct(ts.max_drawdown)}`;
+
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Drawdown",
+          data: dd,
+          borderColor: charts.cssVar("--neg"),
+          backgroundColor: (c) => c.chart.chartArea
+            ? charts.gradientFill(c.chart.ctx, c.chart.chartArea, charts.cssVar("--neg"), 0.3)
+            : "transparent",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: true,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (c) => `${c.parsed.y.toFixed(2)}%` } },
+        },
+        scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
+      },
+    });
+  }
+
+  function renderRolling(rolling) {
+    const ctx = document.getElementById("chart-rolling").getContext("2d");
+    const labels = rolling.rolling_3m.map((p) => fmt.month(p.month));
+    const series = (data, label, color) => ({
+      label,
+      data: data.map((p) => p.value === null ? null : p.value * 100),
+      borderColor: color,
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.35,
+      spanGaps: true,
+    });
+
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          series(rolling.rolling_3m, "3M", charts.cssVar("--c1")),
+          series(rolling.rolling_6m, "6M", charts.cssVar("--c2")),
+          series(rolling.rolling_12m, "12M", charts.cssVar("--c4")),
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top", align: "end" },
+          tooltip: {
+            callbacks: {
+              label: (c) => c.parsed.y === null ? `${c.dataset.label}: —` : `${c.dataset.label}: ${c.parsed.y.toFixed(2)}%`,
+            },
+          },
+        },
+        scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
+      },
+    });
+  }
+
+  function renderAttribution(attr) {
+    const ctx = document.getElementById("chart-attr").getContext("2d");
+    const labels = attr.map((m) => fmt.month(m.month));
+    new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "TW",
+            data: attr.map((m) => m.tw_pnl),
+            backgroundColor: charts.cssVar("--c1"),
+            stack: "s",
+          },
+          {
+            label: "Foreign",
+            data: attr.map((m) => m.foreign_pnl),
+            backgroundColor: charts.cssVar("--c2"),
+            stack: "s",
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "top", align: "end" },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(c.parsed.y)}` } },
+        },
+        scales: { y: { ticks: { callback: (v) => fmt.twdCompact(v) }, stacked: true }, x: { stacked: true } },
+      },
+    });
+  }
+
+  function renderTable(ts) {
+    const tbody = document.querySelector("#months-table tbody");
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+    for (const m of ts.monthly) {
+      const tr = document.createElement("tr");
+      tr.appendChild(td(fmt.month(m.month)));
+      tr.appendChild(td(fmt.twd(m.v_start), "num"));
+      tr.appendChild(td(fmt.twd(m.external_flow), `num ${fmt.tone(m.external_flow)}`));
+      tr.appendChild(td(fmt.twd(m.equity_twd), "num"));
+      tr.appendChild(td(fmt.pct(m.period_return), `num ${fmt.tone(m.period_return)}`));
+      tr.appendChild(td(fmt.pct(m.cum_twr), `num ${fmt.tone(m.cum_twr)}`));
+      tr.appendChild(td(fmt.pct(m.drawdown), `num ${fmt.tone(m.drawdown)}`));
+      tbody.appendChild(tr);
+    }
+  }
+
+  function td(text, cls) {
+    const el = document.createElement("td");
+    if (cls) el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
+  function showError(err) {
+    const main = document.querySelector(".content");
+    const box = document.createElement("div");
+    box.className = "error-box";
+    box.textContent = `Failed to load performance: ${err.message}`;
+    main.prepend(box);
+  }
+})();

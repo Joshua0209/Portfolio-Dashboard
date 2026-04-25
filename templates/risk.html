@@ -1,3 +1,44 @@
 {% extends "base.html" %}
-{% block heading %}risk{% endblock %}
-{% block content %}<div class="page-stub" data-page="risk">Loading…</div>{% endblock %}
+{% block title %}Risk · Sinopac Portfolio{% endblock %}
+{% block heading %}Risk{% endblock %}
+{% block subtitle %}Concentration, drawdown, volatility, and leverage exposure.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi"><span class="kpi-label">Max drawdown</span><span class="kpi-value" id="kpi-mdd">—</span><span class="kpi-sub">peak-to-trough</span></div>
+  <div class="kpi"><span class="kpi-label">Volatility (annual)</span><span class="kpi-value" id="kpi-vol">—</span><span class="kpi-sub">σ × √12</span></div>
+  <div class="kpi"><span class="kpi-label">Top-5 concentration</span><span class="kpi-value" id="kpi-top5">—</span><span class="kpi-sub" id="kpi-positions">—</span></div>
+  <div class="kpi"><span class="kpi-label">Leverage</span><span class="kpi-value" id="kpi-lev">—</span><span class="kpi-sub" id="kpi-lev-sub">融資 positions</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Drawdown over time</h3>
+      <span class="card-sub" id="dd-current">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-dd"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Concentration (HHI)</h3>
+      <span class="card-sub" id="hhi-label">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-weights"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Position weights</h3>
+      <span class="card-sub">% of portfolio market value</span>
+    </div>
+    <div id="weights-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/risk.js') }}"></script>
+{% endblock %}

@@ -1,3 +1,98 @@
 {% extends "base.html" %}
-{% block heading %}performance{% endblock %}
-{% block content %}<div class="page-stub" data-page="performance">Loading…</div>{% endblock %}
+{% block title %}Performance · Sinopac Portfolio{% endblock %}
+{% block heading %}Performance{% endblock %}
+{% block subtitle %}Time-weighted vs money-weighted returns, drawdown, and rolling windows.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi">
+    <span class="kpi-label">TWR (cumulative)</span>
+    <span class="kpi-value" id="kpi-twr">—</span>
+    <span class="kpi-sub">deposit-neutral</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">XIRR</span>
+    <span class="kpi-value" id="kpi-xirr">—</span>
+    <span class="kpi-sub">money-weighted, annualized</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Annualized volatility</span>
+    <span class="kpi-value" id="kpi-vol">—</span>
+    <span class="kpi-sub">σ × √12 from monthly</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Sharpe (rf=0)</span>
+    <span class="kpi-value" id="kpi-sharpe">—</span>
+    <span class="kpi-sub">risk-adjusted</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Cumulative TWR vs equity</h3>
+    </div>
+    <div class="chart-box h-320"><canvas id="chart-cum"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly returns</h3>
+      <span class="card-sub" id="month-stats">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Drawdown</h3>
+      <span class="card-sub" id="dd-max">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-dd"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Rolling returns</h3>
+      <span class="card-sub">3M / 6M / 12M compounded</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-rolling"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Attribution by venue</h3>
+      <span class="card-sub">monthly P&amp;L net of flows</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-attr"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly detail</h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="months-table">
+        <thead><tr>
+          <th>Month</th>
+          <th class="num">V_start</th>
+          <th class="num">External flow</th>
+          <th class="num">Equity</th>
+          <th class="num">Period return</th>
+          <th class="num">Cum TWR</th>
+          <th class="num">Drawdown</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/performance.js') }}"></script>
+{% endblock %}

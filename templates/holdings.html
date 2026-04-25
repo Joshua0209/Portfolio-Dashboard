@@ -1,3 +1,89 @@
 {% extends "base.html" %}
-{% block heading %}holdings{% endblock %}
-{% block content %}<div class="page-stub" data-page="holdings">Loading…</div>{% endblock %}
+{% block title %}Holdings · Sinopac Portfolio{% endblock %}
+{% block heading %}Holdings{% endblock %}
+{% block subtitle %}Open positions across TW and foreign brokerage accounts.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi">
+    <span class="kpi-label">Market value</span>
+    <span class="kpi-value" id="kpi-mv">—</span>
+    <span class="kpi-sub" id="kpi-mv-sub">across <span id="kpi-count">0</span> positions</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Cost basis</span>
+    <span class="kpi-value" id="kpi-cost">—</span>
+    <span class="kpi-sub">total deployed capital</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Unrealized P&amp;L</span>
+    <span class="kpi-value" id="kpi-upnl">—</span>
+    <span class="kpi-sub" id="kpi-upnl-pct">—</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">FX rate (USD/TWD)</span>
+    <span class="kpi-value" id="kpi-fx">—</span>
+    <span class="kpi-sub" id="kpi-fx-sub">applied to foreign book</span>
+  </div>
+</div>
+
+<div class="section card-grid" style="grid-template-columns: 1.2fr 1fr;">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Position map</h3>
+      <span class="card-sub">cell size = market value</span>
+    </div>
+    <div id="treemap" style="display:grid; gap:4px; min-height:280px;"></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Sector breakdown</h3>
+      <span class="card-sub">heuristic mapping</span>
+    </div>
+    <div id="sector-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">All positions</h3>
+      <div class="toolbar" style="margin: 0;">
+        <input id="filter-q" class="input" placeholder="Search code or name…" style="width:200px;" />
+        <select id="filter-venue" class="select">
+          <option value="">All venues</option>
+          <option value="TW">TW</option>
+          <option value="Foreign">Foreign</option>
+        </select>
+        <button id="export-holdings" class="btn">Export CSV</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="holdings-table">
+        <thead>
+          <tr>
+            <th class="sortable" data-key="code">Code</th>
+            <th class="sortable" data-key="name">Name</th>
+            <th>Venue</th>
+            <th>Type</th>
+            <th>Ccy</th>
+            <th class="num sortable" data-key="qty">Qty</th>
+            <th class="num sortable" data-key="avg_cost">Avg cost</th>
+            <th class="num sortable" data-key="ref_price">Ref price</th>
+            <th class="num sortable" data-key="cost_twd">Cost (TWD)</th>
+            <th class="num sortable" data-key="mkt_value_twd">Mkt value (TWD)</th>
+            <th class="num sortable" data-key="unrealized_pnl_twd">Unreal. P&amp;L</th>
+            <th class="num sortable" data-key="unrealized_pct">%</th>
+            <th class="num sortable" data-key="weight">Weight</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/holdings.js') }}"></script>
+{% endblock %}
