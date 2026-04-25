@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Investment Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-treemap@3.1.0/dist/chartjs-chart-treemap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">永</span>
+      <div class="brand-text">
+        <strong>Sinopac</strong>
+        <small>Portfolio Lab</small>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="/" class="nav-link {% if page == 'overview' %}active{% endif %}">
+        <span class="nav-ico">◐</span> Overview
+      </a>
+      <a href="/holdings" class="nav-link {% if page == 'holdings' %}active{% endif %}">
+        <span class="nav-ico">▤</span> Holdings
+      </a>
+      <a href="/performance" class="nav-link {% if page == 'performance' %}active{% endif %}">
+        <span class="nav-ico">↗</span> Performance
+      </a>
+      <a href="/risk" class="nav-link {% if page == 'risk' %}active{% endif %}">
+        <span class="nav-ico">▽</span> Risk
+      </a>
+      <a href="/fx" class="nav-link {% if page == 'fx' %}active{% endif %}">
+        <span class="nav-ico">₱</span> Currency
+      </a>
+      <div class="nav-section">Activity</div>
+      <a href="/transactions" class="nav-link {% if page == 'transactions' %}active{% endif %}">
+        <span class="nav-ico">⇄</span> Transactions
+      </a>
+      <a href="/cashflows" class="nav-link {% if page == 'cashflows' %}active{% endif %}">
+        <span class="nav-ico">⤳</span> Cashflows
+      </a>
+      <a href="/dividends" class="nav-link {% if page == 'dividends' %}active{% endif %}">
+        <span class="nav-ico">◇</span> Dividends
+      </a>
+      <a href="/tax" class="nav-link {% if page == 'tax' %}active{% endif %}">
+        <span class="nav-ico">∑</span> Tax / P&amp;L
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <button id="theme-toggle" class="theme-btn" title="Toggle theme">◑</button>
+      <span class="as-of" id="as-of">…</span>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="page-header">
+      <div>
+        <h1>{% block heading %}Dashboard{% endblock %}</h1>
+        <p class="subtitle">{% block subtitle %}{% endblock %}</p>
+      </div>
+      <div class="page-actions">{% block page_actions %}{% endblock %}</div>
+    </header>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='js/format.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
