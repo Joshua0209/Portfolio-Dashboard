@@ -252,6 +252,226 @@ def today_sparkline():
     return envelope({"points": points})
 
 
+@bp.get("/api/today/period-returns")
+def today_period_returns():
+    """MTD / QTD / YTD / inception equity returns for the hero strip.
+
+    Pure-derive from portfolio_daily — no extra fetches. For each window,
+    return the % change between the first equity row in the window and
+    the latest, plus the absolute TWD delta. Empty envelope when there's
+    no data."""
+    from datetime import date as _date
+
+    ds = _store()
+    with ds.connect_ro() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT date, equity_twd FROM portfolio_daily ORDER BY date ASC"
+        ).fetchall()]
+    if not rows:
+        return envelope({"empty": True})
+
+    latest = rows[-1]
+    latest_date = latest["date"]
+    latest_eq = latest["equity_twd"]
+    y, m, _ = (int(p) for p in latest_date.split("-"))
+    qstart_month = ((m - 1) // 3) * 3 + 1
+
+    def first_on_or_after(iso_start: str):
+        for r in rows:
+            if r["date"] >= iso_start:
+                return r
+        return None
+
+    def window(label: str, iso_start: str):
+        anchor = first_on_or_after(iso_start)
+        if anchor is None or not anchor["equity_twd"]:
+            return {"label": label, "delta_pct": None, "delta_twd": None,
+                    "anchor_date": None, "anchor_equity": None}
+        d = latest_eq - anchor["equity_twd"]
+        p = d / anchor["equity_twd"] * 100.0
+        return {"label": label, "delta_pct": p, "delta_twd": d,
+                "anchor_date": anchor["date"],
+                "anchor_equity": anchor["equity_twd"]}
+
+    return envelope({
+        "latest_date": latest_date,
+        "latest_equity_twd": latest_eq,
+        "windows": [
+            window("MTD", f"{y:04d}-{m:02d}-01"),
+            window("QTD", f"{y:04d}-{qstart_month:02d}-01"),
+            window("YTD", f"{y:04d}-01-01"),
+            window("Inception", rows[0]["date"]),
+        ],
+    })
+
+
+@bp.get("/api/today/drawdown")
+def today_drawdown():
+    """Underwater equity curve — % below running all-time-high.
+
+    Returns: {points: [{date, drawdown_pct}], current_dd, max_dd,
+              max_dd_date, peak_date}
+    Empty envelope when portfolio_daily has no rows.
+    """
+    ds = _store()
+    with ds.connect_ro() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT date, equity_twd FROM portfolio_daily "
+            "WHERE equity_twd > 0 ORDER BY date ASC"
+        ).fetchall()]
+    if not rows:
+        return envelope({"empty": True, "points": []})
+
+    points = []
+    peak = 0.0
+    peak_date = rows[0]["date"]
+    max_dd = 0.0
+    max_dd_date = rows[0]["date"]
+    max_dd_peak = rows[0]["date"]
+    for r in rows:
+        eq = r["equity_twd"]
+        if eq > peak:
+            peak = eq
+            peak_date = r["date"]
+        dd = (eq / peak - 1.0) * 100.0 if peak else 0.0
+        points.append({"date": r["date"], "drawdown_pct": dd})
+        if dd < max_dd:
+            max_dd = dd
+            max_dd_date = r["date"]
+            max_dd_peak = peak_date
+    current_dd = points[-1]["drawdown_pct"] if points else 0.0
+    return envelope({
+        "empty": False,
+        "points": points,
+        "current_dd": current_dd,
+        "max_dd": max_dd,
+        "max_dd_date": max_dd_date,
+        "max_dd_peak_date": max_dd_peak,
+        "current_peak_date": peak_date,
+    })
+
+
+@bp.get("/api/today/risk-metrics")
+def today_risk_metrics():
+    """Daily-resolution risk metrics: rolling 30d annualized vol,
+    Sharpe (rf=0), Sortino, hit rate, max DD. All derived from
+    portfolio_daily; no external calls.
+
+    Returns nulls when there are too few rows for a metric (need ≥21
+    daily-return observations for the rolling window).
+    """
+    import math
+
+    ds = _store()
+    with ds.connect_ro() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT date, equity_twd FROM portfolio_daily "
+            "WHERE equity_twd > 0 ORDER BY date ASC"
+        ).fetchall()]
+    if len(rows) < 2:
+        return envelope({"empty": True})
+
+    rets: list[float] = []
+    for prev, cur in zip(rows, rows[1:]):
+        if prev["equity_twd"] > 0:
+            rets.append(cur["equity_twd"] / prev["equity_twd"] - 1.0)
+
+    n = len(rets)
+    if n == 0:
+        return envelope({"empty": True})
+
+    mean = sum(rets) / n
+    var = sum((r - mean) ** 2 for r in rets) / n if n else 0.0
+    std = math.sqrt(var)
+    downside = [r for r in rets if r < 0]
+    dvar = sum((r - 0) ** 2 for r in downside) / len(downside) if downside else 0.0
+    dstd = math.sqrt(dvar)
+
+    ann_factor = math.sqrt(252)
+    ann_return = (1 + mean) ** 252 - 1 if mean is not None else None
+    ann_vol = std * ann_factor
+    sharpe = (ann_return / ann_vol) if ann_vol > 0 else None
+    sortino = ((ann_return) / (dstd * ann_factor)) if dstd > 0 else None
+
+    hit_rate = sum(1 for r in rets if r > 0) / n if n else None
+    best = max(rets) * 100.0 if rets else None
+    worst = min(rets) * 100.0 if rets else None
+
+    # 30-day rolling window stats (last 30 returns; fewer if not enough)
+    window = rets[-30:] if len(rets) >= 30 else rets
+    w_mean = sum(window) / len(window) if window else 0.0
+    w_var = sum((r - w_mean) ** 2 for r in window) / len(window) if window else 0.0
+    w_std = math.sqrt(w_var)
+    rolling_vol = w_std * ann_factor
+
+    # Max drawdown from the same series we already used in /drawdown
+    peak = 0.0
+    max_dd = 0.0
+    for r in rows:
+        eq = r["equity_twd"]
+        if eq > peak:
+            peak = eq
+        dd = (eq / peak - 1.0) * 100.0 if peak else 0.0
+        if dd < max_dd:
+            max_dd = dd
+
+    return envelope({
+        "empty": False,
+        "n_days": n,
+        "ann_return_pct": (ann_return * 100.0) if ann_return is not None else None,
+        "ann_vol_pct": ann_vol * 100.0,
+        "rolling_30d_vol_pct": rolling_vol * 100.0,
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "hit_rate_pct": hit_rate * 100.0 if hit_rate is not None else None,
+        "best_day_pct": best,
+        "worst_day_pct": worst,
+        "max_drawdown_pct": max_dd,
+    })
+
+
+@bp.get("/api/today/calendar")
+def today_calendar():
+    """Per-trading-day return (% delta of equity_twd vs prior priced day),
+    with calendar metadata for heatmap rendering.
+
+    Returns: {cells: [{date, year, month, dom, weekday, return_pct}],
+              months: [{year, month, label}]}
+    where months is the ordered de-duplicated list of (year, month) pairs
+    appearing in cells.
+    """
+    from datetime import date as _date
+
+    ds = _store()
+    with ds.connect_ro() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT date, equity_twd FROM portfolio_daily "
+            "WHERE equity_twd > 0 ORDER BY date ASC"
+        ).fetchall()]
+    if len(rows) < 2:
+        return envelope({"empty": True, "cells": [], "months": []})
+
+    cells = []
+    seen_months: list[tuple[int, int]] = []
+    for prev, cur in zip(rows, rows[1:]):
+        ret = (cur["equity_twd"] / prev["equity_twd"] - 1.0) * 100.0
+        y, m, d = (int(p) for p in cur["date"].split("-"))
+        weekday = _date(y, m, d).weekday()  # 0=Mon
+        cells.append({
+            "date": cur["date"], "year": y, "month": m, "dom": d,
+            "weekday": weekday, "return_pct": ret,
+        })
+        if (y, m) not in seen_months:
+            seen_months.append((y, m))
+
+    month_labels = [
+        {"year": y, "month": m,
+         "label": _date(y, m, 1).strftime("%b %Y")}
+        for (y, m) in seen_months
+    ]
+    return envelope({"empty": False, "cells": cells, "months": month_labels})
+
+
 @bp.get("/api/today/freshness")
 def today_freshness():
     """Global freshness widget endpoint (Phase 14 component, shipped here

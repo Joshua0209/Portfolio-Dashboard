@@ -39,12 +39,72 @@
     </div>
   </div>
   <div class="hero__chart">
-    <canvas id="equity-sparkline" width="640" height="120"></canvas>
+    <canvas id="equity-sparkline"></canvas>
+  </div>
+  <div class="period-strip" id="period-strip">
+    <div class="period-strip__cell"><span class="period-strip__label">MTD</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+    <div class="period-strip__cell"><span class="period-strip__label">QTD</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+    <div class="period-strip__cell"><span class="period-strip__label">YTD</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+    <div class="period-strip__cell"><span class="period-strip__label">Inception</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
   </div>
   <div class="hero__freshness">
     <span class="freshness-dot" id="freshness-dot"></span>
     <span id="freshness-text">…</span>
   </div>
+</section>
+
+<section class="analyst-grid">
+  <div class="drawdown-card">
+    <div class="drawdown-card__header">
+      <h3 class="drawdown-card__title">Underwater equity</h3>
+      <span class="drawdown-card__current" id="dd-current">—</span>
+    </div>
+    <div class="drawdown-card__chart">
+      <canvas id="dd-chart"></canvas>
+    </div>
+    <p class="text-sm text-mute" id="dd-detail">—</p>
+  </div>
+
+  <div class="risk-tile">
+    <div class="risk-tile__header">
+      <h3 class="risk-tile__title">Risk &amp; return</h3>
+      <span class="risk-tile__sub" id="risk-window-meta">—</span>
+    </div>
+    <div class="risk-tile__grid">
+      <div class="risk-stat">
+        <span class="risk-stat__label">Annualized return</span>
+        <span class="risk-stat__value" id="risk-ann-return">—</span>
+        <span class="risk-stat__detail" id="risk-best-day">—</span>
+      </div>
+      <div class="risk-stat">
+        <span class="risk-stat__label">Annualized vol</span>
+        <span class="risk-stat__value" id="risk-ann-vol">—</span>
+        <span class="risk-stat__detail" id="risk-rolling-vol">—</span>
+      </div>
+      <div class="risk-stat">
+        <span class="risk-stat__label">Sharpe</span>
+        <span class="risk-stat__value" id="risk-sharpe">—</span>
+        <span class="risk-stat__detail" id="risk-sortino">—</span>
+      </div>
+      <div class="risk-stat">
+        <span class="risk-stat__label">Max drawdown</span>
+        <span class="risk-stat__value" id="risk-max-dd">—</span>
+        <span class="risk-stat__detail" id="risk-hit-rate">—</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cal-heatmap">
+  <div class="cal-heatmap__header">
+    <h3 class="cal-heatmap__title">Daily return calendar</h3>
+    <span class="cal-heatmap__legend">
+      <span class="text-mute">−2%</span>
+      <span class="cal-heatmap__legend-bar"></span>
+      <span class="text-mute">+2%</span>
+    </span>
+  </div>
+  <div class="cal-heatmap__months" id="cal-months"></div>
 </section>
 
 <section class="movers">
