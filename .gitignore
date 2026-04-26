@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 *.swp
 node_modules/
+.worktrees/
 
 # Sensitive — never commit
 sinopac_pdfs/
