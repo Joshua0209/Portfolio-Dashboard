@@ -58,6 +58,10 @@
     <div class="sidebar-footer">
       <button id="theme-toggle" class="theme-btn" title="Toggle theme">◑</button>
       <span class="as-of" id="as-of">…</span>
+      <span id="freshness-footer" class="freshness-footer" title="Daily-data freshness">
+        <span class="freshness-footer__dot" id="freshness-footer-dot" data-band="—"></span>
+        <span class="freshness-footer__text" id="freshness-footer-text">—</span>
+      </span>
     </div>
   </aside>
 
@@ -79,6 +83,7 @@
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   <script src="{{ url_for('static', filename='js/help.js') }}"></script>
   <script src="{{ url_for('static', filename='js/pagination.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/freshness.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
