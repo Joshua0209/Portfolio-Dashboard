@@ -204,4 +204,8 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     def benchmark_page():
         return render_template("benchmark.html", page="benchmark")
 
+    @app.get("/today")
+    def today_page():
+        return render_template("today.html", page="today")
+
     return app

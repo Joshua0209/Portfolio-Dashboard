@@ -619,6 +619,23 @@ def run_full_backfill(
 
     # 4. Derive positions_daily + portfolio_daily
     derived = _derive_positions_and_portfolio(store, portfolio)
+
+    # 5. Phase 11 overlay: post-PDF gap filled from Shioaji (no-op without
+    #    creds). Layered AFTER the PDF derivation so PDF rows are already
+    #    in place; the overlay only writes to dates strictly after the
+    #    last PDF month-end and never overwrites source='pdf' rows.
+    from . import trade_overlay
+    from .shioaji_client import ShioajiClient
+    overlay_summary = {"overlay_trades": 0, "skipped_reason": "no_gap"}
+    try:
+        gap = trade_overlay.compute_gap_window(portfolio, today=today)
+        if gap is not None:
+            overlay_summary = trade_overlay.merge(
+                store, portfolio, ShioajiClient(), gap[0], gap[1]
+            )
+    except Exception:  # noqa: BLE001 — overlay must never abort the backfill
+        log.exception("trade_overlay.merge raised; continuing without overlay")
+
     store.set_meta("last_known_date", today)
 
     summary = {
@@ -631,6 +648,7 @@ def run_full_backfill(
         "foreign_skipped": fr_summary["skipped"],
         "foreign_fetched": fr_summary["fetched"],
         "foreign_price_rows": fr_summary["price_rows_written"],
+        "overlay": overlay_summary,
         **derived,
     }
     log.info("full backfill summary: %s", summary)

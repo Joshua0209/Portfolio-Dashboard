@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Today | Investment Dashboard{% endblock %}
+{% block heading %}Today{% endblock %}
+{% block subtitle %}
+  Tactical view of the most recent trading session.
+{% endblock %}
+
+{% block page_actions %}
+  <button id="refresh-btn" class="btn btn--primary" type="button">
+    Refresh now
+  </button>
+  <span id="refresh-status" class="meta"></span>
+{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="hero__title">
+    <h2 id="data-date-heading">…</h2>
+    <p id="wallclock-context" class="hero__subtitle" hidden></p>
+  </div>
+  <div class="hero__kpis">
+    <div class="kpi">
+      <span class="kpi__label">Equity (TWD)</span>
+      <span class="kpi__value" id="equity-twd">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi__label">Δ vs prior session</span>
+      <span class="kpi__value" id="delta-twd">—</span>
+      <span class="kpi__sub" id="delta-pct">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi__label">Positions</span>
+      <span class="kpi__value" id="n-positions">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi__label">USD/TWD</span>
+      <span class="kpi__value" id="fx-usd-twd">—</span>
+    </div>
+  </div>
+  <div class="hero__chart">
+    <canvas id="equity-sparkline" width="640" height="120"></canvas>
+  </div>
+  <div class="hero__freshness">
+    <span class="freshness-dot" id="freshness-dot"></span>
+    <span id="freshness-text">…</span>
+  </div>
+</section>
+
+<section class="movers">
+  <h3>Top movers</h3>
+  <div class="movers__split">
+    <div>
+      <h4>Gainers</h4>
+      <ul id="movers-up" class="data-list"></ul>
+    </div>
+    <div>
+      <h4>Decliners</h4>
+      <ul id="movers-down" class="data-list"></ul>
+    </div>
+  </div>
+</section>
+
+{% include "_developer_tools.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/today.js') }}"></script>
+{% endblock %}
