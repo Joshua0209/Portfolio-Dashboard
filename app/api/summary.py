@@ -13,7 +13,19 @@ def summary():
     s = store()
     months = s.months
     if not months:
-        return envelope({"empty": True})
+        return envelope({
+            "empty": True,
+            "kpis": {},
+            "twr": 0,
+            "xirr": None,
+            "profit_twd": 0,
+            "invested_twd": 0,
+            "equity_curve": [],
+            "allocation": {"tw": 0, "foreign": 0, "bank_twd": 0, "bank_usd": 0},
+            "first_month": None,
+            "last_month": None,
+            "months_covered": 0,
+        })
 
     last = months[-1]
     first = months[0]

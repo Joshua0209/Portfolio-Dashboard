@@ -31,7 +31,20 @@ def timeseries():
     s = store()
     months = s.months
     if not months:
-        return envelope({"empty": True})
+        return envelope({
+            "empty": True,
+            "monthly": [],
+            "twr_total": 0,
+            "xirr": None,
+            "max_drawdown": 0,
+            "monthly_volatility": 0,
+            "annualized_volatility": 0,
+            "sharpe_annualized": 0,
+            "best_month": None,
+            "worst_month": None,
+            "positive_months": 0,
+            "negative_months": 0,
+        })
 
     method = _method_param()
     period_returns, cum, meta = _recomputed(months, method)
@@ -129,7 +142,7 @@ def attribution():
     s = store()
     months = s.months
     if not months:
-        return envelope({"empty": True})
+        return envelope([])
 
     venue_flows = {v["month"]: v for v in s.venue_flows_twd}
 

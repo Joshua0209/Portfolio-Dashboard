@@ -16,7 +16,16 @@ def fx():
     s = store()
     months = s.months
     if not months:
-        return envelope({"empty": True})
+        return envelope({
+            "empty": True,
+            "rate_curve": [],
+            "current_rate": None,
+            "first_rate": None,
+            "by_ccy_monthly": [],
+            "fx_pnl": {"contribution_twd": 0, "monthly": []},
+            "foreign_share": 0,
+            "foreign_value_twd": 0,
+        })
 
     fx_pnl = analytics.fx_pnl(months)
 

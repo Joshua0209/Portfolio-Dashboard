@@ -7,10 +7,26 @@
   async function init() {
     window.charts.applyDefaults();
     const fx = await window.api.get("/api/fx");
+    if (fx.empty || !fx.rate_curve) {
+      showEmpty();
+      return;
+    }
     renderKPIs(fx);
     renderRate(fx);
     renderFxPnl(fx);
     renderCcyStack(fx);
+  }
+
+  function showEmpty() {
+    const main = document.querySelector(".content");
+    const box = document.createElement("div");
+    box.className = "empty-state";
+    const h = document.createElement("h3");
+    h.textContent = "No FX data yet";
+    const p = document.createElement("p");
+    p.textContent = "Run parse_statements.py against the latest PDFs to populate data/portfolio.json.";
+    box.append(h, p);
+    main.appendChild(box);
   }
 
   function renderKPIs(fx) {

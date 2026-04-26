@@ -15,7 +15,23 @@ def risk():
     s = store()
     months = s.months
     if not months:
-        return envelope({"empty": True})
+        return envelope({
+            "empty": True,
+            "monthly_volatility": 0,
+            "annualized_volatility": 0,
+            "max_drawdown": 0,
+            "current_drawdown": 0,
+            "drawdown_curve": [],
+            "sharpe_annualized": 0,
+            "hhi": 0,
+            "diversification_score": 0,
+            "top_5_share": 0,
+            "top_10_share": 0,
+            "position_count": 0,
+            "leverage_value_twd": 0,
+            "leverage_pct": 0,
+            "weight_distribution": [],
+        })
 
     period_returns = [m.get("period_return", 0) or 0 for m in months]
     cum = [m.get("cum_twr", 0) or 0 for m in months]
