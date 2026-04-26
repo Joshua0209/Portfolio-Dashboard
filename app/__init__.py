@@ -10,6 +10,7 @@ from pathlib import Path
 from flask import Flask, render_template
 
 from .data_store import DataStore
+from .daily_store import DailyStore
 from . import filters as jinja_filters
 
 try:
@@ -80,6 +81,15 @@ def create_app(data_path: Path | str | None = None) -> Flask:
 
     app.config["DATA_PATH"] = data_path
     app.extensions["store"] = DataStore(data_path)
+
+    daily_db_path = Path(
+        os.environ.get("DAILY_DB_PATH", project_root / "data" / "dashboard.db")
+    )
+    app.config["DAILY_DB_PATH"] = daily_db_path
+    daily = DailyStore(daily_db_path)
+    daily.init_schema()
+    app.extensions["daily_store"] = daily
+    log.info("DailyStore ready at %s", daily_db_path)
 
     jinja_filters.register(app)
 
