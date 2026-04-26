@@ -9,7 +9,6 @@ Setup: Enable Gmail API, place credentials.json in this directory.
 """
 
 import base64
-import os
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -18,22 +17,24 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-OUTPUT_DIR = Path("sinopac_pdfs")
+ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = ROOT / "sinopac_pdfs"
+TOKEN_FILE = ROOT / "token.json"
+CREDS_FILE = ROOT / "credentials.json"
 GMAIL_QUERY = "label:bank/sinopac has:attachment filename:pdf"
 
 
 def get_credentials() -> Credentials:
     creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if TOKEN_FILE.exists():
+        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_FILE), SCOPES)
             creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as f:
-            f.write(creds.to_json())
+        TOKEN_FILE.write_text(creds.to_json())
     return creds
 
 

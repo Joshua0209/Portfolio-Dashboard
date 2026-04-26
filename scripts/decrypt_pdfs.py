@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pikepdf
 
-SRC = Path(__file__).parent / "sinopac_pdfs"
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "sinopac_pdfs"
 DST = SRC / "decrypted"
 
 

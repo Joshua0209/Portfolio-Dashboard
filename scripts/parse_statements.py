@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pdfplumber
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "sinopac_pdfs" / "decrypted"
 OUT = ROOT / "data" / "portfolio.json"
 TW_TICKER_MAP_FILE = ROOT / "data" / "tw_ticker_map.json"
