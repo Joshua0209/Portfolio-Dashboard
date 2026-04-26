@@ -590,3 +590,53 @@ table.data td a:hover { color: var(--accent); }
   color: var(--text-mute);
   text-align: center;
 }
+
+/* Info-icon + floating tooltip ────────────────────────────────────── */
+.info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-elev-2);
+  color: var(--text-mute);
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--font-sans);
+  font-style: italic;
+  margin-left: 6px;
+  cursor: help;
+  user-select: none;
+  vertical-align: middle;
+  border: 1px solid var(--line);
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.info-icon::before { content: "i"; }
+.info-icon:hover,
+.info-icon:focus {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.info-tooltip {
+  position: fixed;
+  display: none;
+  width: 300px;
+  padding: 11px 13px;
+  background: var(--bg-elev-2);
+  color: var(--text-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  letter-spacing: 0;
+  white-space: normal;
+  z-index: 1000;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}

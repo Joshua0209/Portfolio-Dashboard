@@ -5,23 +5,23 @@
 
 {% block content %}
 <div class="card-grid cards-4 section">
-  <div class="kpi"><span class="kpi-label">Max drawdown</span><span class="kpi-value" id="kpi-mdd">—</span><span class="kpi-sub">peak-to-trough</span></div>
-  <div class="kpi"><span class="kpi-label">Volatility (annual)</span><span class="kpi-value" id="kpi-vol">—</span><span class="kpi-sub">σ × √12</span></div>
-  <div class="kpi"><span class="kpi-label">Top-5 concentration</span><span class="kpi-value" id="kpi-top5">—</span><span class="kpi-sub" id="kpi-positions">—</span></div>
-  <div class="kpi"><span class="kpi-label">Leverage</span><span class="kpi-value" id="kpi-lev">—</span><span class="kpi-sub" id="kpi-lev-sub">融資 positions</span></div>
+  <div class="kpi"><span class="kpi-label">Max drawdown<span tabindex="0" class="info-icon" data-info="The deepest peak-to-trough drop you've experienced. -10% means at the worst point you'd lost 10% from a recent high. This is your worst-case stress-test number — would you stay calm if it happened again tomorrow?"></span></span><span class="kpi-value" id="kpi-mdd">—</span><span class="kpi-sub">peak-to-trough</span></div>
+  <div class="kpi"><span class="kpi-label">Volatility (annual)<span tabindex="0" class="info-icon" data-info="How wildly your portfolio swings in a year. Under 10% = bond-like calm. 15-25% = a typical diversified stock portfolio. Over 40% = wild ride. High vol means both upside AND downside surprises are bigger."></span></span><span class="kpi-value" id="kpi-vol">—</span><span class="kpi-sub">σ × √12</span></div>
+  <div class="kpi"><span class="kpi-label">Top-5 concentration<span tabindex="0" class="info-icon" data-info="What % of your money sits in your 5 biggest positions. Above 70% = concentrated; if any one of them craters, your whole portfolio takes a big hit. Diversification rule of thumb: no single position over 10-15%."></span></span><span class="kpi-value" id="kpi-top5">—</span><span class="kpi-sub" id="kpi-positions">—</span></div>
+  <div class="kpi"><span class="kpi-label">Leverage<span tabindex="0" class="info-icon" data-info="% of your equity held as 融資 (margin) positions — borrowed money. Leverage AMPLIFIES BOTH gains and losses. Above 50% is aggressive; above 100% you're trading mainly with the broker's money. Pay attention to interest costs."></span></span><span class="kpi-value" id="kpi-lev">—</span><span class="kpi-sub" id="kpi-lev-sub">融資 positions</span></div>
 </div>
 
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Drawdown over time</h3>
+      <h3 class="card-title">Drawdown over time<span tabindex="0" class="info-icon" data-info="A line that's at 0% when you're at all-time-high equity, and dips negative when you're under water. Use it to spot how often and how deep you've been in drawdown."></span></h3>
       <span class="card-sub" id="dd-current">—</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-dd"></canvas></div>
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Concentration (HHI)</h3>
+      <h3 class="card-title">Concentration (HHI)<span tabindex="0" class="info-icon" data-info="Donut shows position weights. HHI (Herfindahl index) = sum of squared weights. 0 = perfectly diversified, 1 = single stock. Below 0.15 is well-diversified; above 0.25 is concentrated. Your displayed HHI tells you which side of the line you're on."></span></h3>
       <span class="card-sub" id="hhi-label">—</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-weights"></canvas></div>
@@ -31,14 +31,14 @@
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Margin (融資) leverage timeline</h3>
+      <h3 class="card-title">Margin (融資) leverage timeline<span tabindex="0" class="info-icon" data-info="How much borrowed exposure you carried each month. Spikes mean you took on leverage that month. Higher bars = riskier. Helpful for spotting whether your wins came from real picks or from levering up."></span></h3>
       <span class="card-sub">borrowed-position market value as % of equity</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-leverage"></canvas></div>
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Risk-adjusted ratios</h3>
+      <h3 class="card-title">Risk-adjusted ratios<span tabindex="0" class="info-icon" data-info="Several flavors of 'return per unit of risk'. Sharpe penalizes all volatility; Sortino only down-volatility; Calmar uses worst drawdown. Effective N = how many positions you 'effectively' hold — closer to your real position count = better diversified."></span></h3>
       <span class="card-sub">annualized; based on monthly returns</span>
     </div>
     <div class="table-wrap">
@@ -53,7 +53,7 @@
 <div class="section">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Position weights</h3>
+      <h3 class="card-title">Position weights<span tabindex="0" class="info-icon" data-info="Each holding sized by % of your portfolio value. Long bars = big positions you're heavily exposed to. Use this to decide what to trim or what to add to."></span></h3>
       <span class="card-sub">% of portfolio market value</span>
     </div>
     <div id="weights-list" class="flex-col gap-2"></div>

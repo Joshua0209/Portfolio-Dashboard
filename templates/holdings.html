@@ -6,22 +6,22 @@
 {% block content %}
 <div class="card-grid cards-4 section">
   <div class="kpi">
-    <span class="kpi-label">Market value</span>
+    <span class="kpi-label">Market value<span tabindex="0" class="info-icon" data-info="What every position would be worth if you sold them all at today's prices. Sum of (current price × shares) across every holding."></span></span>
     <span class="kpi-value" id="kpi-mv">—</span>
     <span class="kpi-sub" id="kpi-mv-sub">across <span id="kpi-count">0</span> positions</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Cost basis</span>
+    <span class="kpi-label">Cost basis<span tabindex="0" class="info-icon" data-info="What you originally paid — total purchase price + commissions, summed across all open positions. Compare to market value: market value − cost basis = unrealized P&L."></span></span>
     <span class="kpi-value" id="kpi-cost">—</span>
     <span class="kpi-sub">total deployed capital</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Unrealized P&amp;L</span>
+    <span class="kpi-label">Unrealized P&amp;L<span tabindex="0" class="info-icon" data-info="Paper gain or loss on positions you still hold. 'Unrealized' because you haven't sold yet — only when you sell does it become realized P&L (and trigger tax in some markets)."></span></span>
     <span class="kpi-value" id="kpi-upnl">—</span>
     <span class="kpi-sub" id="kpi-upnl-pct">—</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">FX rate (USD/TWD)</span>
+    <span class="kpi-label">FX rate (USD/TWD)<span tabindex="0" class="info-icon" data-info="The exchange rate from your latest bank statement, used to convert foreign (mostly USD) holdings to NTD. If this rate moves, your foreign book's NTD value moves too — even when the underlying stocks haven't budged."></span></span>
     <span class="kpi-value" id="kpi-fx">—</span>
     <span class="kpi-sub" id="kpi-fx-sub">applied to foreign book</span>
   </div>
@@ -30,14 +30,14 @@
 <div class="section card-grid" style="grid-template-columns: 1.2fr 1fr;">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Position map</h3>
+      <h3 class="card-title">Position map<span tabindex="0" class="info-icon" data-info="Treemap: each rectangle is a holding, sized by its NTD market value, colored by gain (green) or loss (red). Big red = your largest losing position; big green = your largest winner. Eye-test for concentration."></span></h3>
       <span class="card-sub">cell size = market value</span>
     </div>
     <div id="treemap" style="display:grid; gap:4px; min-height:280px;"></div>
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Sector breakdown</h3>
+      <h3 class="card-title">Sector breakdown<span tabindex="0" class="info-icon" data-info="Holdings grouped by industry sector (semiconductors, financials, software, etc.). Helps spot whether your portfolio is over-exposed to one theme — e.g., 70% in semis means a chip cycle bust hits you hard."></span></h3>
       <span class="card-sub">heuristic mapping</span>
     </div>
     <div id="sector-list" class="flex-col gap-2"></div>
@@ -47,7 +47,7 @@
 <div class="section">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">All positions</h3>
+      <h3 class="card-title">All positions<span tabindex="0" class="info-icon" data-info="Full table of every open position. Sortable columns — click headers to re-sort. Code links to per-ticker page with full trade + dividend history."></span></h3>
       <div class="toolbar" style="margin: 0;">
         <input id="filter-q" class="input" placeholder="Search code or name…" style="width:200px;" />
         <select id="filter-venue" class="select">

@@ -6,22 +6,22 @@
 {% block content %}
 <div class="card-grid cards-4 section">
   <div class="kpi">
-    <span class="kpi-label">TWR (cumulative)</span>
+    <span class="kpi-label">TWR (cumulative)<span tabindex="0" class="info-icon" data-info="Time-Weighted Return — sum of every monthly return, compounded together. Ignores when you put money in. This is the apples-to-apples number to compare against an index like 0050 or VOO."></span></span>
     <span class="kpi-value" id="kpi-twr">—</span>
     <span class="kpi-sub" id="kpi-twr-sub">deposit-neutral</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">CAGR</span>
+    <span class="kpi-label">CAGR<span tabindex="0" class="info-icon" data-info="Compound Annual Growth Rate — what your TWR would be if you stretched it to a full year. With less than 12 months of data this is extrapolated and can look unrealistically high; treat as a rough indicator until you have 1+ year of history."></span></span>
     <span class="kpi-value" id="kpi-cagr">—</span>
     <span class="kpi-sub">annualized TWR</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">XIRR</span>
+    <span class="kpi-label">XIRR<span tabindex="0" class="info-icon" data-info="The actual annual rate your NTD earned, accounting for when you deposited each chunk. Money you deposited recently has had less time to grow, so XIRR is usually lower than CAGR for active investors who keep adding."></span></span>
     <span class="kpi-value" id="kpi-xirr">—</span>
     <span class="kpi-sub">money-weighted</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Hit rate</span>
+    <span class="kpi-label">Hit rate<span tabindex="0" class="info-icon" data-info="What % of months ended green. Higher = more consistent. 50% is coin-flip; 65%+ suggests skill (over a long enough sample)."></span></span>
     <span class="kpi-value" id="kpi-hit">—</span>
     <span class="kpi-sub" id="kpi-hit-sub">positive months</span>
   </div>
@@ -29,22 +29,22 @@
 
 <div class="card-grid cards-4 section">
   <div class="kpi">
-    <span class="kpi-label">Annualized volatility</span>
+    <span class="kpi-label">Annualized volatility<span tabindex="0" class="info-icon" data-info="How wildly your returns swing in a typical year. Under 10% = calm (bond-like). 15-25% = normal stock portfolio. Over 40% = wild ride. Higher vol means bigger ups AND bigger downs."></span></span>
     <span class="kpi-value" id="kpi-vol">—</span>
     <span class="kpi-sub">σ × √12</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Sharpe (rf=0)</span>
+    <span class="kpi-label">Sharpe (rf=0)<span tabindex="0" class="info-icon" data-info="Average return ÷ volatility, annualized. Tells you if you're being paid enough for the risk you're taking. Below 1 = mediocre. Above 1 = good. Above 2 = excellent. Above 3 = either elite or a thin sample."></span></span>
     <span class="kpi-value" id="kpi-sharpe">—</span>
     <span class="kpi-sub">return per unit of risk</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Sortino</span>
+    <span class="kpi-label">Sortino<span tabindex="0" class="info-icon" data-info="Like Sharpe, but only counts DOWN-month volatility. Sharpe punishes you for big up months too (which is silly); Sortino doesn't. Higher = better. With few negative months it can blow up — treat extreme values with skepticism."></span></span>
     <span class="kpi-value" id="kpi-sortino">—</span>
     <span class="kpi-sub">downside-risk adjusted</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Calmar</span>
+    <span class="kpi-label">Calmar<span tabindex="0" class="info-icon" data-info="CAGR ÷ |max drawdown|. Reward divided by your worst pain. Above 1 = strong; above 3 = exceptional. Capped to ≫10 in display because tiny drawdowns blow this number up."></span></span>
     <span class="kpi-value" id="kpi-calmar">—</span>
     <span class="kpi-sub">CAGR ÷ |max drawdown|</span>
   </div>
@@ -53,7 +53,7 @@
 <div class="section">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Cumulative TWR vs equity</h3>
+      <h3 class="card-title">Cumulative TWR vs equity<span tabindex="0" class="info-icon" data-info="Solid line = your account's NTD value over time. Dashed line = your TWR (deposit-neutral). The gap between them is mostly capital you've added. When the dashed line rises, you're earning return; when only the solid rises, you're just feeding the account."></span></h3>
     </div>
     <div class="chart-box h-320"><canvas id="chart-cum"></canvas></div>
   </div>
@@ -62,14 +62,14 @@
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Monthly returns</h3>
+      <h3 class="card-title">Monthly returns<span tabindex="0" class="info-icon" data-info="Each bar is one month's TWR. Green = up, red = down. The pattern shows your consistency: lots of small green = steady; mixed bag = volatile; big red bars = bad streaks worth investigating."></span></h3>
       <span class="card-sub" id="month-stats">—</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Drawdown</h3>
+      <h3 class="card-title">Drawdown<span tabindex="0" class="info-icon" data-info="How far below your prior all-time-high you were at any point. 0% = at a new high. -10% = you'd be 10% better off if you'd sold at the previous peak. The deepest dip = your max drawdown — the worst stretch you've lived through."></span></h3>
       <span class="card-sub" id="dd-max">—</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-dd"></canvas></div>
@@ -79,14 +79,14 @@
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Rolling returns</h3>
+      <h3 class="card-title">Rolling returns<span tabindex="0" class="info-icon" data-info="What you'd have earned if you bought at any month and held for 3, 6, or 12 months. Smoothed view of your recent trend — useful to see if your performance is improving or fading."></span></h3>
       <span class="card-sub">3M / 6M / 12M compounded</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-rolling"></canvas></div>
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Attribution: TW · Foreign · FX</h3>
+      <h3 class="card-title">Attribution: TW · Foreign · FX<span tabindex="0" class="info-icon" data-info="Where each month's profit came from. TW = Taiwan stocks price moves. Foreign = US stock price moves (in USD). FX = pure NTD/USD exchange-rate effect on your USD holdings — a NTD weakening boosts this even if your stocks didn't move."></span></h3>
       <span class="card-sub">cumulative P&amp;L decomposition</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-attr"></canvas></div>
@@ -96,7 +96,7 @@
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Drawdown episodes</h3>
+      <h3 class="card-title">Drawdown episodes<span tabindex="0" class="info-icon" data-info="Each row is one peak-to-trough-to-recovery cycle. Depth = how bad it got; DD months = how long the slide lasted; Recovery = how long until you reclaimed the previous high. 'Open' = still underwater."></span></h3>
       <span class="card-sub">peak → trough → recovery</span>
     </div>
     <div class="table-wrap">
@@ -111,7 +111,7 @@
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Attribution totals (TWD)</h3>
+      <h3 class="card-title">Attribution totals (TWD)<span tabindex="0" class="info-icon" data-info="Cumulative P&L from each source over your full history. Helps you see whether your money was actually made on TW stocks, US stocks, or just from the NTD/USD rate moving. The dashboard takes care to separate these three sources so you don't credit currency luck as stock-picking skill."></span></h3>
     </div>
     <div id="attr-totals" class="flex-col gap-2 p-2"></div>
   </div>
@@ -120,7 +120,7 @@
 <div class="section">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Monthly detail</h3>
+      <h3 class="card-title">Monthly detail<span tabindex="0" class="info-icon" data-info="Row-by-row breakdown of each month: V_start = equity at start, External flow = net deposit/withdrawal during month, Equity = end-of-month value, Period return = TWR for that month, Cum TWR = compounded TWR-to-date, Drawdown = how far below prior peak."></span></h3>
     </div>
     <div class="table-wrap">
       <table class="data" id="months-table">

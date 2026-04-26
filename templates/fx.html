@@ -5,26 +5,26 @@
 
 {% block content %}
 <div class="card-grid cards-4 section">
-  <div class="kpi"><span class="kpi-label">Current USD/TWD</span><span class="kpi-value" id="kpi-cur">—</span><span class="kpi-sub" id="kpi-first">—</span></div>
-  <div class="kpi"><span class="kpi-label">Foreign exposure</span><span class="kpi-value" id="kpi-fx">—</span><span class="kpi-sub" id="kpi-fx-twd">—</span></div>
-  <div class="kpi"><span class="kpi-label">FX-attributed P&amp;L</span><span class="kpi-value" id="kpi-fx-pnl">—</span><span class="kpi-sub">since first month</span></div>
-  <div class="kpi"><span class="kpi-label">Δ rate</span><span class="kpi-value" id="kpi-drate">—</span><span class="kpi-sub">first → last</span></div>
+  <div class="kpi"><span class="kpi-label">Current USD/TWD<span tabindex="0" class="info-icon" data-info="Today's exchange rate from your latest bank statement. 31.5 means 1 USD = 31.5 NTD. Higher = NTD is weaker against USD (good for your USD holdings when measured in NTD)."></span></span><span class="kpi-value" id="kpi-cur">—</span><span class="kpi-sub" id="kpi-first">—</span></div>
+  <div class="kpi"><span class="kpi-label">Foreign exposure<span tabindex="0" class="info-icon" data-info="What % of your portfolio sits in foreign (mostly USD) holdings. Higher = more sensitive to USD/TWD moves. Many TW investors keep 30-50% in foreign for diversification."></span></span><span class="kpi-value" id="kpi-fx">—</span><span class="kpi-sub" id="kpi-fx-twd">—</span></div>
+  <div class="kpi"><span class="kpi-label">FX-attributed P&amp;L<span tabindex="0" class="info-icon" data-info="How much of your gain/loss came purely from currency moves on USD holdings — separate from stock price changes. Positive = NTD weakened helped you; negative = NTD strengthened hurt you."></span></span><span class="kpi-value" id="kpi-fx-pnl">—</span><span class="kpi-sub">since first month</span></div>
+  <div class="kpi"><span class="kpi-label">Δ rate<span tabindex="0" class="info-icon" data-info="How much the USD/TWD rate has moved from your first tracked month to now. +5% = NTD weakened 5% (USD got stronger); -5% = NTD strengthened."></span></span><span class="kpi-value" id="kpi-drate">—</span><span class="kpi-sub">first → last</span></div>
 </div>
 
 <div class="section card-grid cards-2">
   <div class="card">
-    <div class="card-header"><h3 class="card-title">USD/TWD rate</h3></div>
+    <div class="card-header"><h3 class="card-title">USD/TWD rate<span tabindex="0" class="info-icon" data-info="Monthly snapshot of the NTD/USD exchange rate from your bank's published rate. Trend up = NTD is weakening; trend down = NTD is strengthening."></span></h3></div>
     <div class="chart-box h-260"><canvas id="chart-rate"></canvas></div>
   </div>
   <div class="card">
-    <div class="card-header"><h3 class="card-title">FX P&amp;L (cumulative)</h3></div>
+    <div class="card-header"><h3 class="card-title">FX P&amp;L (cumulative)<span tabindex="0" class="info-icon" data-info="Running total of profit/loss from currency moves only — what your foreign holdings 'gained or lost' in NTD just because the exchange rate moved, holding stock prices constant. Strips out the FX effect from stock-picking."></span></h3></div>
     <div class="chart-box h-260"><canvas id="chart-fx-pnl"></canvas></div>
   </div>
 </div>
 
 <div class="section">
   <div class="card">
-    <div class="card-header"><h3 class="card-title">Currency exposure over time</h3></div>
+    <div class="card-header"><h3 class="card-title">Currency exposure over time<span tabindex="0" class="info-icon" data-info="Stacked area showing the NTD value held in each currency (TWD, USD, etc.) per month. See your foreign-exposure trend — has it grown or shrunk as you've added US positions?"></span></h3></div>
     <div class="chart-box h-320"><canvas id="chart-ccy"></canvas></div>
   </div>
 </div>

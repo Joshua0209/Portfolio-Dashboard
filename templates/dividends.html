@@ -5,22 +5,22 @@
 
 {% block content %}
 <div class="card-grid cards-4 section">
-  <div class="kpi"><span class="kpi-label">Total received</span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub" id="kpi-total-sub">across all currencies</span></div>
-  <div class="kpi"><span class="kpi-label">TTM dividends</span><span class="kpi-value" id="kpi-ttm">—</span><span class="kpi-sub" id="kpi-ttm-yield">trailing 12-month</span></div>
-  <div class="kpi"><span class="kpi-label">Annualized yield</span><span class="kpi-value" id="kpi-yield">—</span><span class="kpi-sub">on current cost</span></div>
-  <div class="kpi"><span class="kpi-label">Distinct payers</span><span class="kpi-value" id="kpi-payers">—</span><span class="kpi-sub" id="kpi-events">events</span></div>
+  <div class="kpi"><span class="kpi-label">Total received<span tabindex="0" class="info-icon" data-info="Sum of every cash dividend ever paid into your accounts, in NTD. Foreign dividends (USD) get converted at that month's FX rate. Doesn't include 折讓金 broker rebates (those are not real dividends — see separate panel below)."></span></span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub" id="kpi-total-sub">across all currencies</span></div>
+  <div class="kpi"><span class="kpi-label">TTM dividends<span tabindex="0" class="info-icon" data-info="Trailing 12-Month dividends — what hit your bank in the last 12 months. The sub-line shows TTM ÷ current invested cost = your effective yield on cost over the last year."></span></span><span class="kpi-value" id="kpi-ttm">—</span><span class="kpi-sub" id="kpi-ttm-yield">trailing 12-month</span></div>
+  <div class="kpi"><span class="kpi-label">Annualized yield<span tabindex="0" class="info-icon" data-info="Average monthly dividend × 12 ÷ today's invested cost. A run-rate yield estimate. With less than a year of data this can over- or under-shoot the real number — TTM yield (on the previous KPI) is more conservative."></span></span><span class="kpi-value" id="kpi-yield">—</span><span class="kpi-sub">on current cost</span></div>
+  <div class="kpi"><span class="kpi-label">Distinct payers<span tabindex="0" class="info-icon" data-info="How many different companies/ETFs have ever paid you a dividend. Higher = more income diversification."></span></span><span class="kpi-value" id="kpi-payers">—</span><span class="kpi-sub" id="kpi-events">events</span></div>
 </div>
 
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Monthly income — TW vs Foreign (TWD)</h3>
+      <h3 class="card-title">Monthly income — TW vs Foreign (TWD)<span tabindex="0" class="info-icon" data-info="Stacked bars per month: gold = TW dividends (集保 ACH 股息), green = foreign-broker (USD 國外股息, NTD-converted). Shows when each market pays out — TW often clusters in Q3, US tech tends to pay quarterly."></span></h3>
     </div>
     <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Top payers</h3>
+      <h3 class="card-title">Top payers<span tabindex="0" class="info-icon" data-info="Which positions have paid you the most over your full history. Bar length = relative payout. Sub-text shows ticker name + how many distributions you've collected."></span></h3>
     </div>
     <div id="top-payers" class="flex-col gap-2"></div>
   </div>
@@ -29,7 +29,7 @@
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Total return on current holdings</h3>
+      <h3 class="card-title">Total return on current holdings<span tabindex="0" class="info-icon" data-info="For each position you currently hold: cost paid, current value, dividends received over the holding period, and the combined total return. % is total return ÷ cost. Captures the real return that includes dividend income, not just price action."></span></h3>
       <span class="text-mute text-tiny">unrealized P&amp;L plus accumulated dividends</span>
     </div>
     <div class="table-wrap">
@@ -45,7 +45,7 @@
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Broker rebates (折讓金)</h3>
+      <h3 class="card-title">Broker rebates (折讓金)<span tabindex="0" class="info-icon" data-info="Promotional cashback from your broker for using e-trading (e.g., 永豐金's 電子折讓金). NOT dividends — the company didn't distribute these; the broker did. Tracked separately so you can see real shareholder income vs broker incentives."></span></h3>
       <span class="text-mute text-tiny">promotional credits, not shareholder dividends</span>
     </div>
     <div class="table-wrap">
@@ -62,7 +62,7 @@
 <div class="section">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">All distributions</h3>
+      <h3 class="card-title">All distributions<span tabindex="0" class="info-icon" data-info="Every dividend event ever paid into your accounts, newest first. One row per cash credit. Click ticker codes to drill into per-stock history."></span></h3>
     </div>
     <div class="table-wrap">
       <table class="data" id="div-table">
