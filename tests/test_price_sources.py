@@ -100,7 +100,12 @@ def test_get_prices_returns_empty_when_twse_returns_nothing(monkeypatch) -> None
     assert get_prices("9999", "TWD", "2026-04-01", "2026-04-30") == []
 
 
-def test_get_prices_usd_raises_not_implemented_in_phase2() -> None:
-    """yfinance lands in Phase 6. Until then, USD should fail loudly."""
-    with pytest.raises(NotImplementedError):
-        get_prices("SNDK", "USD", "2026-04-01", "2026-04-30")
+def test_get_prices_usd_routed_to_yfinance(monkeypatch) -> None:
+    """Phase 6 wires the USD branch; this test pins the historical
+    NotImplementedError contract is gone and USD now flows through."""
+    monkeypatch.setattr(
+        "app.price_sources.yfinance_fetch_prices",
+        lambda s, st, ed: [{"date": "2026-04-01", "close": 150.0, "volume": 1}],
+    )
+    rows = get_prices("SNDK", "USD", "2026-04-01", "2026-04-30")
+    assert rows and rows[0]["currency"] == "USD"

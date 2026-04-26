@@ -163,7 +163,7 @@ def test_run_tw_backfill_skips_symbols_outside_floor(
     no symbol_market row."""
     fetched: list[tuple] = []
 
-    def fake_get_prices(symbol, currency, start, end):
+    def fake_get_prices(symbol, currency, start, end, store=None):
         fetched.append((symbol, currency, start, end))
         # Synthesize one row per requested month so positions_daily has data.
         return [
@@ -192,7 +192,7 @@ def test_run_tw_backfill_writes_prices(
          "symbol": "2330", "currency": "TWD", "source": "twse"},
     ]
 
-    def fake_get_prices(symbol, currency, start, end):
+    def fake_get_prices(symbol, currency, start, end, store=None):
         return rows if symbol == "2330" else []
 
     monkeypatch.setattr("app.backfill_runner.get_prices", fake_get_prices)
@@ -214,7 +214,7 @@ def test_run_tw_backfill_is_idempotent_via_upsert(
               "symbol": "2330", "currency": "TWD", "source": "twse"}]
     state = {"calls": 0}
 
-    def fake_get_prices(symbol, currency, start, end):
+    def fake_get_prices(symbol, currency, start, end, store=None):
         if symbol != "2330":
             return []
         state["calls"] += 1
@@ -244,7 +244,7 @@ def test_run_tw_backfill_populates_portfolio_daily(
          "symbol": "2330", "currency": "TWD", "source": "twse"},
     ]
 
-    def fake_get_prices(symbol, currency, start, end):
+    def fake_get_prices(symbol, currency, start, end, store=None):
         return rows if symbol == "2330" else []
 
     monkeypatch.setattr("app.backfill_runner.get_prices", fake_get_prices)
