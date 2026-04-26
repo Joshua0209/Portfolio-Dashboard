@@ -1,6 +1,10 @@
 """Flask application factory for the investment dashboard."""
 from __future__ import annotations
 
+import logging
+import os
+import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from flask import Flask, render_template
@@ -8,9 +12,64 @@ from flask import Flask, render_template
 from .data_store import DataStore
 from . import filters as jinja_filters
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # dotenv is in requirements.txt; tolerate dev installs without it
+    load_dotenv = None
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_LOG_DIR = _PROJECT_ROOT / "logs"
+_ENV_PATH = _PROJECT_ROOT / ".env"
+_LOGGING_CONFIGURED = False
+
+
+def _configure_logging() -> None:
+    """Install one stdout handler and one rotating-file handler at INFO."""
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        return
+
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = _LOG_DIR / "daily.log"
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(fmt)
+    file_handler.setLevel(logging.INFO)
+
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
+    stream_handler.setFormatter(fmt)
+    stream_handler.setLevel(logging.INFO)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Avoid duplicate handlers when create_app() is called multiple times in tests
+    root.handlers = [file_handler, stream_handler]
+
+    _LOGGING_CONFIGURED = True
+
+
+def _load_env() -> None:
+    """Load .env without overriding real shell env vars (per Phase 0 risk note)."""
+    if load_dotenv is None or not _ENV_PATH.exists():
+        return
+    load_dotenv(_ENV_PATH, override=False)
+
 
 def create_app(data_path: Path | str | None = None) -> Flask:
-    project_root = Path(__file__).resolve().parent.parent
+    _load_env()
+    _configure_logging()
+    log = logging.getLogger("app")
+    log.info("create_app: BACKFILL_ON_STARTUP=%s", os.environ.get("BACKFILL_ON_STARTUP", "false"))
+
+    project_root = _PROJECT_ROOT
     data_path = Path(data_path) if data_path else project_root / "data" / "portfolio.json"
 
     app = Flask(

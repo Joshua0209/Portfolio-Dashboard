@@ -129,6 +129,25 @@ python app.py
 If you already had `app.py` running, you don't need to restart — open any
 dashboard page and it will pick up the new data on the next API call.
 
+### Backing up the daily SQLite cache (optional)
+
+The daily-resolution layer (`data/dashboard.db`, added in the daily-prices
+work) is a regenerable cache — if you delete it, the next run rebuilds it
+from `portfolio.json` plus the public TWSE/TPEX/yfinance APIs in roughly
+30–60 seconds. So backups are nice-to-have, not required.
+
+If you do want a snapshot anyway, **never `cp` the file**. WAL mode keeps
+in-flight pages in `dashboard.db-wal` and `dashboard.db-shm` sidecars, so a
+plain copy can capture an inconsistent view. Use SQLite's online backup
+command instead:
+
+```bash
+sqlite3 data/dashboard.db ".backup data/dashboard.db.bak"
+```
+
+It is safe to run while Flask is up — the backup is an atomic, transactionally
+consistent copy taken through the same connection pool.
+
 ---
 
 ## Repository layout
