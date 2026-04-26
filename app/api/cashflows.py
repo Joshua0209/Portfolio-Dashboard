@@ -49,22 +49,41 @@ def cumulative():
 
 @bp.get("/bank")
 def bank_transactions():
-    """Bank account ledger — capital source view."""
+    """Bank account ledger — capital source view.
+
+    Each row carries:
+      * signed_amount  — direction-aware (+ in / − out)
+      * amount_twd     — TWD-equivalent of signed_amount (uses month FX)
+      * account        — "TWD" or "FOREIGN"
+    """
     s = store()
     rows = []
     for m in s.months:
-        bank = m.get("bank", {})
+        bank = m.get("bank", {}) or {}
+        fx = bank.get("fx") or {}
+        usd_rate = fx.get("USD") or m.get("fx_usd_twd") or 0.0
+
         for tx in bank.get("tx_twd", []) or []:
+            signed = tx.get("signed_amount", 0) or 0
             rows.append({
+                **tx,
                 "month": m["month"],
                 "ccy": "TWD",
-                "fx": bank.get("fx"),
-                **tx,
+                "account": "TWD",
+                "fx": fx,
+                "amount_twd": signed,
+                "signed_amount": signed,
             })
         for tx in bank.get("tx_foreign", []) or []:
+            ccy = tx.get("ccy") or "USD"
+            signed = tx.get("signed_amount", 0) or 0
+            rate = fx.get(ccy) or (usd_rate if ccy == "USD" else 0.0)
             rows.append({
-                "month": m["month"],
-                "fx": bank.get("fx"),
                 **tx,
+                "month": m["month"],
+                "account": "FOREIGN",
+                "fx": fx,
+                "amount_twd": signed * rate,
+                "signed_amount": signed,
             })
     return envelope(rows)

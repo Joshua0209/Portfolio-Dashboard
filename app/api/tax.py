@@ -52,6 +52,13 @@ def tax():
     tax_total = sum((s.by_ticker.get(r["code"], {}) or {}).get("tax_twd", 0) for r in enriched)
     unrealized_total = sum(r["unrealized_pnl_twd"] for r in enriched)
 
+    # Broker rebates offset trading friction. Surface them at the totals
+    # level so the headline cost reflects what was actually paid.
+    rebate_total = 0.0
+    for m in s.months:
+        for r in (m.get("tw") or {}).get("rebates", []) or []:
+            rebate_total += r.get("amount_twd", 0) or 0
+
     closed = [r for r in enriched if r.get("fully_closed")]
     winners = [r for r in closed if r["realized_pnl_twd"] > 0]
     losers = [r for r in closed if r["realized_pnl_twd"] < 0]
@@ -67,6 +74,8 @@ def tax():
             "total_pnl_twd": realized_total + div_total + unrealized_total,
             "fees_twd": fees_total,
             "tax_twd": tax_total,
+            "rebate_twd": rebate_total,
+            "net_cost_twd": fees_total + tax_total - rebate_total,
             "closed_positions": len(closed),
             "winners_count": len(winners),
             "losers_count": len(losers),

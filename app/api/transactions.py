@@ -54,16 +54,29 @@ def aggregates():
     trades = s.all_trades
 
     by_month_venue: dict[tuple[str, str], dict] = defaultdict(
-        lambda: {"buy": 0.0, "sell": 0.0, "fees": 0.0, "tax": 0.0, "n": 0}
+        lambda: {"buy": 0.0, "sell": 0.0, "fees": 0.0, "tax": 0.0, "rebate": 0.0, "n": 0}
     )
     by_venue: dict[str, dict] = defaultdict(
-        lambda: {"buy": 0.0, "sell": 0.0, "fees": 0.0, "tax": 0.0, "n": 0}
+        lambda: {"buy": 0.0, "sell": 0.0, "fees": 0.0, "tax": 0.0, "rebate": 0.0, "n": 0}
     )
     fee_total = 0.0
     tax_total = 0.0
     buy_total = 0.0
     sell_total = 0.0
     n = 0
+
+    # Broker rebates (折讓金) offset trading friction. Aggregate them per
+    # month so the "Fees + tax" KPI reflects the true net cost.
+    rebates_by_month: dict[str, float] = defaultdict(float)
+    rebate_total = 0.0
+    for m in s.months:
+        ym = m.get("month") or "?"
+        for r in (m.get("tw") or {}).get("rebates", []) or []:
+            amt = r.get("amount_twd", 0) or 0
+            rebates_by_month[ym] += amt
+            rebate_total += amt
+            by_month_venue[(ym, "TW")]["rebate"] += amt
+            by_venue["TW"]["rebate"] += amt
 
     for t in trades:
         venue = t.get("venue", "?")
@@ -101,16 +114,17 @@ def aggregates():
         n += 1
 
     monthly = []
-    months_seen = sorted({k[0] for k in by_month_venue.keys()})
+    months_seen = sorted({k[0] for k in by_month_venue.keys()} | set(rebates_by_month.keys()))
     venues_seen = sorted({k[1] for k in by_month_venue.keys()})
     for m in months_seen:
-        row = {"month": m}
+        row = {"month": m, "rebate": rebates_by_month.get(m, 0)}
         for v in venues_seen:
             b = by_month_venue.get((m, v), {})
             row[f"{v}_buy"] = b.get("buy", 0)
             row[f"{v}_sell"] = b.get("sell", 0)
             row[f"{v}_fees"] = b.get("fees", 0)
             row[f"{v}_tax"] = b.get("tax", 0)
+            row[f"{v}_rebate"] = b.get("rebate", 0)
             row[f"{v}_n"] = b.get("n", 0)
         monthly.append(row)
 
@@ -132,6 +146,7 @@ def aggregates():
         b["n"] += 1
 
     notional = buy_total + sell_total
+    net_cost = fee_total + tax_total - rebate_total
     return envelope({
         "totals": {
             "trades": n,
@@ -139,7 +154,9 @@ def aggregates():
             "sell_twd": sell_total,
             "fees_twd": fee_total,
             "tax_twd": tax_total,
-            "fee_drag_pct": (fee_total / notional) if notional else 0,
+            "rebate_twd": rebate_total,
+            "net_cost_twd": net_cost,
+            "fee_drag_pct": (net_cost / notional) if notional else 0,
             "fee_bps": (fee_total / notional * 10000) if notional else 0,
             "tax_bps": (tax_total / notional * 10000) if notional else 0,
             "avg_trade_twd": (notional / n) if n else 0,

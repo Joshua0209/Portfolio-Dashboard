@@ -27,8 +27,13 @@
     setText("kpi-n", String(t.trades));
     setText("kpi-buy", fmt.twd(t.buy_twd));
     setText("kpi-sell", fmt.twd(t.sell_twd));
-    setText("kpi-cost", fmt.twd((t.fees_twd || 0) + (t.tax_twd || 0)));
-    setText("kpi-drag", `drag ${fmt.pctAbs(t.fee_drag_pct, 3)} of volume`);
+    const gross = (t.fees_twd || 0) + (t.tax_twd || 0);
+    const rebate = t.rebate_twd || 0;
+    const net = t.net_cost_twd ?? (gross - rebate);
+    setText("kpi-cost", fmt.twd(net));
+    const subParts = [`drag ${fmt.pctAbs(t.fee_drag_pct, 3)} of volume`];
+    if (rebate > 0) subParts.unshift(`gross ${fmt.twd(gross)} − rebates ${fmt.twd(rebate)}`);
+    setText("kpi-drag", subParts.join(" · "));
   }
 
   function renderVolumeChart(agg) {
@@ -37,19 +42,24 @@
     const venues = agg.venues || [];
     const colors = [charts.cssVar("--c1"), charts.cssVar("--c2"), charts.cssVar("--c3")];
 
+    // One bar per month: buys go up (positive), sells go down (negative).
+    // Same stack key so all venues stack into a single positive segment and
+    // a single negative segment within one column — instead of side-by-side
+    // buy/sell bars.
     const datasets = [];
     venues.forEach((v, i) => {
+      const base = colors[i] || charts.cssVar("--c4");
       datasets.push({
         label: `${v} buy`,
         data: agg.monthly.map((m) => m[`${v}_buy`] || 0),
-        backgroundColor: colors[i] || charts.cssVar("--c4"),
-        stack: "buy",
+        backgroundColor: base,
+        stack: "vol",
       });
       datasets.push({
         label: `${v} sell`,
         data: agg.monthly.map((m) => -(m[`${v}_sell`] || 0)),
-        backgroundColor: charts.hexWithAlpha(colors[i] || charts.cssVar("--c4"), 0.45),
-        stack: "sell",
+        backgroundColor: charts.hexWithAlpha(base, 0.45),
+        stack: "vol",
       });
     });
 
@@ -86,6 +96,12 @@
       backgroundColor: charts.cssVar("--c5"),
       stack: "s",
     });
+    datasets.push({
+      label: "rebate",
+      data: agg.monthly.map((m) => -(m.rebate || 0)),
+      backgroundColor: charts.cssVar("--pos"),
+      stack: "s",
+    });
 
     new Chart(ctx, {
       type: "bar",
@@ -94,7 +110,7 @@
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { position: "top", align: "end" },
-          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(c.parsed.y)}` } },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(Math.abs(c.parsed.y))}` } },
         },
         scales: { y: { ticks: { callback: (v) => fmt.twdCompact(v) }, stacked: true }, x: { stacked: true } },
       },

@@ -640,3 +640,28 @@ table.data td a:hover { color: var(--accent); }
   pointer-events: none;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
+/* ─────────────────────────────────────────────────────────────────
+   Benchmark page strategy chooser
+   ───────────────────────────────────────────────────────────────── */
+.strategy-row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 120ms;
+}
+.strategy-row:hover {
+  border-color: var(--line-strong);
+}
+.strategy-row input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.strategy-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

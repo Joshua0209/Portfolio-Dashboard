@@ -18,16 +18,31 @@
   }
 
   function renderKPIs(t) {
-    setColored("kpi-real", fmt.twd(t.realized_pnl_twd), t.realized_pnl_twd);
-    setText("kpi-real-sub", `${t.closed_positions || 0} closed positions`);
+    // Per-ticker realized already nets fees + tax; add rebates back so the
+    // headline reflects what was actually banked after broker discounts.
+    const rebate = t.rebate_twd || 0;
+    const realizedNet = (t.realized_pnl_twd || 0) + rebate;
+    const totalNet = (t.total_pnl_twd || 0) + rebate;
+    setColored("kpi-real", fmt.twd(realizedNet), realizedNet);
+    if (rebate > 0) {
+      setText("kpi-real-sub", `${t.closed_positions || 0} closed · +${fmt.twd(rebate)} rebates`);
+    } else {
+      setText("kpi-real-sub", `${t.closed_positions || 0} closed positions`);
+    }
     setColored("kpi-div", fmt.twd(t.dividends_twd || 0), t.dividends_twd || 0);
     setColored("kpi-unreal", fmt.twd(t.unrealized_pnl_twd), t.unrealized_pnl_twd);
-    setColored("kpi-total", fmt.twd(t.total_pnl_twd), t.total_pnl_twd);
+    setColored("kpi-total", fmt.twd(totalNet), totalNet);
     setText("kpi-win", fmt.pctAbs(t.win_rate || 0, 1));
     setText("kpi-win-sub", `${t.winners_count || 0} winners · ${t.losers_count || 0} losers`);
     setText("kpi-hold", t.avg_holding_days != null ? `${Math.round(t.avg_holding_days)}d` : "—");
-    setText("kpi-cost", fmt.twd((t.fees_twd || 0) + (t.tax_twd || 0)));
-    setText("kpi-cost-sub", `fees ${fmt.twd(t.fees_twd || 0)} · tax ${fmt.twd(t.tax_twd || 0)}`);
+    const grossCost = (t.fees_twd || 0) + (t.tax_twd || 0);
+    const netCost = t.net_cost_twd ?? (grossCost - rebate);
+    setText("kpi-cost", fmt.twd(netCost));
+    if (rebate > 0) {
+      setText("kpi-cost-sub", `fees ${fmt.twd(t.fees_twd || 0)} · tax ${fmt.twd(t.tax_twd || 0)} · rebates -${fmt.twd(rebate)}`);
+    } else {
+      setText("kpi-cost-sub", `fees ${fmt.twd(t.fees_twd || 0)} · tax ${fmt.twd(t.tax_twd || 0)}`);
+    }
   }
   function setColored(id, txt, val) {
     const el = document.getElementById(id);

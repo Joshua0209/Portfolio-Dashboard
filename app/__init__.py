@@ -25,7 +25,7 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     jinja_filters.register(app)
 
     from .api import summary, holdings, performance, transactions, cashflows
-    from .api import dividends, risk, fx, tax, tickers
+    from .api import dividends, risk, fx, tax, tickers, benchmarks
 
     app.register_blueprint(summary.bp)
     app.register_blueprint(holdings.bp)
@@ -37,6 +37,7 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     app.register_blueprint(fx.bp)
     app.register_blueprint(tax.bp)
     app.register_blueprint(tickers.bp)
+    app.register_blueprint(benchmarks.bp)
 
     @app.get("/api/health")
     def health():
@@ -88,5 +89,9 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     @app.get("/ticker/<code>")
     def ticker_page(code: str):
         return render_template("ticker.html", page="ticker", code=code)
+
+    @app.get("/benchmark")
+    def benchmark_page():
+        return render_template("benchmark.html", page="benchmark")
 
     return app

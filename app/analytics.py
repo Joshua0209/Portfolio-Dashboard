@@ -371,16 +371,53 @@ def monthly_flows(months: list[dict], venue_flows: list[dict] | None = None) -> 
     """Per-month inflow/outflow breakdown for the cashflow waterfall.
 
     Pulls TW vs Foreign buy/sell from `venue_flows_twd` (broker-trade ground
-    truth) and bank-side categorization from `investment_flows_twd`.
+    truth) and bank-side categorization from `investment_flows_twd`. Also
+    derives three "view" totals so the UI can disambiguate what the user
+    means by "net flow":
+
+      * gross_in / gross_out — sum of bank movements tied to broker activity.
+      * external_flow         — net broker↔bank cashflow (legacy).
+      * deposits_net          — peer transfers + salary (capital actively
+                                 moved IN from outside the investing system).
     """
     venue_by_month = {v["month"]: v for v in (venue_flows or [])}
     out = []
     for m in months:
         flows = m.get("investment_flows_twd", {}) or {}
         vf = venue_by_month.get(m["month"], {})
+        bank = m.get("bank", {}) or {}
+
+        gross_in = 0.0
+        gross_out = 0.0
+        for tx in bank.get("tx_twd", []) or []:
+            cat = tx.get("category") or ""
+            sgn = tx.get("signed_amount", 0) or 0
+            if cat in ("stock_settle_tw", "rebate", "tw_dividend", "fx_convert"):
+                if sgn > 0:
+                    gross_in += sgn
+                else:
+                    gross_out += -sgn
+
+        usd_rate = (bank.get("fx") or {}).get("USD") or m.get("fx_usd_twd") or 0.0
+        for tx in bank.get("tx_foreign", []) or []:
+            cat = tx.get("category") or ""
+            sgn = tx.get("signed_amount", 0) or 0
+            if cat in ("stock_settle_fx", "foreign_dividend", "fx_convert"):
+                amt_twd = sgn * usd_rate
+                if amt_twd > 0:
+                    gross_in += amt_twd
+                else:
+                    gross_out += -amt_twd
+
         out.append({
             "month": m["month"],
             "external_flow": m.get("external_flow_twd", 0),
+            "gross_in": gross_in,
+            "gross_out": gross_out,
+            "deposits_net": (
+                (flows.get("transfer_net_twd", 0) or 0)
+                + (flows.get("salary_in_twd", 0) or 0)
+            ),
             # Venue split (broker-side, ground truth):
             "tw_buy": vf.get("tw_buy_twd", 0),
             "tw_sell": vf.get("tw_sell_twd", 0),

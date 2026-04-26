@@ -144,6 +144,7 @@ position, add an entry and re-run `parse_statements.py`.
 | `/dividends` | Monthly income, top payers, full distribution log |
 | `/tax` | Per-ticker realized + unrealized P&L, win rate, CSV export |
 | `/ticker/<code>` | Position over time, cost vs MV chart, trades, dividends |
+| `/benchmark` | Portfolio TWR vs market strategies (TW + US, multi-tier) |
 
 ## API surface
 
@@ -166,6 +167,8 @@ GET /api/fx
 GET /api/tax
 GET /api/tickers
 GET /api/tickers/<code>
+GET /api/benchmarks/strategies
+GET /api/benchmarks/compare?keys=tw_passive,us_passive
 ```
 
 ## Adding a new statement type
