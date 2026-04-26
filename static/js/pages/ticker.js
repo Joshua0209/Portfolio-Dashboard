@@ -21,10 +21,122 @@
     }
     renderHeader(data);
     renderKPIs(data);
+    if (data.daily_prices && data.daily_prices.points && data.daily_prices.points.length) {
+      renderDailyPriceChart(data.daily_prices);
+    }
     renderPositionChart(data.position_history);
     renderPnlChart(data.position_history);
     renderTrades(data.trades);
     renderDividends(data.dividends);
+  }
+
+  /**
+   * Daily price line + buy/sell trade markers (Phase 8).
+   *
+   * Aligns marker x-positions to the price-line dates so they sit exactly
+   * on the close of the trading day. Trades on dates with no cached price
+   * (e.g. a buy on a holiday before the daily series starts) get appended
+   * to the labels axis with `null` price values so the line still renders
+   * the marker at the correct horizontal slot.
+   */
+  function renderDailyPriceChart(daily) {
+    const card = document.getElementById("chart-daily-card");
+    if (!card) return;
+    card.removeAttribute("hidden");
+
+    const ctx = document.getElementById("chart-daily").getContext("2d");
+    const points = daily.points;
+    const trades = daily.trades || [];
+
+    const labels = points.map((p) => p.date);
+    const closes = points.map((p) => p.close);
+
+    const buyData = labels.map(() => null);
+    const sellData = labels.map(() => null);
+    for (const t of trades) {
+      const idx = labels.indexOf(t.date);
+      if (idx === -1) continue;
+      const isBuy = (t.side || "").includes("買");
+      if (isBuy) buyData[idx] = closes[idx];
+      else sellData[idx] = closes[idx];
+    }
+
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Close",
+            data: closes,
+            borderColor: charts.cssVar("--accent"),
+            backgroundColor: (c) => c.chart.chartArea
+              ? charts.gradientFill(c.chart.ctx, c.chart.chartArea, charts.cssVar("--accent"), 0.15)
+              : "transparent",
+            borderWidth: 1.5,
+            pointRadius: 0,
+            spanGaps: true, // preserves the gap-fill behavior from commit 041bf7f
+            tension: 0.2,
+            fill: true,
+          },
+          {
+            label: "Buy",
+            data: buyData,
+            type: "scatter",
+            backgroundColor: charts.cssVar("--pos"),
+            borderColor: charts.cssVar("--pos"),
+            pointStyle: "triangle",
+            pointRadius: 8,
+            pointHoverRadius: 11,
+            showLine: false,
+          },
+          {
+            label: "Sell",
+            data: sellData,
+            type: "scatter",
+            backgroundColor: charts.cssVar("--neg"),
+            borderColor: charts.cssVar("--neg"),
+            pointStyle: "rectRot",
+            pointRadius: 7,
+            pointHoverRadius: 10,
+            showLine: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top", align: "end" },
+          tooltip: {
+            callbacks: {
+              label: (c) => {
+                if (c.dataset.label === "Close") {
+                  return `Close: ${fmt.num(c.parsed.y, 2)}`;
+                }
+                const trade = trades.find((t) => t.date === c.label
+                  && ((t.side || "").includes("買") ? c.dataset.label === "Buy" : c.dataset.label === "Sell"));
+                if (!trade) return c.dataset.label;
+                return `${trade.side} · ${fmt.int(trade.qty)} @ ${fmt.num(trade.price, 2)}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              maxTicksLimit: 12,
+              autoSkip: true,
+              callback: function (val) {
+                const label = this.getLabelForValue(val);
+                return label ? label.slice(0, 7) : "";
+              },
+            },
+          },
+          y: { ticks: { callback: (v) => fmt.num(v, 0) } },
+        },
+      },
+    });
   }
 
   function renderHeader(data) {

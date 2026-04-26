@@ -4,10 +4,48 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime
 
-from flask import Blueprint
+from flask import Blueprint, current_app, request
 
 from .. import analytics, benchmarks
 from ._helpers import envelope, store
+
+
+def _normalize_trade_date(d: str) -> str:
+    return d.replace("/", "-") if "/" in d else d
+
+
+def _daily_prices_for(code: str, start: str | None, end: str | None) -> dict:
+    """Return {points, trades, empty} for the daily resolution branch.
+
+    Mirrors /api/daily/prices/<symbol>'s shape so ticker.js receives a
+    self-contained payload without a second roundtrip.
+    """
+    daily = current_app.extensions["daily_store"]
+    points = daily.get_ticker_history(code, start=start, end=end)
+
+    pdf = store()
+    trades = []
+    for t in pdf.all_trades or []:
+        if t.get("code") != code:
+            continue
+        d = _normalize_trade_date(t.get("date", ""))
+        if start and d < start:
+            continue
+        if end and d > end:
+            continue
+        trades.append({
+            "date": d,
+            "side": t.get("side"),
+            "qty": t.get("qty"),
+            "price": t.get("price"),
+            "venue": t.get("venue"),
+            "ccy": t.get("ccy"),
+        })
+    return {
+        "points": points,
+        "trades": trades,
+        "empty": len(points) == 0,
+    }
 
 
 def _yahoo_symbol(code: str, venue: str | None, ccy: str | None) -> str | None:
@@ -179,7 +217,7 @@ def ticker_detail(code: str):
     is_open = bool(last_entry and last_entry["month"] == last_month)
     current = last_entry if is_open else None
 
-    return envelope({
+    payload = {
         "code": code,
         "name": t.get("name"),
         "summary": realized,
@@ -189,4 +227,13 @@ def ticker_detail(code: str):
         "current": current,
         "is_open": is_open,
         "last_seen_month": last_entry["month"] if last_entry else None,
-    })
+    }
+
+    if request.args.get("resolution") == "daily":
+        payload["daily_prices"] = _daily_prices_for(
+            code,
+            start=request.args.get("start") or None,
+            end=request.args.get("end") or None,
+        )
+
+    return envelope(payload)
