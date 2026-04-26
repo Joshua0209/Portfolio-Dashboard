@@ -169,8 +169,7 @@ investment/
 ├── sinopac_pdfs/                 # gitignored — encrypted source PDFs
 │   └── decrypted/                # gitignored — decrypted copies
 ├── credentials.json              # gitignored — Gmail OAuth client
-├── token.json                    # gitignored — Gmail OAuth token
-└── legacy/index.html             # Pre-rebuild single-page dashboard
+└── token.json                    # gitignored — Gmail OAuth token
 ```
 
 ---

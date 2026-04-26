@@ -39,10 +39,9 @@ investment/
 │       ├── tickers.py            # Per-security drill-down
 │       └── benchmarks.py         # Strategy comparison vs portfolio
 ├── templates/                    # Jinja2 page templates (11 pages)
-├── static/                       # css/, js/ (vanilla; no build step)
-│   ├── css/{tokens,app}.css      # Design system + components
-│   └── js/{api,charts,format,help,pagination,app}.js + pages/*.js
-└── legacy/index.html             # Pre-rebuild single-page dashboard (kept for reference)
+└── static/                       # css/, js/ (vanilla; no build step)
+    ├── css/{tokens,app}.css      # Design system + components
+    └── js/{api,charts,format,help,pagination,app}.js + pages/*.js
 ```
 
 ## Refresh workflow
