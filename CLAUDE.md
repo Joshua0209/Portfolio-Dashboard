@@ -7,36 +7,41 @@ Pipeline: encrypted PDFs → decrypt → parse → JSON → **Flask backend + mu
 
 ```
 investment/
-├── credentials.json              # Google API creds for the downloader (existing)
-├── token.json                    # OAuth token (existing)
-├── download_sinopac_pdfs.py      # Existing: pulls statement PDFs from Gmail/Drive
-├── sinopac_pdfs/                 # Encrypted source PDFs
+├── credentials.json              # Google API creds for the downloader (gitignored)
+├── token.json                    # OAuth token (gitignored)
+├── sinopac_pdfs/                 # Encrypted source PDFs (gitignored)
 │   └── decrypted/                # Decrypted copies (gitignored — sensitive)
-├── decrypt_pdfs.py               # Step 1: env-based password unlock
-├── parse_statements.py           # Step 2: extract holdings + flows → data/portfolio.json
-├── data/portfolio.json           # Parsed dataset consumed by the dashboard
-├── data/tw_ticker_map.json       # Manual TW name→code overrides (see below)
+├── data/                         # gitignored — real portfolio data
+│   ├── portfolio.json            # Parsed dataset consumed by the dashboard
+│   ├── tw_ticker_map.json        # Manual TW name→code overrides (see below)
+│   └── benchmarks.json           # yfinance price cache (7-day TTL)
+├── scripts/                      # Pipeline (run from any CWD; ROOT auto-resolved)
+│   ├── download_sinopac_pdfs.py  # Pull statement PDFs from Gmail
+│   ├── decrypt_pdfs.py           # Step 1: env-based password unlock
+│   └── parse_statements.py       # Step 2: extract holdings + flows → data/portfolio.json
 ├── app.py                        # Flask entrypoint
 ├── app/                          # Backend application package
 │   ├── __init__.py               # create_app(), routes, blueprint registration
 │   ├── data_store.py             # Mtime-cached portfolio.json loader
-│   ├── analytics.py              # Drawdown, Sharpe, HHI, FX P&L, sectors
+│   ├── analytics.py              # Drawdown, Sharpe, Sortino, Calmar, HHI, FX P&L, FIFO P&L, sectors
+│   ├── benchmarks.py             # yfinance fetcher + cached strategy curves
 │   ├── filters.py                # Jinja currency/percent/date filters
-│   └── api/                      # 10 blueprints, all under /api/*
+│   └── api/                      # 11 blueprints, all under /api/*
 │       ├── summary.py            # KPIs, equity curve, allocation
 │       ├── holdings.py           # Current/historical positions, sectors
-│       ├── performance.py        # TWR/XIRR/drawdown/rolling/attribution
-│       ├── transactions.py       # Trade log + monthly aggregates
-│       ├── cashflows.py          # Real vs counterfactual, bank ledger
+│       ├── performance.py        # TWR/XIRR/drawdown/rolling/attribution (3 weighting methods)
+│       ├── transactions.py       # Trade log + monthly aggregates + rebates
+│       ├── cashflows.py          # Real vs counterfactual, bank ledger, gross/net views
 │       ├── dividends.py          # Distributions + rebates
-│       ├── risk.py               # Concentration, leverage, drawdown
+│       ├── risk.py               # Concentration, leverage, drawdown, ratios
 │       ├── fx.py                 # USD/TWD curve, FX P&L attribution
-│       ├── tax.py                # Realized + unrealized P&L by ticker
-│       └── tickers.py            # Per-security drill-down
-├── templates/                    # Jinja2 page templates (10 pages)
+│       ├── tax.py                # Realized + unrealized P&L by ticker (FIFO)
+│       ├── tickers.py            # Per-security drill-down
+│       └── benchmarks.py         # Strategy comparison vs portfolio
+├── templates/                    # Jinja2 page templates (11 pages)
 ├── static/                       # css/, js/ (vanilla; no build step)
 │   ├── css/{tokens,app}.css      # Design system + components
-│   └── js/{api,charts,format,app}.js + pages/*.js
+│   └── js/{api,charts,format,help,pagination,app}.js + pages/*.js
 └── legacy/index.html             # Pre-rebuild single-page dashboard (kept for reference)
 ```
 
@@ -49,14 +54,14 @@ cd path/to/investment
 source .venv/bin/activate
 
 # 1. (existing) pull new PDFs into sinopac_pdfs/
-python3 download_sinopac_pdfs.py
+python3 scripts/download_sinopac_pdfs.py
 
 # 2. unlock — passwords come from env (comma-separated candidates)
 export SINOPAC_PDF_PASSWORDS="<id-or-birthdate>,<fallback>"
-python3 decrypt_pdfs.py
+python3 scripts/decrypt_pdfs.py
 
 # 3. parse → data/portfolio.json
-python3 parse_statements.py
+python3 scripts/parse_statements.py
 
 # 4. start the Flask dashboard (refreshes data automatically when JSON updates)
 python3 app.py
@@ -85,15 +90,24 @@ External cashflows = `客戶淨收付` (TW) + `應收/付` sum (foreign), TWD-co
 
 ## Performance metrics
 
-- **TWR (Modified Dietz, monthly)**: `r = (V_end − V_start − F) / (V_start + 0.5·F)`,
-  chained across months. Measures investment skill independent of deposit timing.
-  - Month 1 is forced to 0% (no prior equity to compare against).
+- **TWR (Modified Dietz, monthly)** — three flow-weighting variants, switchable
+  in the UI and via `?method=` on `/api/performance/*`:
+  - `day_weighted` (default): each per-trade flow weighted by `(D-d)/D`. A sell
+    on the last day of the month barely shrinks the denominator. Most accurate
+    when deposits/withdrawals cluster intra-month.
+  - `mid_month`: legacy Modified Dietz, all flows weighted 0.5:
+    `r = (V_end − V_start − F) / (V_start + 0.5·F)`.
+  - `eom`: end-of-month assumption, flows weighted 0.0.
+  - All three chain across months. Month 1 is forced to 0% (no prior equity).
 - **XIRR**: Newton-Raphson on cashflow dates. Money-weighted; reflects what
   *your money* actually earned. Cashflows dated to month-mid; final equity
   treated as a terminal inflow.
+- **Sortino / Calmar / Sharpe** — all three printed on the Performance page
+  with reference bands (<1 weak, 1–2 acceptable, 2–3 good, 3–5 excellent,
+  >5 elite or thin sample).
 
-The two often diverge significantly. TWR ≫ XIRR usually means recent deposits
-haven't had time to compound; that's normal, not a bug.
+TWR and XIRR often diverge. TWR ≫ XIRR usually means recent deposits haven't
+had time to compound; that's normal, not a bug.
 
 ## TW ticker codes for trades
 
@@ -107,7 +121,7 @@ appears in any holdings table.
 `data/tw_ticker_map.json` is the manual override file that fills those
 gaps. Keys are normalized halfwidth names (`'台玻'`, `'貿聯KY'`); values
 are codes (`'1802'`). When `個股分析` shows a blank 代號 for a closed
-position, add an entry and re-run `parse_statements.py`.
+position, add an entry and re-run `scripts/parse_statements.py`.
 
 ## Caveats
 
@@ -116,7 +130,7 @@ position, add an entry and re-run `parse_statements.py`.
   `holdings_detail.type == "融資"` rows with that in mind.
 - **Foreign FX**: only USD positions are TWD-converted right now. Add HKD/JPY
   rates from the bank statement if those positions appear (extend the loop in
-  `parse_statements.py:main`).
+  `scripts/parse_statements.py:main`).
 - **Dividends**: bank-derived per-event records are the source of truth.
   `summary.dividends[]` carries one row per cash credit (TW `ACH股息` and
   foreign `國外股息`), with the ticker resolved from the memo column.
@@ -173,7 +187,7 @@ GET /api/benchmarks/compare?keys=tw_passive,us_passive
 
 ## Adding a new statement type
 
-The parser dispatches in `parse_statements.py:main` based on filename
+The parser dispatches in `scripts/parse_statements.py:main` based on filename
 substring (`證券月對帳單`, `複委託`, `銀行綜合`). To add a new type:
 
 1. Write a `parse_<type>(pdf_path) -> dict` function returning a structured
@@ -187,5 +201,6 @@ substring (`證券月對帳單`, `複委託`, `銀行綜合`). To add a new type
 
 - `sinopac_pdfs/` (encrypted statements)
 - `sinopac_pdfs/decrypted/` (definitely)
-- `data/portfolio.json` (contains real positions)
+- `data/` (contains real positions and benchmark cache)
 - `credentials.json`, `token.json`
+- `.env`
