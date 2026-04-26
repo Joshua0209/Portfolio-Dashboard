@@ -971,7 +971,8 @@ table.data td a:hover { color: var(--accent); }
 .data-list > li[data-sign="pos"] .data-list__pct { color: var(--pos); }
 .data-list > li[data-sign="neg"] .data-list__pct { color: var(--neg); }
 
-/* Reconciliation banner */
+/* Reconciliation banner — `hidden` attribute must win over `display:flex` */
+[hidden] { display: none !important; }
 .banner {
   display: flex;
   align-items: center;
