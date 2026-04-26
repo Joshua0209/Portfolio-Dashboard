@@ -17,25 +17,37 @@
   function applyDefaults() {
     if (!global.Chart) return;
     const C = global.Chart;
-    C.defaults.color = cssVar("--text-soft");
+    const tickColor = cssVar("--text-soft");
+    const gridColor = cssVar("--line");
+    const borderColor = cssVar("--line-strong");
+
+    C.defaults.color = tickColor;
     C.defaults.font.family = cssVar("--font-sans");
     C.defaults.font.size = 11;
-    C.defaults.borderColor = cssVar("--line");
+    C.defaults.borderColor = gridColor;
 
-    if (C.defaults.scale) {
-      // Object.assign merges instead of replacing — preserves Chart.js 4.x
-      // internal defaults (tickLength, lineWidth, display) that the bar
-      // baseline computation depends on. Replacing the whole object drops
-      // those keys and silently NaNs out bar `base`/`height`.
-      Object.assign(C.defaults.scale.grid, {
-        color: cssVar("--line"),
-        drawTicks: false,
-      });
-      Object.assign(C.defaults.scale.ticks, {
-        color: cssVar("--text-mute"),
+    // Chart.js v4 stores scale defaults via `defaults.set` with a routes
+    // registry. Direct property assignment silently drops internal v4 keys
+    // (tickLength, lineWidth, display) that bar baseline math depends on.
+    C.defaults.set("scale", {
+      grid: { color: gridColor, drawTicks: false, tickLength: 0 },
+      border: { display: false, color: borderColor },
+      ticks: {
+        color: tickColor,
         padding: 8,
+        font: { size: 11, family: cssVar("--font-mono") },
+      },
+    });
+    for (const t of ["linear", "logarithmic", "category", "time", "timeseries", "radialLinear"]) {
+      C.defaults.set(`scales.${t}`, {
+        grid: { color: gridColor, drawTicks: false, tickLength: 0 },
+        border: { display: false, color: borderColor },
+        ticks: {
+          color: tickColor,
+          padding: 8,
+          font: { size: 11, family: cssVar("--font-mono") },
+        },
       });
-      Object.assign(C.defaults.scale.border, { display: false });
     }
 
     C.defaults.plugins.legend.labels.usePointStyle = true;
