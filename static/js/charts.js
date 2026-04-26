@@ -23,17 +23,19 @@
     C.defaults.borderColor = cssVar("--line");
 
     if (C.defaults.scale) {
-      const grid = cssVar("--line");
-      C.defaults.scale.grid = {
-        color: grid,
+      // Object.assign merges instead of replacing — preserves Chart.js 4.x
+      // internal defaults (tickLength, lineWidth, display) that the bar
+      // baseline computation depends on. Replacing the whole object drops
+      // those keys and silently NaNs out bar `base`/`height`.
+      Object.assign(C.defaults.scale.grid, {
+        color: cssVar("--line"),
         drawTicks: false,
-        drawBorder: false,
-      };
-      C.defaults.scale.ticks = {
+      });
+      Object.assign(C.defaults.scale.ticks, {
         color: cssVar("--text-mute"),
         padding: 8,
-      };
-      C.defaults.scale.border = { display: false };
+      });
+      Object.assign(C.defaults.scale.border, { display: false });
     }
 
     C.defaults.plugins.legend.labels.usePointStyle = true;

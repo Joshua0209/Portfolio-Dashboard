@@ -78,19 +78,33 @@
   function renderMonthlyFlows(monthly) {
     const ctx = document.getElementById("chart-monthly").getContext("2d");
     const labels = monthly.map((m) => fmt.month(m.month));
-    const flows = monthly.map((m) => m.external_flow);
-    const colors = flows.map((v) => v >= 0 ? charts.cssVar("--pos") : charts.cssVar("--neg"));
+    // Buys negative (capital out), sells positive — venue-split.
+    const twBuy = monthly.map((m) => -(m.tw_buy || 0));
+    const twSell = monthly.map((m) => m.tw_sell || 0);
+    const frBuy = monthly.map((m) => -(m.foreign_buy || 0));
+    const frSell = monthly.map((m) => m.foreign_sell || 0);
 
     new Chart(ctx, {
       type: "bar",
-      data: { labels, datasets: [{ label: "External flow", data: flows, backgroundColor: colors, borderRadius: 3 }] },
+      data: {
+        labels,
+        datasets: [
+          { label: "TW buy",      data: twBuy,  backgroundColor: charts.cssVar("--neg"),  stack: "tw" },
+          { label: "TW sell",     data: twSell, backgroundColor: charts.cssVar("--pos"),  stack: "tw" },
+          { label: "Foreign buy", data: frBuy,  backgroundColor: charts.cssVar("--c2"),   stack: "fr" },
+          { label: "Foreign sell",data: frSell, backgroundColor: charts.cssVar("--c4"),   stack: "fr" },
+        ],
+      },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: (c) => fmt.twd(c.parsed.y) } },
+          legend: { position: "top", align: "end" },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(Math.abs(c.parsed.y))}` } },
         },
-        scales: { y: { ticks: { callback: (v) => fmt.twdCompact(v) } } },
+        scales: {
+          x: { stacked: true },
+          y: { stacked: true, ticks: { callback: (v) => fmt.twdCompact(v) } },
+        },
       },
     });
   }

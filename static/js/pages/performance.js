@@ -19,19 +19,35 @@
     renderDrawdown(ts);
     renderRolling(rolling);
     renderAttribution(attr);
+    renderAttributionTotals(attr);
+    renderDDEpisodes(ts.drawdown_episodes || []);
     renderTable(ts);
   }
 
   function renderKPIs(ts) {
     setTextColor("kpi-twr", fmt.pct(ts.twr_total), ts.twr_total);
+    setText("kpi-twr-sub", `${ts.monthly.length} months`);
+    setTextColor("kpi-cagr", fmt.pct(ts.cagr || 0), ts.cagr || 0);
     if (ts.xirr === null || ts.xirr === undefined) {
       setText("kpi-xirr", "—");
     } else {
       setTextColor("kpi-xirr", fmt.pct(ts.xirr), ts.xirr);
     }
+    setText("kpi-hit", `${(ts.hit_rate * 100).toFixed(0)}%`);
+    setText("kpi-hit-sub", `${ts.positive_months} pos · ${ts.negative_months} neg`);
     setText("kpi-vol", fmt.pctAbs(ts.annualized_volatility, 1));
     const sharpe = ts.sharpe_annualized || 0;
     setTextColor("kpi-sharpe", sharpe.toFixed(2), sharpe);
+    const sortino = ts.sortino_annualized || 0;
+    setTextColor("kpi-sortino", capRatio(sortino), sortino);
+    const calmar = ts.calmar || 0;
+    setTextColor("kpi-calmar", capRatio(calmar), calmar);
+  }
+
+  // Cap extreme ratios so a thin sample with no real drawdown doesn't print "361.0".
+  function capRatio(v) {
+    if (!isFinite(v) || Math.abs(v) > 100) return v > 0 ? "≫ 10" : "≪ −10";
+    return v.toFixed(2);
   }
 
   function setText(id, v) {
@@ -201,8 +217,9 @@
   }
 
   function renderAttribution(attr) {
+    const monthly = attr.monthly || [];
     const ctx = document.getElementById("chart-attr").getContext("2d");
-    const labels = attr.map((m) => fmt.month(m.month));
+    const labels = monthly.map((m) => fmt.month(m.month));
     new Chart(ctx, {
       type: "bar",
       data: {
@@ -210,15 +227,24 @@
         datasets: [
           {
             label: "TW",
-            data: attr.map((m) => m.tw_pnl),
+            data: monthly.map((m) => m.tw_pnl),
             backgroundColor: charts.cssVar("--c1"),
             stack: "s",
+            borderRadius: 3,
           },
           {
-            label: "Foreign",
-            data: attr.map((m) => m.foreign_pnl),
+            label: "Foreign (price)",
+            data: monthly.map((m) => m.foreign_pnl_price),
             backgroundColor: charts.cssVar("--c2"),
             stack: "s",
+            borderRadius: 3,
+          },
+          {
+            label: "FX",
+            data: monthly.map((m) => m.foreign_pnl_fx),
+            backgroundColor: charts.cssVar("--c4"),
+            stack: "s",
+            borderRadius: 3,
           },
         ],
       },
@@ -231,6 +257,59 @@
         scales: { y: { ticks: { callback: (v) => fmt.twdCompact(v) }, stacked: true }, x: { stacked: true } },
       },
     });
+  }
+
+  function renderAttributionTotals(attr) {
+    const t = attr.totals || {};
+    const el = document.getElementById("attr-totals");
+    if (!el) return;
+    while (el.firstChild) el.removeChild(el.firstChild);
+    const items = [
+      ["TW equities", t.tw_pnl_twd],
+      ["Foreign equities (price)", t.foreign_price_pnl_twd],
+      ["FX (USD/TWD)", t.fx_pnl_twd],
+      ["Total P&L", t.total_pnl_twd],
+    ];
+    const max = Math.max(1, ...items.map(([_, v]) => Math.abs(v || 0)));
+    for (const [label, v] of items) {
+      const row = document.createElement("div");
+      row.className = "bar-row";
+      const lab = document.createElement("span");
+      lab.className = "text-sm";
+      lab.textContent = label;
+      const bar = document.createElement("span");
+      bar.className = "bar " + ((v || 0) >= 0 ? "pos" : "neg");
+      const fill = document.createElement("span");
+      fill.style.width = `${(Math.abs(v || 0) / max * 100).toFixed(2)}%`;
+      bar.appendChild(fill);
+      const val = document.createElement("span");
+      val.className = "num text-sm " + ((v || 0) >= 0 ? "value-pos" : "value-neg");
+      val.textContent = fmt.twd(v || 0);
+      row.append(lab, bar, val);
+      el.appendChild(row);
+    }
+  }
+
+  function renderDDEpisodes(eps) {
+    const tbody = document.querySelector("#dd-table tbody");
+    if (!tbody) return;
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+    if (!eps.length) {
+      const tr = document.createElement("tr");
+      const td_ = document.createElement("td");
+      td_.colSpan = 6; td_.className = "table-empty"; td_.textContent = "No drawdowns recorded";
+      tr.appendChild(td_); tbody.appendChild(tr); return;
+    }
+    for (const ep of eps) {
+      const tr = document.createElement("tr");
+      tr.appendChild(td(fmt.month(ep.peak_month)));
+      tr.appendChild(td(fmt.month(ep.trough_month)));
+      tr.appendChild(td(fmt.pct(ep.depth_pct), "num value-neg"));
+      tr.appendChild(td(String(ep.drawdown_months), "num"));
+      tr.appendChild(td(ep.recovery_months != null ? `${ep.recovery_months}M` : "—", "num"));
+      tr.appendChild(td(ep.recovered ? "Recovered" : "Open", ep.recovered ? "text-mute text-tiny" : "text-warn text-tiny"));
+      tbody.appendChild(tr);
+    }
   }
 
   function renderTable(ts) {

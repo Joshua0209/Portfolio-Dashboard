@@ -1,19 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Dividends · Sinopac Portfolio{% endblock %}
 {% block heading %}Dividends{% endblock %}
-{% block subtitle %}Income received from foreign holdings and TW account rebates.{% endblock %}
+{% block subtitle %}TW (集保 ACH 股息) and foreign-broker dividends, with yield analytics.{% endblock %}
 
 {% block content %}
-<div class="card-grid cards-3 section">
+<div class="card-grid cards-4 section">
   <div class="kpi"><span class="kpi-label">Total received</span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub" id="kpi-total-sub">across all currencies</span></div>
-  <div class="kpi"><span class="kpi-label">Events</span><span class="kpi-value" id="kpi-count">—</span><span class="kpi-sub">distributions + rebates</span></div>
-  <div class="kpi"><span class="kpi-label">Distinct payers</span><span class="kpi-value" id="kpi-payers">—</span><span class="kpi-sub">positions paying income</span></div>
+  <div class="kpi"><span class="kpi-label">TTM dividends</span><span class="kpi-value" id="kpi-ttm">—</span><span class="kpi-sub" id="kpi-ttm-yield">trailing 12-month</span></div>
+  <div class="kpi"><span class="kpi-label">Annualized yield</span><span class="kpi-value" id="kpi-yield">—</span><span class="kpi-sub">on current cost</span></div>
+  <div class="kpi"><span class="kpi-label">Distinct payers</span><span class="kpi-value" id="kpi-payers">—</span><span class="kpi-sub" id="kpi-events">events</span></div>
 </div>
 
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Monthly income (TWD)</h3>
+      <h3 class="card-title">Monthly income — TW vs Foreign (TWD)</h3>
     </div>
     <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
   </div>
@@ -25,6 +26,39 @@
   </div>
 </div>
 
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Total return on current holdings</h3>
+      <span class="text-mute text-tiny">unrealized P&amp;L plus accumulated dividends</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="tr-table">
+        <thead><tr>
+          <th>Venue</th><th>Code</th><th>Name</th>
+          <th class="num">Cost</th><th class="num">Mkt value</th>
+          <th class="num">Cum. div</th><th class="num">Total return</th><th class="num">%</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Broker rebates (折讓金)</h3>
+      <span class="text-mute text-tiny">promotional credits, not shareholder dividends</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="rebate-table">
+        <thead><tr>
+          <th>Month</th><th>Type</th><th class="num">Amount (TWD)</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div class="section">
   <div class="card">
     <div class="card-header">
@@ -33,7 +67,7 @@
     <div class="table-wrap">
       <table class="data" id="div-table">
         <thead><tr>
-          <th>Month</th><th>Date</th><th>Code</th><th>Name / type</th><th>Ccy</th>
+          <th>Date</th><th>Venue</th><th>Code</th><th>Name</th><th>Ccy</th>
           <th class="num">Amount (local)</th><th class="num">Amount (TWD)</th>
         </tr></thead>
         <tbody></tbody>

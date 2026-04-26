@@ -172,6 +172,12 @@ def parse_securities(pdf_path: Path) -> dict:
                     "ref_price": num(m.group(7)),
                     "mkt_value": num(m.group(8)),
                     "unrealized_pnl": num(m.group(9)),
+                    "unrealized_pct": float(m.group(10)) / 100.0,
+                    # Sinopac prints accumulated cash dividend per holding plus a
+                    # with-dividend P&L pair. Total-return analytics use these.
+                    "cum_dividend": num(m.group(11)),
+                    "unrealized_pnl_with_div": num(m.group(12)),
+                    "unrealized_pct_with_div": float(m.group(13)) / 100.0,
                 })
                 continue
             sm = re.match(
@@ -319,24 +325,36 @@ def parse_foreign(pdf_path: Path) -> dict:
                 })
                 cashflow_by_ccy[ccy] += amt
 
-    # Dividends
+    # Dividends — broker section columns:
+    #   市場 撥扣日 商品代號 基準日 基準日股數 幣別 分配金額 上手費用 交所費用 券商費用 上手其他 股利淨額 匯率 交割幣別 應收/付(-)金額
+    # The middle fee columns are inconsistently filled, but the row reliably
+    # ends with: <股利淨額> <匯率> [tail]. We anchor on (NUM) (NUM (with decimal))
+    # at the end and walk in: dividend net is the second-to-last number; the
+    # last is the FX rate. Earlier code matched '匯率' as the amount.
     div_sec = re.search(r"海外股票現金股利明細(.*?)(?:<|【|$)", text, re.S)
     dividends: list[dict] = []
     if div_sec and "無交易明細" not in div_sec.group(1):
         for line in div_sec.group(1).splitlines():
+            line = line.strip()
             dm = re.match(
-                rf"^\S+\s+(\d{{4}}/\d{{2}}/\d{{2}})\s+(\S+)\s+\S+\s+({NUM})\s+(USD|HKD|JPY)\s+.*?\s+({NUM})\s*$",
-                line.strip(),
+                rf"^\S+\s+(\d{{4}}/\d{{2}}/\d{{2}})\s+(\S+)\s+\d{{4}}/\d{{2}}/\d{{2}}\s+({NUM})\s+(USD|HKD|JPY)\s+(.+)$",
+                line,
             )
-            if dm:
-                dividends.append({
-                    "date": dm.group(1),
-                    "code": dm.group(2),
-                    "qty": num(dm.group(3)),
-                    "ccy": dm.group(4),
-                    "net_amount": num(dm.group(5)),
-                })
-                cashflow_by_ccy[dm.group(4)] += num(dm.group(5))
+            if not dm:
+                continue
+            tail_nums = re.findall(NUM, dm.group(5))
+            if len(tail_nums) < 2:
+                continue
+            # Last number is FX rate; the one before it is 股利淨額 (net dividend).
+            net_amount = num(tail_nums[-2])
+            dividends.append({
+                "date": dm.group(1),
+                "code": dm.group(2),
+                "qty": num(dm.group(3)),
+                "ccy": dm.group(4),
+                "net_amount": net_amount,
+            })
+            cashflow_by_ccy[dm.group(4)] += net_amount
 
     return {
         "month": ym,
@@ -621,6 +639,12 @@ def main() -> int:
                 foreign_flow_twd += -amt * rate
         external_flow_twd = tw_flow_twd + foreign_flow_twd
 
+        # Per-event dividends from bank statements (TW + foreign). The broker
+        # PDFs leave 海外股票現金股利明細 empty almost every month — the bank
+        # statement is the ground truth for actual dividend cash received,
+        # with the ticker symbol or stock name in the memo column.
+        div_events = _extract_dividend_events(bank, usd_twd) if bank else []
+
         months_out.append({
             "month": ym,
             "fx_usd_twd": usd_twd,
@@ -634,6 +658,7 @@ def main() -> int:
             "equity_twd": equity_twd,
             "external_flow_twd": external_flow_twd,
             "investment_flows_twd": inv_flow,
+            "dividend_events": div_events,
         })
 
     months_out = compute_performance(months_out)
@@ -649,6 +674,50 @@ def main() -> int:
     print(f"  Counterfactual_twd = NT$ {summary['kpis']['counterfactual_twd']:>14,.0f}")
     print(f"  Profit             = NT$ {summary['kpis']['profit_twd']:>14,.0f}")
     return 0
+
+
+def _extract_dividend_events(bank: dict, fx_usd_twd: float) -> list[dict]:
+    """Per-event dividends mined from bank ledger.
+
+    TWD bank ACH股息: ticker name appears in memo column (e.g. '台積電').
+    Foreign 國外股息: ticker symbol in memo (e.g. 'GOOGL', 'NVDA').
+
+    Both account-currency columns are credits (positive signed_amount). The
+    `amount` is local currency; we also add a TWD-equivalent for aggregation.
+    """
+    out: list[dict] = []
+    for tx in bank.get("tx_twd", []) or []:
+        if tx.get("category") != "tw_dividend":
+            continue
+        memo = (tx.get("memo") or "").strip()
+        amt = abs(tx.get("signed_amount") or tx.get("amount") or 0)
+        out.append({
+            "date": tx["date"],
+            "venue": "TW",
+            "ccy": "TWD",
+            "name": memo or "TW dividend",
+            "code": "",  # back-filled later via name→code map
+            "amount_local": amt,
+            "amount_twd": amt,
+        })
+    rate = fx_usd_twd or 1.0
+    for tx in bank.get("tx_foreign", []) or []:
+        if tx.get("category") != "foreign_dividend":
+            continue
+        memo = (tx.get("memo") or "").strip()
+        amt = abs(tx.get("signed_amount") or tx.get("amount") or 0)
+        ccy = tx.get("ccy") or "USD"
+        twd = amt * rate if ccy == "USD" else 0.0
+        out.append({
+            "date": tx["date"],
+            "venue": "Foreign",
+            "ccy": ccy,
+            "name": memo or "Foreign dividend",
+            "code": memo,  # for foreign, memo is the symbol itself
+            "amount_local": amt,
+            "amount_twd": twd,
+        })
+    return out
 
 
 def _empty_flows() -> dict:
@@ -688,7 +757,10 @@ def _bank_investment_flows(bank: dict) -> dict:
 
 def build_summary(months: list[dict]) -> dict:
     if not months:
-        return {"kpis": {}, "totals": {}, "all_trades": [], "by_ticker": {}}
+        return {
+            "kpis": {}, "totals": {}, "all_trades": [], "by_ticker": {},
+            "dividends": [], "venue_flows_twd": [],
+        }
 
     last = months[-1]
 
@@ -707,7 +779,7 @@ def build_summary(months: list[dict]) -> dict:
 
     # Counterfactual: take TWD bank now, undo every investment-tagged tx.
     # Outflow (stock buy / fx→usd) ⇒ would have stayed in TWD bank ⇒ ADD back.
-    # Inflow (stock sell / rebate / fx→twd) ⇒ wouldn't have arrived ⇒ SUBTRACT.
+    # Inflow (stock sell / rebate / fx→twd / dividend) ⇒ wouldn't have arrived ⇒ SUBTRACT.
     counterfactual = (
         bank_twd_now
         + cum["stock_buy_twd"]
@@ -720,22 +792,36 @@ def build_summary(months: list[dict]) -> dict:
 
     profit = real_now - counterfactual
 
+    tw_name_to_code = build_tw_name_to_code(months)
+
     # Flat trade list, sorted, with TWD-equivalent net (use month's USD/TWD for foreign).
     all_trades: list[dict] = []
     by_ticker: dict[str, dict] = defaultdict(lambda: {
-        "code": "", "name": "",
+        "code": "", "name": "", "venue": "",
         "buy_qty": 0.0, "buy_cost_twd": 0.0,
         "sell_qty": 0.0, "sell_proceeds_twd": 0.0,
         "fees_twd": 0.0, "tax_twd": 0.0,
+        "dividends_twd": 0.0, "dividend_count": 0,
         "trades": [],
+        "first_trade_date": None, "last_trade_date": None,
     })
 
-    # The TW PDF trade table omits ticker codes; back-fill them from holdings
-    # plus the maintained overrides file so closed positions resolve too.
-    tw_name_to_code = build_tw_name_to_code(months)
+    # Venue-level TWD flow per month (used by attribution + cashflow waterfall).
+    # These come straight from the broker trade tables — ground truth for what
+    # was bought/sold each month per venue. Bank-level flows can't separate
+    # TW vs foreign without inferring from memos.
+    venue_flows: list[dict] = []
+
+    # All dividend events (bank-derived for actual cash; broker section as backup).
+    div_events: list[dict] = []
 
     for m in months:
         ym = m["month"]
+        fx_rate = m["fx_usd_twd"] or 0.0
+
+        tw_buy_twd = tw_sell_twd = tw_fee_twd = tw_tax_twd = tw_margin_used_twd = 0.0
+        fr_buy_twd = fr_sell_twd = fr_fee_twd = 0.0
+
         for t in (m["tw"] or {}).get("trades", []) or []:
             row = {
                 "month": ym, "date": t["date"], "venue": "TW",
@@ -746,14 +832,21 @@ def build_summary(months: list[dict]) -> dict:
                 "gross_twd": t["gross"], "fee_twd": t["fee"], "tax_twd": t.get("tax", 0.0),
                 "net_twd": t["net_twd"],
                 "margin_loan_twd": t.get("margin_loan", 0.0),
+                "self_funded_twd": t.get("self_funded", 0.0),
             }
             all_trades.append(row)
-            # Group by code when known so all trades for the same ticker
-            # collapse to one bucket regardless of name spelling drift.
+            tw_fee_twd += row["fee_twd"]
+            tw_tax_twd += row["tax_twd"]
+            if "買" in row["side"]:
+                tw_buy_twd += row["gross_twd"]
+                tw_margin_used_twd += row["margin_loan_twd"]
+            else:
+                tw_sell_twd += row["gross_twd"]
             key = row["code"] or row["name"]
             bt = by_ticker[key]
             bt["code"] = bt["code"] or row["code"]
             bt["name"] = row["name"]
+            bt["venue"] = "TW"
             bt["fees_twd"] += row["fee_twd"]
             bt["tax_twd"] += row["tax_twd"]
             if "買" in row["side"]:
@@ -763,24 +856,34 @@ def build_summary(months: list[dict]) -> dict:
                 bt["sell_qty"] += row["qty"]
                 bt["sell_proceeds_twd"] += row["gross_twd"] - row["fee_twd"] - row["tax_twd"]
             bt["trades"].append(row)
+            bt["first_trade_date"] = bt["first_trade_date"] or row["date"]
+            bt["last_trade_date"] = row["date"]
 
-        fx_rate = m["fx_usd_twd"] or 0.0
         for t in (m["foreign"] or {}).get("trades", []) or []:
             rate = fx_rate if t["ccy"] == "USD" else 0.0
             net_twd = t["net_ccy"] * rate
             row = {
                 "month": ym, "date": t["date"], "venue": "Foreign",
                 "side": t["side"], "code": t["code"], "name": t["code"],
+                "exchange": t.get("exchange"),
                 "qty": t["qty"], "price": t["price"], "ccy": t["ccy"],
+                "gross_local": t["gross"], "fee_local": t["fee"],
+                "other_fee_local": t.get("other_fee", 0.0),
                 "gross_twd": t["gross"] * rate,
                 "fee_twd": (t["fee"] + t.get("other_fee", 0.0)) * rate,
                 "tax_twd": 0.0,
                 "net_twd": net_twd,
             }
             all_trades.append(row)
+            fr_fee_twd += row["fee_twd"]
+            if t["side"] == "買進":
+                fr_buy_twd += row["gross_twd"]
+            else:
+                fr_sell_twd += row["gross_twd"]
             key = row["code"]
             bt = by_ticker[key]
             bt["code"], bt["name"] = row["code"], row["name"]
+            bt["venue"] = "Foreign"
             bt["fees_twd"] += row["fee_twd"]
             if t["side"] == "買進":
                 bt["buy_qty"] += row["qty"]
@@ -789,19 +892,111 @@ def build_summary(months: list[dict]) -> dict:
                 bt["sell_qty"] += row["qty"]
                 bt["sell_proceeds_twd"] += row["net_twd"]
             bt["trades"].append(row)
+            bt["first_trade_date"] = bt["first_trade_date"] or row["date"]
+            bt["last_trade_date"] = row["date"]
 
-        for d in (m["foreign"] or {}).get("dividends", []) or []:
-            rate = fx_rate if d["ccy"] == "USD" else 0.0
-            all_trades.append({
-                "month": ym, "date": d["date"], "venue": "Foreign",
-                "side": "股利", "code": d["code"], "name": d["code"],
-                "qty": d.get("qty", 0.0), "price": 0.0, "ccy": d["ccy"],
-                "gross_twd": d["net_amount"] * rate,
-                "fee_twd": 0.0, "tax_twd": 0.0,
-                "net_twd": d["net_amount"] * rate,
+        # Bank-derived dividend events are the source of truth (every foreign
+        # dividend hits the USD account; every TW listed-stock dividend hits
+        # TWD via 集保 ACH). The broker section is sparse and cross-checks
+        # bank amounts when present — we use it only to backfill events that
+        # the bank ledger missed (e.g. fee-only entries, payment-in-kind).
+        bank_div_keys: set[tuple] = set()
+        for ev in m.get("dividend_events", []) or []:
+            code = ev.get("code") or ""
+            if ev["venue"] == "TW" and not code:
+                code = resolve_tw_code(ev.get("name") or "", tw_name_to_code)
+            div_events.append({
+                "month": ym, "date": ev["date"], "venue": ev["venue"],
+                "code": code, "name": ev.get("name") or code,
+                "ccy": ev["ccy"],
+                "amount_local": ev["amount_local"],
+                "amount_twd": ev["amount_twd"],
+                "source": "bank",
             })
+            bank_div_keys.add((ev["venue"], (code or ev.get("name") or "").upper(), ev["date"][:7]))
+            key = code or (ev.get("name") or "DIV")
+            bt = by_ticker[key]
+            if ev["venue"] == "TW":
+                bt["code"] = bt["code"] or code
+                bt["name"] = bt["name"] or (ev.get("name") or "")
+                bt["venue"] = bt["venue"] or "TW"
+            else:
+                bt["code"] = bt["code"] or code
+                bt["name"] = bt["name"] or (ev.get("name") or code)
+                bt["venue"] = bt["venue"] or "Foreign"
+            bt["dividends_twd"] += ev["amount_twd"]
+            bt["dividend_count"] += 1
+
+        # Broker-section dividends — only add ones the bank didn't already have.
+        for d in (m["foreign"] or {}).get("dividends", []) or []:
+            key = ("Foreign", (d["code"] or "").upper(), d["date"][:7])
+            if key in bank_div_keys:
+                continue
+            rate = fx_rate if d["ccy"] == "USD" else 0.0
+            twd = d["net_amount"] * rate
+            div_events.append({
+                "month": ym, "date": d["date"], "venue": "Foreign",
+                "code": d["code"], "name": d["code"],
+                "ccy": d["ccy"], "amount_local": d["net_amount"],
+                "amount_twd": twd, "source": "broker",
+            })
+            bt = by_ticker[d["code"]]
+            bt["code"] = bt["code"] or d["code"]
+            bt["venue"] = bt["venue"] or "Foreign"
+            bt["dividends_twd"] += twd
+            bt["dividend_count"] += 1
+
+        venue_flows.append({
+            "month": ym,
+            "tw_buy_twd": tw_buy_twd, "tw_sell_twd": tw_sell_twd,
+            "tw_fee_twd": tw_fee_twd, "tw_tax_twd": tw_tax_twd,
+            "tw_margin_used_twd": tw_margin_used_twd,
+            "foreign_buy_twd": fr_buy_twd, "foreign_sell_twd": fr_sell_twd,
+            "foreign_fee_twd": fr_fee_twd,
+        })
 
     all_trades.sort(key=lambda r: (r["date"], r["venue"], r["side"]))
+    div_events.sort(key=lambda r: (r["date"], r["venue"]))
+
+    # Add total-return on closed positions (price proceeds + dividends) per ticker.
+    for code, bt in by_ticker.items():
+        bt["total_return_proxy_twd"] = (
+            bt["sell_proceeds_twd"] + bt["dividends_twd"] - bt["buy_cost_twd"]
+        )
+
+    # Latest-snapshot per-holding data for total-return analytics: cum_dividend
+    # is what Sinopac reports for the *open* position (lifetime).
+    holdings_total_return = []
+    for h in (last["tw"] or {}).get("holdings", []) or []:
+        cum_div = h.get("cum_dividend", 0) or 0
+        cost = h.get("cost", 0) or 0
+        upl = h.get("unrealized_pnl", 0) or 0
+        upl_div = h.get("unrealized_pnl_with_div", upl) or upl
+        holdings_total_return.append({
+            "venue": "TW", "code": h.get("code"), "name": h.get("name"),
+            "cost_twd": cost, "mkt_value_twd": h.get("mkt_value", 0),
+            "unrealized_pnl_twd": upl,
+            "cum_dividend_twd": cum_div,
+            "unrealized_pnl_with_div_twd": upl_div,
+            "total_return_pct": (upl_div / cost) if cost else None,
+        })
+    for h in (last["foreign"] or {}).get("holdings", []) or []:
+        rate = last["fx_usd_twd"] if h.get("ccy") == "USD" else 0.0
+        cost_twd = (h.get("cost", 0) or 0) * rate
+        mv_twd = (h.get("mkt_value", 0) or 0) * rate
+        upl_twd = (h.get("unrealized_pnl", 0) or 0) * rate
+        # foreign broker doesn't currently expose cum_dividend; use bank-derived
+        # per-ticker totals (lifetime, not just current holding).
+        bt = by_ticker.get(h.get("code") or "", {})
+        cum_div_twd = bt.get("dividends_twd", 0)
+        holdings_total_return.append({
+            "venue": "Foreign", "code": h.get("code"), "name": h.get("name"),
+            "cost_twd": cost_twd, "mkt_value_twd": mv_twd,
+            "unrealized_pnl_twd": upl_twd,
+            "cum_dividend_twd": cum_div_twd,
+            "unrealized_pnl_with_div_twd": upl_twd + cum_div_twd,
+            "total_return_pct": ((upl_twd + cum_div_twd) / cost_twd) if cost_twd else None,
+        })
 
     return {
         "kpis": {
@@ -814,10 +1009,14 @@ def build_summary(months: list[dict]) -> dict:
             "brokerage_tw_mv_twd": last["tw_market_value_twd"],
             "brokerage_foreign_mv_twd": last["foreign_market_value_twd"],
             "fx_usd_twd": last["fx_usd_twd"],
+            "total_dividends_twd": sum(d["amount_twd"] for d in div_events),
         },
         "cumulative_flows": cum,
         "all_trades": all_trades,
         "by_ticker": dict(by_ticker),
+        "dividends": div_events,
+        "venue_flows_twd": venue_flows,
+        "holdings_total_return": holdings_total_return,
     }
 
 

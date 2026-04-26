@@ -12,7 +12,7 @@ bp = Blueprint("cashflows", __name__, url_prefix="/api/cashflows")
 @bp.get("/monthly")
 def monthly():
     s = store()
-    return envelope(analytics.monthly_flows(s.months))
+    return envelope(analytics.monthly_flows(s.months, s.venue_flows_twd))
 
 
 @bp.get("/cumulative")

@@ -10,6 +10,8 @@
     renderKPIs(r);
     renderDrawdown(r);
     renderWeightsChart(r.weight_distribution);
+    renderLeverageTimeline(r.leverage_timeline || []);
+    renderRatios(r);
     renderWeightsList(r.weight_distribution);
   }
 
@@ -120,6 +122,65 @@
       val.textContent = `${(w.weight * 100).toFixed(2)}%`;
       row.append(lab, bar, val);
       el.appendChild(row);
+    }
+  }
+
+  function renderLeverageTimeline(timeline) {
+    const canvas = document.getElementById("chart-leverage");
+    if (!canvas) return;
+    const labels = timeline.map((p) => fmt.month(p.month));
+    const lev = timeline.map((p) => (p.leverage_pct || 0) * 100);
+    new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          label: "Leverage %",
+          data: lev,
+          backgroundColor: lev.map((v) =>
+            v > 30 ? charts.cssVar("--neg") :
+            v > 0 ? charts.cssVar("--c4") : charts.cssVar("--c1")),
+          borderRadius: 3,
+          barPercentage: 0.7,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (c) => `${c.parsed.y.toFixed(1)}%` } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { callback: (v) => `${v.toFixed(0)}%` } },
+        },
+      },
+    });
+  }
+
+  function renderRatios(r) {
+    const tbody = document.querySelector("#risk-ratios tbody");
+    if (!tbody) return;
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+    const cap = (v) => !isFinite(v) || Math.abs(v) > 100 ? (v > 0 ? "≫ 10" : "≪ −10") : v.toFixed(2);
+    const items = [
+      ["Sharpe", cap(r.sharpe_annualized || 0), "(μ-rf)/σ × √12"],
+      ["Sortino", cap(r.sortino_annualized || 0), "downside σ only"],
+      ["Calmar", cap(r.calmar || 0), "CAGR / |max DD|"],
+      ["Effective N", (r.effective_n || 0).toFixed(2), "1 / HHI"],
+      ["Top-5 share", `${((r.top_5_share || 0) * 100).toFixed(1)}%`, ""],
+      ["Top-10 share", `${((r.top_10_share || 0) * 100).toFixed(1)}%`, ""],
+      ["Downside vol (ann)", `${((r.downside_volatility || 0) * 100).toFixed(2)}%`, ""],
+    ];
+    for (const [k, v, n] of items) {
+      const tr = document.createElement("tr");
+      const t1 = document.createElement("td"); t1.textContent = k;
+      const t2 = document.createElement("td"); t2.className = "num"; t2.textContent = v;
+      const t3 = document.createElement("td"); t3.className = "text-mute text-tiny"; t3.textContent = n;
+      tr.append(t1, t2, t3);
+      tbody.appendChild(tr);
     }
   }
 

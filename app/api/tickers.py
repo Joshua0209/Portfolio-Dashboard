@@ -68,21 +68,26 @@ def ticker_detail(code: str):
 
     trades = sorted(t.get("trades", []), key=lambda r: r.get("date", ""))
 
+    # Pull all dividends for this ticker from the unified dividend stream.
+    name_norm = (t.get("name") or "").strip()
     dividends = []
-    for m in s.months:
-        for d in m.get("foreign", {}).get("dividends", []) or []:
-            if d.get("code") == code:
-                fx = m.get("fx_usd_twd", 1) or 1
-                rate = fx if d.get("ccy") == "USD" else 1.0
-                dividends.append({
-                    "month": m["month"],
-                    "date": d.get("date"),
-                    "amount_local": d.get("net_amount"),
-                    "amount_twd": (d.get("net_amount", 0) or 0) * rate,
-                    "ccy": d.get("ccy"),
-                })
+    for ev in s.dividends:
+        match_code = ev.get("code") and ev["code"] == code
+        match_name = bool(name_norm) and (ev.get("name") or "").strip() == name_norm
+        if match_code or match_name:
+            dividends.append({
+                "month": ev.get("month"),
+                "date": ev.get("date"),
+                "venue": ev.get("venue"),
+                "ccy": ev.get("ccy"),
+                "amount_local": ev.get("amount_local"),
+                "amount_twd": ev.get("amount_twd"),
+                "source": ev.get("source"),
+            })
 
-    realized = analytics.realized_pnl_by_ticker({code: t})[0]
+    realized_avg = analytics.realized_pnl_by_ticker({code: t})[0]
+    realized_fifo = analytics.realized_pnl_by_ticker_fifo({code: t})[0]
+    realized = {**realized_avg, "fifo": realized_fifo}
 
     # Is this position still open at the most recent month?
     last_month = s.months[-1]["month"] if s.months else None

@@ -19,10 +19,15 @@
 
   function renderKPIs(t) {
     setColored("kpi-real", fmt.twd(t.realized_pnl_twd), t.realized_pnl_twd);
+    setText("kpi-real-sub", `${t.closed_positions || 0} closed positions`);
+    setColored("kpi-div", fmt.twd(t.dividends_twd || 0), t.dividends_twd || 0);
     setColored("kpi-unreal", fmt.twd(t.unrealized_pnl_twd), t.unrealized_pnl_twd);
     setColored("kpi-total", fmt.twd(t.total_pnl_twd), t.total_pnl_twd);
-    setText("kpi-win", fmt.pctAbs(t.win_rate, 1));
-    setText("kpi-win-sub", `${t.winners_count} winners · ${t.losers_count} losers`);
+    setText("kpi-win", fmt.pctAbs(t.win_rate || 0, 1));
+    setText("kpi-win-sub", `${t.winners_count || 0} winners · ${t.losers_count || 0} losers`);
+    setText("kpi-hold", t.avg_holding_days != null ? `${Math.round(t.avg_holding_days)}d` : "—");
+    setText("kpi-cost", fmt.twd((t.fees_twd || 0) + (t.tax_twd || 0)));
+    setText("kpi-cost-sub", `fees ${fmt.twd(t.fees_twd || 0)} · tax ${fmt.twd(t.tax_twd || 0)}`);
   }
   function setColored(id, txt, val) {
     const el = document.getElementById(id);
@@ -101,11 +106,11 @@
     while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
     if (!rows.length) {
       const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 12;
-      td.className = "table-empty";
-      td.textContent = "No matching tickers";
-      tr.appendChild(td);
+      const td_ = document.createElement("td");
+      td_.colSpan = 13;
+      td_.className = "table-empty";
+      td_.textContent = "No matching tickers";
+      tr.appendChild(td_);
       tbody.appendChild(tr);
       return;
     }
@@ -119,16 +124,17 @@
       codeTd.appendChild(a);
       tr.appendChild(codeTd);
       tr.appendChild(td(r.name || ""));
-      tr.appendChild(td(fmt.int(r.buy_qty), "num"));
-      tr.appendChild(td(fmt.int(r.sell_qty), "num"));
-      tr.appendChild(td(fmt.num(r.avg_buy_price_twd, 2), "num"));
-      tr.appendChild(td(fmt.twd(r.cost_of_sold_twd), "num text-mute"));
-      tr.appendChild(td(fmt.twd(r.sell_proceeds_twd), "num"));
-      tr.appendChild(td(fmt.twd(r.fees_twd), "num text-mute"));
-      tr.appendChild(td(fmt.twd(r.tax_twd), "num text-mute"));
-      tr.appendChild(td(fmt.twd(r.realized_pnl_twd), `num ${fmt.tone(r.realized_pnl_twd)}`));
-      tr.appendChild(td(fmt.twd(r.unrealized_pnl_twd), `num ${fmt.tone(r.unrealized_pnl_twd)}`));
-      tr.appendChild(td(fmt.twd(r.total_pnl_twd), `num ${fmt.tone(r.total_pnl_twd)}`));
+      tr.appendChild(td(r.venue || "", "text-mute text-tiny"));
+      tr.appendChild(td(fmt.int(r.sell_qty || 0), "num"));
+      tr.appendChild(td(fmt.int(r.open_qty || 0), "num"));
+      tr.appendChild(td(fmt.twd(r.cost_of_sold_twd || 0), "num text-mute"));
+      tr.appendChild(td(fmt.twd(r.sell_proceeds_twd || 0), "num"));
+      tr.appendChild(td(fmt.twd(r.realized_pnl_twd || 0), `num ${fmt.tone(r.realized_pnl_twd || 0)}`));
+      tr.appendChild(td(fmt.twd(r.dividends_twd || 0), "num value-pos"));
+      tr.appendChild(td(fmt.twd(r.unrealized_pnl_twd || 0), `num ${fmt.tone(r.unrealized_pnl_twd || 0)}`));
+      tr.appendChild(td(fmt.twd(r.total_pnl_twd || 0), `num ${fmt.tone(r.total_pnl_twd || 0)}`));
+      tr.appendChild(td(r.win_rate != null ? `${(r.win_rate * 100).toFixed(0)}%` : "—", "num text-mute"));
+      tr.appendChild(td(r.avg_holding_days != null ? `${Math.round(r.avg_holding_days)}` : "—", "num text-mute"));
       tbody.appendChild(tr);
     }
   }
@@ -144,9 +150,11 @@
   function exportCsv() {
     const rows = filtered();
     const headers = [
-      "code", "name", "buy_qty", "sell_qty", "avg_buy_price_twd",
-      "cost_of_sold_twd", "sell_proceeds_twd", "fees_twd", "tax_twd",
-      "realized_pnl_twd", "unrealized_pnl_twd", "total_pnl_twd", "fully_closed",
+      "code", "name", "venue", "sell_qty", "open_qty",
+      "cost_of_sold_twd", "sell_proceeds_twd",
+      "realized_pnl_twd", "realized_pnl_avg_twd",
+      "dividends_twd", "unrealized_pnl_twd", "total_pnl_twd",
+      "win_rate", "avg_holding_days", "fully_closed",
     ];
     const lines = [headers.join(",")];
     for (const r of rows) lines.push(headers.map((k) => csvCell(r[k])).join(","));

@@ -117,8 +117,12 @@ position, add an entry and re-run `parse_statements.py`.
 - **Foreign FX**: only USD positions are TWD-converted right now. Add HKD/JPY
   rates from the bank statement if those positions appear (extend the loop in
   `parse_statements.py:main`).
-- **Dividends (TW)**: 累計配息 column captured per holding but not yet flowed
-  through the cashflow ledger. Foreign dividends ARE counted via 應收/付.
+- **Dividends**: bank-derived per-event records are the source of truth.
+  `summary.dividends[]` carries one row per cash credit (TW `ACH股息` and
+  foreign `國外股息`), with the ticker resolved from the memo column.
+  Per-holding lifetime dividend sits on `tw.holdings[i].cum_dividend`
+  (parsed from `累計配息`). The broker `海外股票現金股利明細` section is
+  used as a backfill only — it's frequently empty.
 - **The fetch() requirement**: opening static HTML directly (file://) fails
   because browsers block local JSON fetches. Always use the Flask app or a local server.
 - **Sector mapping**: `app/analytics.py` has a hand-curated heuristic in

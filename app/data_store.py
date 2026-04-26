@@ -68,6 +68,18 @@ class DataStore:
         return self.summary.get("cumulative_flows", {})
 
     @property
+    def dividends(self) -> list[dict[str, Any]]:
+        return self.summary.get("dividends", [])
+
+    @property
+    def venue_flows_twd(self) -> list[dict[str, Any]]:
+        return self.summary.get("venue_flows_twd", [])
+
+    @property
+    def holdings_total_return(self) -> list[dict[str, Any]]:
+        return self.summary.get("holdings_total_return", [])
+
+    @property
     def latest_month(self) -> dict[str, Any]:
         m = self.months
         return m[-1] if m else {}

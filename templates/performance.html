@@ -8,22 +8,45 @@
   <div class="kpi">
     <span class="kpi-label">TWR (cumulative)</span>
     <span class="kpi-value" id="kpi-twr">—</span>
-    <span class="kpi-sub">deposit-neutral</span>
+    <span class="kpi-sub" id="kpi-twr-sub">deposit-neutral</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">CAGR</span>
+    <span class="kpi-value" id="kpi-cagr">—</span>
+    <span class="kpi-sub">annualized TWR</span>
   </div>
   <div class="kpi">
     <span class="kpi-label">XIRR</span>
     <span class="kpi-value" id="kpi-xirr">—</span>
-    <span class="kpi-sub">money-weighted, annualized</span>
+    <span class="kpi-sub">money-weighted</span>
   </div>
+  <div class="kpi">
+    <span class="kpi-label">Hit rate</span>
+    <span class="kpi-value" id="kpi-hit">—</span>
+    <span class="kpi-sub" id="kpi-hit-sub">positive months</span>
+  </div>
+</div>
+
+<div class="card-grid cards-4 section">
   <div class="kpi">
     <span class="kpi-label">Annualized volatility</span>
     <span class="kpi-value" id="kpi-vol">—</span>
-    <span class="kpi-sub">σ × √12 from monthly</span>
+    <span class="kpi-sub">σ × √12</span>
   </div>
   <div class="kpi">
     <span class="kpi-label">Sharpe (rf=0)</span>
     <span class="kpi-value" id="kpi-sharpe">—</span>
-    <span class="kpi-sub">risk-adjusted</span>
+    <span class="kpi-sub">return per unit of risk</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Sortino</span>
+    <span class="kpi-value" id="kpi-sortino">—</span>
+    <span class="kpi-sub">downside-risk adjusted</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Calmar</span>
+    <span class="kpi-value" id="kpi-calmar">—</span>
+    <span class="kpi-sub">CAGR ÷ |max drawdown|</span>
   </div>
 </div>
 
@@ -63,10 +86,34 @@
   </div>
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Attribution by venue</h3>
-      <span class="card-sub">monthly P&amp;L net of flows</span>
+      <h3 class="card-title">Attribution: TW · Foreign · FX</h3>
+      <span class="card-sub">cumulative P&amp;L decomposition</span>
     </div>
     <div class="chart-box h-260"><canvas id="chart-attr"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Drawdown episodes</h3>
+      <span class="card-sub">peak → trough → recovery</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="dd-table">
+        <thead><tr>
+          <th>Peak</th><th>Trough</th><th class="num">Depth</th>
+          <th class="num">DD months</th><th class="num">Recovery</th><th>Status</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Attribution totals (TWD)</h3>
+    </div>
+    <div id="attr-totals" class="flex-col gap-2 p-2"></div>
   </div>
 </div>
 

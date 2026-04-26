@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Tax / P&amp;L · Sinopac Portfolio{% endblock %}
 {% block heading %}Tax &amp; P&amp;L</span>{% endblock %}
-{% block subtitle %}Realized vs unrealized gains by ticker — using statement-basis average cost.{% endblock %}
+{% block subtitle %}Realized P&amp;L (FIFO basis), dividends, unrealized — with holding period and win rate.{% endblock %}
 
 {% block content %}
 <div class="card-grid cards-4 section">
-  <div class="kpi"><span class="kpi-label">Realized P&amp;L</span><span class="kpi-value" id="kpi-real">—</span><span class="kpi-sub">closed lots</span></div>
-  <div class="kpi"><span class="kpi-label">Unrealized P&amp;L</span><span class="kpi-value" id="kpi-unreal">—</span><span class="kpi-sub">open positions</span></div>
-  <div class="kpi"><span class="kpi-label">Total P&amp;L</span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub">realized + unrealized</span></div>
-  <div class="kpi"><span class="kpi-label">Win rate</span><span class="kpi-value" id="kpi-win">—</span><span class="kpi-sub" id="kpi-win-sub">winners / total closed</span></div>
+  <div class="kpi"><span class="kpi-label">Realized (FIFO)</span><span class="kpi-value" id="kpi-real">—</span><span class="kpi-sub" id="kpi-real-sub">closed lots</span></div>
+  <div class="kpi"><span class="kpi-label">Dividends</span><span class="kpi-value" id="kpi-div">—</span><span class="kpi-sub">cash distributions</span></div>
+  <div class="kpi"><span class="kpi-label">Unrealized</span><span class="kpi-value" id="kpi-unreal">—</span><span class="kpi-sub">open positions</span></div>
+  <div class="kpi"><span class="kpi-label">Total return</span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub" id="kpi-total-sub">realized + div + unrealized</span></div>
+</div>
+
+<div class="card-grid cards-3 section">
+  <div class="kpi"><span class="kpi-label">Win rate (closed)</span><span class="kpi-value" id="kpi-win">—</span><span class="kpi-sub" id="kpi-win-sub">winners / total</span></div>
+  <div class="kpi"><span class="kpi-label">Avg holding</span><span class="kpi-value" id="kpi-hold">—</span><span class="kpi-sub">days from buy to sell</span></div>
+  <div class="kpi"><span class="kpi-label">Fees + taxes</span><span class="kpi-value" id="kpi-cost">—</span><span class="kpi-sub" id="kpi-cost-sub">friction</span></div>
 </div>
 
 <div class="section card-grid cards-2">
@@ -41,15 +47,17 @@
     <div class="table-wrap">
       <table class="data" id="tax-table">
         <thead><tr>
-          <th>Code</th><th>Name</th>
-          <th class="num">Buy qty</th><th class="num">Sell qty</th>
-          <th class="num">Avg buy (TWD)</th>
+          <th>Code</th><th>Name</th><th>Venue</th>
+          <th class="num">Sell qty</th>
+          <th class="num">Open qty</th>
           <th class="num">Cost of sold</th>
           <th class="num">Proceeds</th>
-          <th class="num">Fees</th><th class="num">Tax</th>
-          <th class="num">Realized</th>
+          <th class="num">Realized (FIFO)</th>
+          <th class="num">Dividends</th>
           <th class="num">Unrealized</th>
-          <th class="num">Total P&amp;L</th>
+          <th class="num">Total return</th>
+          <th class="num">Win rate</th>
+          <th class="num">Hold (d)</th>
         </tr></thead>
         <tbody></tbody>
       </table>
