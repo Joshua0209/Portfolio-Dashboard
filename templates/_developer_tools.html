@@ -1,0 +1,124 @@
+{# templates/_developer_tools.html
+
+   Phase 10 — Developer Tools accordion partial. Phase 13's /today
+   template will include this at the bottom of the page; for now it
+   stands alone so it can be unit-tested and dropped into any future
+   admin surface without churn.
+
+   Per spec §6.4: collapsed by default; deep link `#developer-tools`
+   from the freshness widget / warming-up banner auto-expands. The
+   inline <details> element gives us the open-on-hash behavior with
+   no JS — the script block at the bottom toggles `open` when the
+   matching fragment is in the URL.
+#}
+<section id="developer-tools" class="dev-tools">
+  <details>
+    <summary>Developer Tools</summary>
+
+    <div class="dev-tools__panel">
+      <h3>Failed tasks</h3>
+      <p class="dev-tools__hint">
+        External fetches that failed during the last backfill. Retry
+        runs the live fetch path again — successes leave the row,
+        failures bump the attempt counter.
+      </p>
+
+      <div id="failed-tasks-empty" hidden>
+        <p>No open failures. Daily layer is healthy.</p>
+      </div>
+
+      <table id="failed-tasks-table" class="data-table" hidden>
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Target</th>
+            <th>Error</th>
+            <th>Attempts</th>
+            <th>Last attempt</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <button id="retry-failed-btn" class="btn btn--primary" type="button">
+        Retry all
+      </button>
+      <span id="retry-failed-status" class="dev-tools__status"></span>
+    </div>
+  </details>
+</section>
+
+<script>
+(function () {
+  if (window.location.hash === "#developer-tools") {
+    const det = document.querySelector("#developer-tools details");
+    if (det) det.open = true;
+  }
+
+  const tableBody = document.querySelector("#failed-tasks-table tbody");
+  const tableEl = document.getElementById("failed-tasks-table");
+  const emptyEl = document.getElementById("failed-tasks-empty");
+  const statusEl = document.getElementById("retry-failed-status");
+  const retryBtn = document.getElementById("retry-failed-btn");
+
+  function appendCell(row, text, title) {
+    const td = document.createElement("td");
+    td.textContent = text == null ? "" : String(text);
+    if (title) td.title = String(title);
+    row.appendChild(td);
+  }
+
+  function render(tasks) {
+    tableBody.replaceChildren();
+    if (!tasks || tasks.length === 0) {
+      tableEl.hidden = true;
+      emptyEl.hidden = false;
+      retryBtn.disabled = true;
+      return;
+    }
+    emptyEl.hidden = true;
+    tableEl.hidden = false;
+    retryBtn.disabled = false;
+    for (const t of tasks) {
+      const tr = document.createElement("tr");
+      const errMsg = t.error_message || "";
+      appendCell(tr, t.task_type);
+      appendCell(tr, t.target);
+      appendCell(tr, errMsg.slice(0, 60), errMsg);
+      appendCell(tr, t.attempts);
+      appendCell(tr, t.last_attempt_at);
+      tableBody.appendChild(tr);
+    }
+  }
+
+  async function load() {
+    try {
+      const data = await window.api.get("/api/admin/failed-tasks");
+      render(data.tasks);
+    } catch (e) {
+      statusEl.textContent = "failed to load: " + (e && e.message ? e.message : e);
+    }
+  }
+
+  retryBtn.addEventListener("click", async () => {
+    retryBtn.disabled = true;
+    statusEl.textContent = "Retrying...";
+    try {
+      const res = await fetch("/api/admin/retry-failed", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok || body.ok === false) {
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      statusEl.textContent =
+        `resolved ${body.data.resolved}, still failing ${body.data.still_failing}`;
+      await load();
+    } catch (e) {
+      statusEl.textContent = "retry failed: " + (e && e.message ? e.message : e);
+    } finally {
+      retryBtn.disabled = false;
+    }
+  });
+
+  load();
+})();
+</script>

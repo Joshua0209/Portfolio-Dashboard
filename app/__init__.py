@@ -91,10 +91,25 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     app.extensions["daily_store"] = daily
     log.info("DailyStore ready at %s", daily_db_path)
 
+    # Phase 9: optional background backfill on startup.
+    # Gated by BACKFILL_ON_STARTUP=true so the feature can ship dark.
+    # WERKZEUG_RUN_MAIN guard avoids the Flask debug-reloader spawning
+    # two backfill threads (parent process + child reloader).
+    if os.environ.get("BACKFILL_ON_STARTUP", "false").lower() == "true":
+        is_reloader_parent = (
+            os.environ.get("FLASK_DEBUG") == "1"
+            and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+        )
+        if not is_reloader_parent:
+            from . import backfill_runner
+
+            backfill_runner.start(daily, data_path)
+
     jinja_filters.register(app)
 
     from .api import summary, holdings, performance, transactions, cashflows
     from .api import dividends, risk, fx, tax, tickers, benchmarks, daily
+    from .api import today
 
     app.register_blueprint(summary.bp)
     app.register_blueprint(holdings.bp)
@@ -108,15 +123,31 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     app.register_blueprint(tickers.bp)
     app.register_blueprint(benchmarks.bp)
     app.register_blueprint(daily.bp)
+    app.register_blueprint(today.bp)
 
     @app.get("/api/health")
     def health():
+        from . import backfill_state as _state
         store = app.extensions["store"]
         ds = app.extensions["daily_store"]
-        # Phase 4 shipping definition: READY iff portfolio_daily has rows.
-        # Phase 9 layers on the INITIALIZING/FAILED state machine.
         snapshot = ds.get_today_snapshot()
-        daily_state = "READY" if snapshot is not None else "INITIALIZING"
+
+        # Phase 9 layered state machine + Phase 4 row-based display logic:
+        #   FAILED        → "FAILED"
+        #   INITIALIZING  → "INITIALIZING"        (active backfill)
+        #   READY + rows  → "READY"               (frontend auto-upgrades to daily)
+        #   READY + empty → "INITIALIZING"        (Phase 4 contract: don't ask
+        #                                          for daily until rows exist)
+        snap = _state.get().snapshot()
+        if snap["state"] == "FAILED":
+            daily_state = "FAILED"
+        elif snap["state"] == "INITIALIZING":
+            daily_state = "INITIALIZING"
+        elif snapshot is not None:
+            daily_state = "READY"
+        else:
+            daily_state = "INITIALIZING"
+
         return {
             "ok": True,
             "data": {
@@ -124,6 +155,8 @@ def create_app(data_path: Path | str | None = None) -> Flask:
                 "as_of": store.as_of,
                 "daily_state": daily_state,
                 "daily_last_known": snapshot.get("date") if snapshot else None,
+                "daily_progress": snap["progress"],
+                "daily_error": snap["error"],
             },
         }
 
