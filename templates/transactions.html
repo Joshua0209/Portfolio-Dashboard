@@ -33,6 +33,11 @@
       <div class="toolbar" style="margin: 0;">
         <input id="q" class="input" placeholder="Search code or name…" style="width:200px;" />
         <select id="venue" class="select"><option value="">All venues</option><option>TW</option><option>Foreign</option></select>
+        <select id="side" class="select">
+          <option value="">All sides</option>
+          <option value="buy">Buys only</option>
+          <option value="sell">Sells only</option>
+        </select>
         <select id="month" class="select"><option value="">All months</option></select>
         <button id="export-tx" class="btn">Export CSV</button>
       </div>
@@ -47,7 +52,7 @@
         <tbody></tbody>
       </table>
     </div>
-    <div class="text-mute text-tiny" id="tx-count" style="padding-top: 8px;"></div>
+    <div id="tx-pager"></div>
   </div>
 </div>
 {% endblock %}

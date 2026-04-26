@@ -233,12 +233,14 @@ table td.num,
 }
 
 .card-grid { display: grid; gap: var(--sp-5); }
-.cards-2 { grid-template-columns: repeat(2, 1fr); }
-.cards-3 { grid-template-columns: repeat(3, 1fr); }
-.cards-4 { grid-template-columns: repeat(4, 1fr); }
+.cards-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cards-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cards-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.card { min-width: 0; }
 
 @media (max-width: 1100px) {
-  .cards-3, .cards-4 { grid-template-columns: repeat(2, 1fr); }
+  .cards-3, .cards-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
   body { grid-template-columns: 1fr; }
@@ -448,10 +450,13 @@ table.data td a:hover { color: var(--accent); }
 .chart-box {
   position: relative;
   width: 100%;
+  min-width: 0;
 }
 .chart-box.h-200 { height: 200px; }
 .chart-box.h-260 { height: 260px; }
+.chart-box.h-280 { height: 280px; }
 .chart-box.h-320 { height: 320px; }
+.chart-box.h-360 { height: 360px; }
 .chart-box.h-400 { height: 400px; }
 
 /* Heatmap (custom) */
@@ -641,6 +646,24 @@ table.data td a:hover { color: var(--accent); }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 /* ─────────────────────────────────────────────────────────────────
+   Table pagination
+   ───────────────────────────────────────────────────────────────── */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-top: var(--sp-3);
+  flex-wrap: wrap;
+}
+.pager-size { display: flex; align-items: center; gap: var(--sp-2); }
+.pager-size .select { padding: 4px 8px; font-size: 12px; }
+.pager-nav { display: flex; align-items: center; gap: var(--sp-2); }
+.pager-counter { min-width: 140px; text-align: center; }
+.btn.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ─────────────────────────────────────────────────────────────────
    Benchmark page strategy chooser
    ───────────────────────────────────────────────────────────────── */
 .strategy-row {
@@ -664,4 +687,7 @@ table.data td a:hover { color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
+.strategy-text > span { word-break: break-word; }

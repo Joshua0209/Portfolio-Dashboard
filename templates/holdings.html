@@ -31,9 +31,9 @@
   <div class="card">
     <div class="card-header">
       <h3 class="card-title">Position map<span tabindex="0" class="info-icon" data-info="Treemap: each rectangle is a holding, sized by its NTD market value, colored by gain (green) or loss (red). Big red = your largest losing position; big green = your largest winner. Eye-test for concentration."></span></h3>
-      <span class="card-sub">cell size = market value</span>
+      <span class="card-sub">cell size = market value · color intensity = unrealized P&L %</span>
     </div>
-    <div id="treemap" style="display:grid; gap:4px; min-height:280px;"></div>
+    <div class="chart-box h-320"><canvas id="treemap"></canvas></div>
   </div>
   <div class="card">
     <div class="card-header">

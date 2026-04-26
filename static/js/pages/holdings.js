@@ -41,55 +41,103 @@
   }
 
   function renderTreemap(rows) {
-    const grid = document.getElementById("treemap");
-    while (grid.firstChild) grid.removeChild(grid.firstChild);
-    const total = rows.reduce((s, r) => s + r.mkt_value_twd, 0) || 1;
-    const sorted = [...rows].sort((a, b) => b.mkt_value_twd - a.mkt_value_twd);
+    const canvas = document.getElementById("treemap");
+    if (!canvas || !rows.length) return;
 
-    const cols = 6;
-    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    grid.style.gridAutoRows = "minmax(64px, auto)";
+    // Squarified treemap via chartjs-chart-treemap plugin.
+    // Tree array: each node carries the row payload plus a `_value` we want
+    // to size by. The plugin reads `key: '_value'` to lay out rectangles.
+    const total = rows.reduce((s, r) => s + (r.mkt_value_twd || 0), 0) || 1;
+    const tree = rows
+      .filter((r) => (r.mkt_value_twd || 0) > 0)
+      .map((r) => ({
+        code: r.code || "",
+        name: r.name || "",
+        venue: r.venue || "",
+        mkt: r.mkt_value_twd || 0,
+        upnl: r.unrealized_pnl_twd || 0,
+        upct: r.unrealized_pct || 0,
+        weight: (r.mkt_value_twd || 0) / total,
+        _value: r.mkt_value_twd || 0,
+      }));
 
-    const colors = [
-      ["--c1", 0.85], ["--c1", 0.55], ["--c2", 0.85], ["--c2", 0.55],
-      ["--c3", 0.85], ["--c3", 0.55], ["--c4", 0.85], ["--c4", 0.55],
-      ["--c6", 0.85], ["--c6", 0.55], ["--c7", 0.85], ["--c7", 0.55],
-    ];
+    // Color: green for gainers, red for losers. Intensity scales with |upct|
+    // capped at 30% so a single 200% outlier doesn't wash out everyone else.
+    const posBase = charts.cssVar("--pos");
+    const negBase = charts.cssVar("--neg");
+    function colorFor(ctx) {
+      const item = ctx?.raw?._data;
+      if (!item) return charts.cssVar("--bg-elev-2");
+      const intensity = Math.min(1, Math.abs(item.upct || 0) / 0.30);
+      const alpha = 0.30 + 0.55 * intensity;
+      const base = (item.upnl || 0) >= 0 ? posBase : negBase;
+      return charts.hexWithAlpha(base, alpha);
+    }
 
-    sorted.forEach((r, i) => {
-      const weight = r.mkt_value_twd / total;
-      const span = Math.max(1, Math.min(cols, Math.round(weight * cols * 6)));
-      const tile = document.createElement("a");
-      tile.href = `/ticker/${encodeURIComponent(r.code || "")}`;
-      tile.className = "tile";
-      tile.style.gridColumn = `span ${Math.min(span, 4)}`;
-      const isPos = (r.unrealized_pnl_twd || 0) >= 0;
-      const baseColor = isPos ? "var(--pos)" : "var(--neg)";
-      tile.style.background = `linear-gradient(135deg, ${baseColor} 0%, var(--bg-elev-2) 80%)`;
-      tile.style.color = "var(--text)";
-      tile.style.minHeight = `${Math.max(60, weight * 600)}px`;
+    const config = {
+      type: "treemap",
+      data: {
+        datasets: [{
+          tree,
+          key: "_value",
+          borderWidth: 1,
+          borderColor: charts.cssVar("--bg"),
+          spacing: 1,
+          backgroundColor: colorFor,
+          labels: {
+            display: true,
+            align: "left",
+            position: "top",
+            color: charts.cssVar("--text"),
+            font: { size: 11, weight: "600", family: charts.cssVar("--font-mono") || "monospace" },
+            padding: 4,
+            formatter: (ctx) => {
+              const d = ctx?.raw?._data;
+              if (!d) return "";
+              const w = (d.weight * 100).toFixed(1);
+              const pct = fmt.pct(d.upct);
+              return [d.code, `${w}% · ${pct}`];
+            },
+          },
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => {
+                const d = items?.[0]?.raw?._data;
+                return d ? `${d.code} · ${d.name}` : "";
+              },
+              label: (ctx) => {
+                const d = ctx?.raw?._data;
+                if (!d) return "";
+                return [
+                  `Market value: ${fmt.twd(d.mkt)}`,
+                  `Weight: ${(d.weight * 100).toFixed(2)}%`,
+                  `Unrealized: ${fmt.twd(d.upnl)} (${fmt.pct(d.upct)})`,
+                  `Venue: ${d.venue}`,
+                ];
+              },
+            },
+          },
+        },
+      },
+    };
 
-      const top = document.createElement("div");
-      const code = document.createElement("strong");
-      code.style.fontSize = "13px";
-      code.textContent = r.code || "";
-      const name = document.createElement("div");
-      name.className = "text-tiny text-mute";
-      name.textContent = r.name || "";
-      top.append(code, name);
+    if (window._treemapChart) window._treemapChart.destroy();
+    window._treemapChart = new Chart(canvas.getContext("2d"), config);
 
-      const bot = document.createElement("div");
-      bot.className = "text-tiny num";
-      const w = document.createElement("div");
-      w.textContent = `${(weight * 100).toFixed(1)}%`;
-      const p = document.createElement("div");
-      p.style.color = isPos ? "var(--pos-soft)" : "var(--neg-soft)";
-      p.textContent = fmt.pct(r.unrealized_pct);
-      bot.append(w, p);
-
-      tile.append(top, bot);
-      grid.appendChild(tile);
-    });
+    // Click-through: navigate to per-ticker page on rectangle click.
+    canvas.onclick = (evt) => {
+      const points = window._treemapChart.getElementsAtEventForMode(evt, "nearest", { intersect: true }, false);
+      if (!points.length) return;
+      const data = points[0]?.element?.$context?.raw?._data;
+      if (data?.code) window.location.href = `/ticker/${encodeURIComponent(data.code)}`;
+    };
   }
 
   function renderSectors(sectors) {

@@ -2,15 +2,39 @@
  * Performance page: TWR/XIRR, drawdown, monthly returns, rolling returns, attribution.
  */
 (function () {
+  // Persist user's chosen TWR method across page loads.
+  const METHOD_STORAGE_KEY = "perf.twr.method.v1";
+  let charts_registry = []; // for destroy on re-render
+
   document.addEventListener("DOMContentLoaded", () => init().catch(showError));
 
   async function init() {
     window.charts.applyDefaults();
 
+    const sel = document.getElementById("twr-method");
+    if (sel) {
+      const stored = localStorage.getItem(METHOD_STORAGE_KEY) || "day_weighted";
+      sel.value = stored;
+      sel.addEventListener("change", async () => {
+        localStorage.setItem(METHOD_STORAGE_KEY, sel.value);
+        await refresh(sel.value);
+      });
+    }
+
+    const initial = (sel && sel.value) || "day_weighted";
+    await refresh(initial);
+  }
+
+  async function refresh(method) {
+    // Destroy previous Chart.js instances so re-rendering doesn't leak canvases.
+    for (const c of charts_registry) { try { c.destroy(); } catch (_) {} }
+    charts_registry = [];
+
+    const q = `?method=${encodeURIComponent(method)}`;
     const [ts, rolling, attr] = await Promise.all([
-      window.api.get("/api/performance/timeseries"),
-      window.api.get("/api/performance/rolling"),
-      window.api.get("/api/performance/attribution"),
+      window.api.get(`/api/performance/timeseries${q}`),
+      window.api.get(`/api/performance/rolling${q}`),
+      window.api.get(`/api/performance/attribution`),
     ]);
 
     renderKPIs(ts);
@@ -38,10 +62,36 @@
     setText("kpi-vol", fmt.pctAbs(ts.annualized_volatility, 1));
     const sharpe = ts.sharpe_annualized || 0;
     setTextColor("kpi-sharpe", sharpe.toFixed(2), sharpe);
+    setText("kpi-sharpe-sub", bandLabel(sharpe, RATIO_BANDS.sharpe));
     const sortino = ts.sortino_annualized || 0;
     setTextColor("kpi-sortino", capRatio(sortino), sortino);
+    setText("kpi-sortino-sub", bandLabel(sortino, RATIO_BANDS.sortino));
     const calmar = ts.calmar || 0;
     setTextColor("kpi-calmar", capRatio(calmar), calmar);
+    setText("kpi-calmar-sub", bandLabel(calmar, RATIO_BANDS.calmar));
+  }
+
+  // Reference bands so the user can interpret raw ratio numbers at a glance.
+  // Edges align with widely-cited industry conventions (CFA / hedge-fund desks).
+  const RATIO_BANDS = {
+    sharpe:  [{ at: 0.5, label: "poor" }, { at: 1.0, label: "sub-par" },
+              { at: 2.0, label: "good" }, { at: 3.0, label: "great" },
+              { at: Infinity, label: "elite / thin sample" }],
+    sortino: [{ at: 1.0, label: "weak" }, { at: 2.0, label: "acceptable" },
+              { at: 3.0, label: "good" }, { at: 5.0, label: "excellent" },
+              { at: Infinity, label: "elite / thin sample" }],
+    calmar:  [{ at: 0.5, label: "weak" }, { at: 1.0, label: "acceptable" },
+              { at: 3.0, label: "strong" },
+              { at: Infinity, label: "exceptional / thin sample" }],
+  };
+
+  function bandLabel(v, bands) {
+    if (!isFinite(v)) return "—";
+    if (v < 0) return "negative — losing money relative to risk";
+    for (const b of bands) {
+      if (v < b.at) return `band: ${b.label}`;
+    }
+    return `band: ${bands[bands.length - 1].label}`;
   }
 
   // Cap extreme ratios so a thin sample with no real drawdown doesn't print "361.0".
@@ -68,7 +118,7 @@
     const cum = ts.monthly.map((m) => (m.cum_twr || 0) * 100);
     const eq = ts.monthly.map((m) => m.equity_twd);
 
-    new Chart(ctx, {
+    charts_registry.push(new Chart(ctx, {
       type: "line",
       data: {
         labels,
@@ -116,7 +166,7 @@
           y2: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: (v) => fmt.twdCompact(v) } },
         },
       },
-    });
+    }));
   }
 
   function renderMonthlyChart(ts) {
@@ -128,7 +178,7 @@
     document.getElementById("month-stats").textContent =
       `${ts.positive_months} positive · ${ts.negative_months} negative`;
 
-    new Chart(ctx, {
+    charts_registry.push(new Chart(ctx, {
       type: "bar",
       data: { labels, datasets: [{ label: "Period return", data, backgroundColor: colors, borderRadius: 3 }] },
       options: {
@@ -139,7 +189,7 @@
         },
         scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
       },
-    });
+    }));
   }
 
   function renderDrawdown(ts) {
@@ -149,7 +199,7 @@
 
     document.getElementById("dd-max").textContent = `Max: ${fmt.pct(ts.max_drawdown)}`;
 
-    new Chart(ctx, {
+    charts_registry.push(new Chart(ctx, {
       type: "line",
       data: {
         labels,
@@ -174,7 +224,7 @@
         },
         scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
       },
-    });
+    }));
   }
 
   function renderRolling(rolling) {
@@ -190,7 +240,7 @@
       spanGaps: true,
     });
 
-    new Chart(ctx, {
+    charts_registry.push(new Chart(ctx, {
       type: "line",
       data: {
         labels,
@@ -213,14 +263,14 @@
         },
         scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
       },
-    });
+    }));
   }
 
   function renderAttribution(attr) {
     const monthly = attr.monthly || [];
     const ctx = document.getElementById("chart-attr").getContext("2d");
     const labels = monthly.map((m) => fmt.month(m.month));
-    new Chart(ctx, {
+    charts_registry.push(new Chart(ctx, {
       type: "bar",
       data: {
         labels,
@@ -256,7 +306,7 @@
         },
         scales: { y: { ticks: { callback: (v) => fmt.twdCompact(v) }, stacked: true }, x: { stacked: true } },
       },
-    });
+    }));
   }
 
   function renderAttributionTotals(attr) {
@@ -320,6 +370,7 @@
       tr.appendChild(td(fmt.month(m.month)));
       tr.appendChild(td(fmt.twd(m.v_start), "num"));
       tr.appendChild(td(fmt.twd(m.external_flow), `num ${fmt.tone(m.external_flow)}`));
+      tr.appendChild(td(fmt.twd(m.weighted_flow ?? 0), "num text-mute"));
       tr.appendChild(td(fmt.twd(m.equity_twd), "num"));
       tr.appendChild(td(fmt.pct(m.period_return), `num ${fmt.tone(m.period_return)}`));
       tr.appendChild(td(fmt.pct(m.cum_twr), `num ${fmt.tone(m.cum_twr)}`));

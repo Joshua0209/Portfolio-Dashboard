@@ -8,9 +8,128 @@ the function name says otherwise.
 from __future__ import annotations
 
 import math
+from calendar import monthrange
 from collections import defaultdict, deque
 from datetime import date, datetime
-from typing import Iterable
+from typing import Iterable, Literal
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Period returns — choice of flow-timing assumption
+# ────────────────────────────────────────────────────────────────────────────
+#
+# Modified Dietz returns: r = (V_end − V_start − F) / (V_start + Σ Wᵢ·Fᵢ)
+#
+#   Wᵢ = (D − dᵢ) / D      where D = days in month, dᵢ = day of flow
+#
+# The legacy parser uses W = 0.5 (mid-month assumption). When all flows
+# happen near month-end (e.g. user sells everything on the last day) the
+# mid-month assumption inflates the return because it treats half the
+# withdrawn capital as having been absent for the whole period.
+#
+# `day_weighted` is the standard fix and is the dashboard default.
+# `eom` (end-of-month) is the most conservative — it assumes ALL flows
+# happened on the last day, so denominator is just V_start.
+# `mid_month` reproduces the legacy number.
+
+PeriodMethod = Literal["day_weighted", "mid_month", "eom"]
+
+
+def _parse_trade_day(date_str: str) -> int | None:
+    """Pull the day-of-month from a YYYY/MM/DD or YYYY-MM-DD string."""
+    if not date_str:
+        return None
+    try:
+        s = date_str.replace("-", "/")
+        return int(s.split("/")[2])
+    except (ValueError, IndexError):
+        return None
+
+
+def _trade_flow_events(month: dict) -> list[tuple[int, float]]:
+    """Per-trade signed flow events as (day_of_month, F_twd).
+
+    Sign convention matches Modified Dietz F: positive = cash INTO the
+    investment portfolio (i.e. a buy that uses external bank cash);
+    negative = cash OUT of the portfolio (a sell that returns cash to bank).
+
+    For TW: F_i = -net_twd (because trade.net_twd is signed from the
+        client side: negative when client paid for a buy).
+    For Foreign: F_i = -(net_ccy × month FX), USD-only for now.
+    """
+    fx = month.get("fx_usd_twd") or 0.0
+    events: list[tuple[int, float]] = []
+    for t in (month.get("tw") or {}).get("trades", []) or []:
+        d = _parse_trade_day(t.get("date"))
+        if d is None:
+            continue
+        events.append((d, -float(t.get("net_twd") or 0)))
+    for t in (month.get("foreign") or {}).get("trades", []) or []:
+        if t.get("ccy") != "USD" or not fx:
+            continue
+        d = _parse_trade_day(t.get("date"))
+        if d is None:
+            continue
+        events.append((d, -float(t.get("net_ccy") or 0) * fx))
+    return events
+
+
+def period_returns(months: list[dict], method: PeriodMethod = "day_weighted") -> list[dict]:
+    """Compute Modified-Dietz period returns under a chosen flow-timing rule.
+
+    Returns a list of dicts: {month, period_return, v_start, weighted_flow,
+    flow_total, equity_end, days_in_month, method}.
+    The first month has no prior equity so V_start is back-derived as
+    V_end − F and its return is forced to 0 (no info to compare against).
+    """
+    if not months:
+        return []
+    out: list[dict] = []
+    for i, m in enumerate(months):
+        ym = m["month"]
+        v_end = float(m.get("equity_twd") or 0)
+        f_total = float(m.get("external_flow_twd") or 0)
+        v_start = (v_end - f_total) if i == 0 else float(months[i - 1].get("equity_twd") or 0)
+
+        year, mon = (int(x) for x in ym.split("-"))
+        days = monthrange(year, mon)[1]
+
+        if i == 0:
+            r = 0.0
+            wf = 0.0
+        else:
+            wf = _weighted_flow_sum(m, days, f_total, method)
+            denom = v_start + wf
+            r = (v_end - v_start - f_total) / denom if denom > 1e-6 else 0.0
+
+        out.append({
+            "month": ym,
+            "period_return": r,
+            "v_start": v_start,
+            "equity_end": v_end,
+            "flow_total": f_total,
+            "weighted_flow": wf,
+            "days_in_month": days,
+            "method": method,
+        })
+    return out
+
+
+def _weighted_flow_sum(month: dict, days: int, f_total: float, method: PeriodMethod) -> float:
+    if method == "mid_month":
+        return 0.5 * f_total
+    if method == "eom":
+        return 0.0
+    # day_weighted — sum of per-trade Wᵢ·Fᵢ. Falls back to mid-month if
+    # no per-trade dates (would only happen for a stub month).
+    events = _trade_flow_events(month)
+    if not events:
+        return 0.5 * f_total
+    wf = 0.0
+    for day, f_i in events:
+        w = max(0.0, (days - day) / days)
+        wf += w * f_i
+    return wf
 
 
 # ────────────────────────────────────────────────────────────────────────────

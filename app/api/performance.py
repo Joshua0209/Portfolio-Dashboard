@@ -1,12 +1,29 @@
 """Performance: TWR, XIRR, drawdown, rolling, Sharpe, Sortino, Calmar, attribution."""
 from __future__ import annotations
 
-from flask import Blueprint
+from flask import Blueprint, request
 
 from .. import analytics
 from ._helpers import envelope, store
 
 bp = Blueprint("performance", __name__, url_prefix="/api/performance")
+
+
+_VALID_METHODS = {"day_weighted", "mid_month", "eom"}
+
+
+def _method_param() -> str:
+    """Read ?method= from request, defaulting to day_weighted."""
+    m = (request.args.get("method") or "day_weighted").lower()
+    return m if m in _VALID_METHODS else "day_weighted"
+
+
+def _recomputed(months: list[dict], method: str) -> tuple[list[float], list[float], list[dict]]:
+    """Return (period_returns, cum_twr, per_month_meta) under chosen method."""
+    rows = analytics.period_returns(months, method=method)  # type: ignore[arg-type]
+    pr = [r["period_return"] for r in rows]
+    cum = analytics.cumulative_curve(pr)
+    return pr, cum, rows
 
 
 @bp.get("/timeseries")
@@ -16,8 +33,8 @@ def timeseries():
     if not months:
         return envelope({"empty": True})
 
-    period_returns = [m.get("period_return", 0) or 0 for m in months]
-    cum = [m.get("cum_twr", 0) or 0 for m in months]
+    method = _method_param()
+    period_returns, cum, meta = _recomputed(months, method)
     dd = analytics.drawdown_curve(cum)
     month_labels = [m["month"] for m in months]
 
@@ -27,23 +44,31 @@ def timeseries():
             "month": m["month"],
             "period_return": period_returns[i],
             "cum_twr": cum[i],
-            "v_start": m.get("v_start", 0),
+            "v_start": meta[i]["v_start"],
             "equity_twd": m.get("equity_twd", 0),
             "external_flow": m.get("external_flow_twd", 0),
+            "weighted_flow": meta[i]["weighted_flow"],
+            "days_in_month": meta[i]["days_in_month"],
             "drawdown": dd[i]["drawdown"],
             "wealth_index": dd[i]["wealth"],
         })
 
-    last = months[-1]
-    twr_total = last.get("cum_twr", 0) or 0
+    twr_total = cum[-1] if cum else 0
     n = len(period_returns)
     cagr = analytics.cagr_from_cum(twr_total, n)
     episodes = analytics.drawdown_episodes(cum, month_labels)
+
+    # XIRR is independent of period_return method (it works on absolute
+    # cashflows, not %-returns). Re-use the parser-stored value if we kept
+    # the legacy method, else fall back to None for now.
+    xirr = months[-1].get("xirr") if method == "mid_month" else months[-1].get("xirr")
+
     return envelope({
         "monthly": rows,
+        "method": method,
         "twr_total": twr_total,
         "cagr": cagr,
-        "xirr": last.get("xirr"),
+        "xirr": xirr,
         "max_drawdown": analytics.max_drawdown(cum),
         "monthly_volatility": analytics.stdev(period_returns),
         "annualized_volatility": analytics.stdev(period_returns) * (12 ** 0.5),
@@ -66,7 +91,8 @@ def timeseries():
 def rolling():
     s = store()
     months = s.months
-    period_returns = [m.get("period_return", 0) or 0 for m in months]
+    method = _method_param()
+    period_returns, _, _ = _recomputed(months, method)
     return envelope({
         "rolling_3m": [
             {"month": m["month"], "value": v}

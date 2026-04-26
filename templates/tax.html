@@ -41,6 +41,18 @@
           <option value="winners">Winners only</option>
           <option value="losers">Losers only</option>
         </select>
+        <select id="venue-filter" class="select">
+          <option value="">All venues</option>
+          <option value="TW">TW</option>
+          <option value="Foreign">Foreign</option>
+        </select>
+        <select id="sort-key" class="select">
+          <option value="total_pnl_twd">Sort: Total return</option>
+          <option value="realized_pnl_twd">Sort: Realized</option>
+          <option value="unrealized_pnl_twd">Sort: Unrealized</option>
+          <option value="dividends_twd">Sort: Dividends</option>
+          <option value="sell_proceeds_twd">Sort: Proceeds</option>
+        </select>
         <button id="export-tax" class="btn">Export CSV</button>
       </div>
     </div>
@@ -62,6 +74,7 @@
         <tbody></tbody>
       </table>
     </div>
+    <div id="tax-pager"></div>
   </div>
 </div>
 {% endblock %}

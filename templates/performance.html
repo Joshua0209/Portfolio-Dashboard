@@ -3,6 +3,18 @@
 {% block heading %}Performance{% endblock %}
 {% block subtitle %}Time-weighted vs money-weighted returns, drawdown, and rolling windows.{% endblock %}
 
+{% block page_actions %}
+<label class="text-mute text-tiny" style="display:flex; align-items:center; gap: 8px;">
+  TWR method
+  <span tabindex="0" class="info-icon" data-info="How the formula treats the timing of your deposits/withdrawals within a month. Day-weighted (default) uses each trade's actual date — most accurate. Mid-month assumes flows happen on day 15 (legacy / industry shortcut). End-of-month assumes flows happen on the last day (most conservative — never inflates a month's return because of a late-month withdrawal). Toggle to compare; you'll usually see day-weighted closer to your intuition."></span>
+  <select id="twr-method" class="select" style="padding: 4px 8px; font-size: 12px;">
+    <option value="day_weighted">Day-weighted (recommended)</option>
+    <option value="mid_month">Mid-month (legacy)</option>
+    <option value="eom">End-of-month flows</option>
+  </select>
+</label>
+{% endblock %}
+
 {% block content %}
 <div class="card-grid cards-4 section">
   <div class="kpi">
@@ -34,19 +46,19 @@
     <span class="kpi-sub">σ × √12</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Sharpe (rf=0)<span tabindex="0" class="info-icon" data-info="Average return ÷ volatility, annualized. Tells you if you're being paid enough for the risk you're taking. Below 1 = mediocre. Above 1 = good. Above 2 = excellent. Above 3 = either elite or a thin sample."></span></span>
+    <span class="kpi-label">Sharpe (rf=0)<span tabindex="0" class="info-icon" data-info="Average excess return ÷ total volatility, annualized. Are you being paid for the risk you're taking? Reference bands (annualized): &lt; 0.5 poor · 0.5–1.0 sub-par · 1.0–2.0 good · 2.0–3.0 great · &gt; 3.0 elite or thin sample. The S&amp;P 500's long-run Sharpe is ~0.4–0.6; a hedge-fund target is typically &gt; 1."></span></span>
     <span class="kpi-value" id="kpi-sharpe">—</span>
-    <span class="kpi-sub">return per unit of risk</span>
+    <span class="kpi-sub" id="kpi-sharpe-sub">return per unit of risk</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Sortino<span tabindex="0" class="info-icon" data-info="Like Sharpe, but only counts DOWN-month volatility. Sharpe punishes you for big up months too (which is silly); Sortino doesn't. Higher = better. With few negative months it can blow up — treat extreme values with skepticism."></span></span>
+    <span class="kpi-label">Sortino<span tabindex="0" class="info-icon" data-info="Like Sharpe, but only counts DOWN-month volatility — big up months don't get penalized. Higher = better. Reference bands (annualized): &lt; 1.0 weak / risky · 1.0–2.0 acceptable · 2.0–3.0 good · 3.0–5.0 excellent · &gt; 5.0 elite or thin sample. As a rough rule, Sortino runs ~1.3–1.5× a portfolio's Sharpe in normal conditions. With few negative months it can blow up — treat extreme values with skepticism."></span></span>
     <span class="kpi-value" id="kpi-sortino">—</span>
-    <span class="kpi-sub">downside-risk adjusted</span>
+    <span class="kpi-sub" id="kpi-sortino-sub">downside-risk adjusted</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Calmar<span tabindex="0" class="info-icon" data-info="CAGR ÷ |max drawdown|. Reward divided by your worst pain. Above 1 = strong; above 3 = exceptional. Capped to ≫10 in display because tiny drawdowns blow this number up."></span></span>
+    <span class="kpi-label">Calmar<span tabindex="0" class="info-icon" data-info="CAGR ÷ |max drawdown|. Reward per unit of worst pain. Reference bands: &lt; 0.5 weak · 0.5–1.0 acceptable · 1.0–3.0 strong · &gt; 3.0 exceptional. Capped to ≫10 because tiny drawdowns blow this up — common with &lt; 12 months of data."></span></span>
     <span class="kpi-value" id="kpi-calmar">—</span>
-    <span class="kpi-sub">CAGR ÷ |max drawdown|</span>
+    <span class="kpi-sub" id="kpi-calmar-sub">CAGR ÷ |max drawdown|</span>
   </div>
 </div>
 
@@ -120,14 +132,15 @@
 <div class="section">
   <div class="card">
     <div class="card-header">
-      <h3 class="card-title">Monthly detail<span tabindex="0" class="info-icon" data-info="Row-by-row breakdown of each month: V_start = equity at start, External flow = net deposit/withdrawal during month, Equity = end-of-month value, Period return = TWR for that month, Cum TWR = compounded TWR-to-date, Drawdown = how far below prior peak."></span></h3>
+      <h3 class="card-title">Monthly detail<span tabindex="0" class="info-icon" data-info="Row-by-row breakdown of each month. V_start = equity at start. Flow F = net deposit/withdrawal during month. Weighted flow = how much the TWR formula 'weights' the flow as if invested for fraction of the period (depends on TWR method above). Equity = end-of-month value. Period return = TWR for that month. Cum TWR = compounded TWR-to-date. Drawdown = how far below prior peak."></span></h3>
     </div>
     <div class="table-wrap">
       <table class="data" id="months-table">
         <thead><tr>
           <th>Month</th>
           <th class="num">V_start</th>
-          <th class="num">External flow</th>
+          <th class="num">Flow F</th>
+          <th class="num">Wt. flow</th>
           <th class="num">Equity</th>
           <th class="num">Period return</th>
           <th class="num">Cum TWR</th>

@@ -3,6 +3,7 @@
  */
 (function () {
   let allTx = [];
+  let pager = null;
 
   document.addEventListener("DOMContentLoaded", () => init().catch(showError));
 
@@ -19,6 +20,11 @@
     renderFeeChart(agg);
     populateMonthFilter(allTx);
     bindFilters();
+    pager = window.createPager({
+      containerId: "tx-pager",
+      pageSize: 50,
+      onChange: renderRows,
+    });
     rerender();
     document.getElementById("export-tx").addEventListener("click", exportCsv);
   }
@@ -129,19 +135,28 @@
   }
 
   function bindFilters() {
-    ["q", "venue", "month"].forEach((id) => {
-      document.getElementById(id).addEventListener("input", rerender);
-      document.getElementById(id).addEventListener("change", rerender);
+    ["q", "venue", "side", "month"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", rerender);
+      el.addEventListener("change", rerender);
     });
   }
+
+  // Side classification: TW uses 普買/普賣/融買/融賣; Foreign uses 買進/賣出.
+  function isBuy(side)  { return /買/.test(side || ""); }
+  function isSell(side) { return /賣/.test(side || ""); }
 
   function filtered() {
     const q = (document.getElementById("q").value || "").toLowerCase();
     const v = document.getElementById("venue").value;
+    const s = document.getElementById("side").value;
     const m = document.getElementById("month").value;
     return allTx.filter((t) => {
       if (v && t.venue !== v) return false;
       if (m && t.month !== m) return false;
+      if (s === "buy" && !isBuy(t.side)) return false;
+      if (s === "sell" && !isSell(t.side)) return false;
       if (!q) return true;
       const code = String(t.code || "").toLowerCase();
       const name = String(t.name || "").toLowerCase();
@@ -151,10 +166,16 @@
 
   function rerender() {
     const rows = filtered();
-    document.getElementById("tx-count").textContent = `${rows.length} of ${allTx.length} trades`;
+    pager.update(rows.length);
+    renderRows();
+  }
+
+  function renderRows() {
+    const rows = filtered();
+    const pageRows = pager.slice(rows);
     const tbody = document.querySelector("#tx-table tbody");
     while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!rows.length) {
+    if (!pageRows.length) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
       td.colSpan = 12;
@@ -164,7 +185,7 @@
       tbody.appendChild(tr);
       return;
     }
-    for (const t of rows.slice(0, 500)) {
+    for (const t of pageRows) {
       const tr = document.createElement("tr");
       tr.appendChild(td(fmt.date(t.date), "text-mute"));
       tr.appendChild(tdPill(t.venue));

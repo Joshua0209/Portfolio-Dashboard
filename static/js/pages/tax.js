@@ -3,6 +3,7 @@
  */
 (function () {
   let allRows = [];
+  let pager = null;
 
   document.addEventListener("DOMContentLoaded", () => init().catch(showError));
 
@@ -13,6 +14,11 @@
     allRows = d.by_ticker;
     renderMovers();
     bindFilters();
+    pager = window.createPager({
+      containerId: "tax-pager",
+      pageSize: 50,
+      onChange: renderRows,
+    });
     rerender();
     document.getElementById("export-tax").addEventListener("click", exportCsv);
   }
@@ -93,19 +99,25 @@
   }
 
   function bindFilters() {
-    document.getElementById("q").addEventListener("input", rerender);
-    document.getElementById("filter").addEventListener("change", rerender);
+    ["q", "filter", "venue-filter", "sort-key"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", rerender);
+      el.addEventListener("change", rerender);
+    });
   }
 
   function filtered() {
     const q = (document.getElementById("q").value || "").toLowerCase();
     const f = document.getElementById("filter").value;
+    const v = document.getElementById("venue-filter").value;
     return allRows.filter((r) => {
       if (q) {
         const code = String(r.code || "").toLowerCase();
         const name = String(r.name || "").toLowerCase();
         if (!code.includes(q) && !name.includes(q)) return false;
       }
+      if (v && r.venue !== v) return false;
       if (f === "closed" && !r.fully_closed) return false;
       if (f === "open" && r.fully_closed) return false;
       if (f === "winners" && r.realized_pnl_twd <= 0) return false;
@@ -114,12 +126,25 @@
     });
   }
 
-  function rerender() {
+  function sortedFiltered() {
+    const key = document.getElementById("sort-key").value || "total_pnl_twd";
     const rows = filtered();
-    rows.sort((a, b) => (b.total_pnl_twd || 0) - (a.total_pnl_twd || 0));
+    rows.sort((a, b) => (b[key] || 0) - (a[key] || 0));
+    return rows;
+  }
+
+  function rerender() {
+    const rows = sortedFiltered();
+    pager.update(rows.length);
+    renderRows();
+  }
+
+  function renderRows() {
+    const rows = sortedFiltered();
+    const pageRows = pager.slice(rows);
     const tbody = document.querySelector("#tax-table tbody");
     while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!rows.length) {
+    if (!pageRows.length) {
       const tr = document.createElement("tr");
       const td_ = document.createElement("td");
       td_.colSpan = 13;
@@ -129,7 +154,7 @@
       tbody.appendChild(tr);
       return;
     }
-    for (const r of rows) {
+    for (const r of pageRows) {
       const tr = document.createElement("tr");
       const codeTd = document.createElement("td");
       codeTd.className = "code";
