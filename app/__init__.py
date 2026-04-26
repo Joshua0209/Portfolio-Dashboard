@@ -94,7 +94,7 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     jinja_filters.register(app)
 
     from .api import summary, holdings, performance, transactions, cashflows
-    from .api import dividends, risk, fx, tax, tickers, benchmarks
+    from .api import dividends, risk, fx, tax, tickers, benchmarks, daily
 
     app.register_blueprint(summary.bp)
     app.register_blueprint(holdings.bp)
@@ -107,15 +107,23 @@ def create_app(data_path: Path | str | None = None) -> Flask:
     app.register_blueprint(tax.bp)
     app.register_blueprint(tickers.bp)
     app.register_blueprint(benchmarks.bp)
+    app.register_blueprint(daily.bp)
 
     @app.get("/api/health")
     def health():
         store = app.extensions["store"]
+        ds = app.extensions["daily_store"]
+        # Phase 4 shipping definition: READY iff portfolio_daily has rows.
+        # Phase 9 layers on the INITIALIZING/FAILED state machine.
+        snapshot = ds.get_today_snapshot()
+        daily_state = "READY" if snapshot is not None else "INITIALIZING"
         return {
             "ok": True,
             "data": {
                 "months_loaded": len(store.months),
                 "as_of": store.as_of,
+                "daily_state": daily_state,
+                "daily_last_known": snapshot.get("date") if snapshot else None,
             },
         }
 
