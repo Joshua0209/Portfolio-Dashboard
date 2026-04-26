@@ -5,6 +5,7 @@ __pycache__/
 *.swp
 node_modules/
 .worktrees/
+.claude/
 
 # Sensitive — never commit
 sinopac_pdfs/
