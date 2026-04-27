@@ -1,7 +1,7 @@
 """Cashflow audit trail: real vs counterfactual."""
 from __future__ import annotations
 
-from flask import Blueprint
+from flask import Blueprint, request
 
 from .. import analytics
 from ._helpers import envelope, store
@@ -11,8 +11,26 @@ bp = Blueprint("cashflows", __name__, url_prefix="/api/cashflows")
 
 @bp.get("/monthly")
 def monthly():
+    """Monthly waterfall (always returned). When ?resolution=daily is set
+    the response also carries a `daily` array — daily and monthly always
+    coexist on this endpoint per the design spec ("keep monthly chart").
+    """
     s = store()
-    return envelope(analytics.monthly_flows(s.months, s.venue_flows_twd))
+    body = analytics.monthly_flows(s.months, s.venue_flows_twd)
+    if (request.args.get("resolution") or "").lower() == "daily":
+        daily = analytics.daily_external_flows(s.months)
+        # Cumulative running sum so the waterfall renders.
+        running = 0.0
+        daily_cum = []
+        for r in daily:
+            running += float(r["flow_twd"])
+            daily_cum.append({**r, "cumulative_twd": running})
+        if isinstance(body, dict):
+            body["daily"] = daily_cum
+            body["resolution"] = "daily"
+        else:
+            body = {"resolution": "daily", "monthly": body, "daily": daily_cum}
+    return envelope(body)
 
 
 @bp.get("/cumulative")
