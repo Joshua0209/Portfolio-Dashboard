@@ -67,6 +67,16 @@
     C.defaults.plugins.tooltip.cornerRadius = 8;
     C.defaults.plugins.tooltip.displayColors = true;
     C.defaults.plugins.tooltip.boxPadding = 4;
+
+    // Decimation: when daily-resolution series push point counts past
+    // ~500, downsample to ~200 visually equivalent points using LTTB.
+    // Default-on so all line charts inherit it; bar charts ignore it.
+    C.defaults.plugins.decimation = {
+      enabled: true,
+      algorithm: "lttb",
+      samples: 200,
+      threshold: 500,
+    };
   }
 
   /** Build a gradient fill from accent down to transparent. */

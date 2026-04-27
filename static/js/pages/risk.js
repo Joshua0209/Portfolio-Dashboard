@@ -28,7 +28,7 @@
 
   function renderDrawdown(r) {
     const ctx = document.getElementById("chart-dd").getContext("2d");
-    const labels = r.drawdown_curve.map((p) => fmt.month(p.month));
+    const labels = r.drawdown_curve.map((p) => fmt.label(p));
     const dd = r.drawdown_curve.map((p) => p.drawdown * 100);
 
     document.getElementById("dd-current").textContent = `Current: ${fmt.pct(r.current_drawdown)}`;

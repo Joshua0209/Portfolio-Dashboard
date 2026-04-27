@@ -82,6 +82,24 @@
     return `${months[mi] || m[2]} ${m[1]}`;
   }
 
+  /** Resolution-aware label. Reads `row.date` first (daily branch),
+   * falls back to `row.month` (monthly), then formats appropriately:
+   * ISO daily date → "Aug 22, 2026"; YYYY-MM → "Aug 2025". */
+  function label(row) {
+    if (!row) return EM_DASH;
+    if (row.date) {
+      // ISO YYYY-MM-DD → short date label
+      const m = String(row.date).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) {
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        return `${months[parseInt(m[2], 10) - 1] || m[2]} ${parseInt(m[3], 10)}, ${m[1]}`;
+      }
+      return row.date;
+    }
+    return month(row.month);
+  }
+
   /** Class name for positive/negative/neutral coloring. */
   function tone(v) {
     const n = toFinite(v);
@@ -99,5 +117,5 @@
     return `${months[parseInt(m[2], 10) - 1] || m[2]} ${parseInt(m[3], 10)}, ${m[1]}`;
   }
 
-  global.fmt = { twd, twdCompact, usd, int, num, pct, pctAbs, month, tone, date };
+  global.fmt = { twd, twdCompact, usd, int, num, pct, pctAbs, month, label, tone, date };
 })(window);

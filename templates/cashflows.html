@@ -47,6 +47,13 @@
     </div>
     <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
     <div class="text-mute text-tiny" id="flow-hint" style="padding-top: 8px;"></div>
+    <div id="daily-flows-section" hidden style="margin-top: 16px;">
+      <div class="card-sub" style="margin-bottom: 8px;">
+        Daily-precision external flows
+        <span tabindex="0" class="info-icon" data-info="Same external-deposit definition (salary, transfers, interest, rebates), now keyed to the actual bank-tx date. Useful when a deposit is large enough that 'this month' is too coarse — e.g. a year-end bonus."></span>
+      </div>
+      <div class="chart-box h-220"><canvas id="chart-daily-flows"></canvas></div>
+    </div>
   </div>
   <div class="card">
     <div class="card-header">

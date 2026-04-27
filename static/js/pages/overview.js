@@ -64,7 +64,7 @@
 
   function renderEquityCurve(s) {
     const ctx = document.getElementById("chart-equity").getContext("2d");
-    const labels = s.equity_curve.map((p) => fmt.month(p.month));
+    const labels = s.equity_curve.map((p) => fmt.label(p));
     const equity = s.equity_curve.map((p) => p.equity_twd);
     const cumTwr = s.equity_curve.map((p) => (p.cum_twr || 0) * 100);
 

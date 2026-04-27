@@ -48,7 +48,7 @@
 
   function renderRate(fx) {
     const ctx = document.getElementById("chart-rate").getContext("2d");
-    const labels = fx.rate_curve.map((p) => fmt.month(p.month));
+    const labels = fx.rate_curve.map((p) => fmt.label(p));
     const data = fx.rate_curve.map((p) => p.fx_usd_twd);
     new Chart(ctx, {
       type: "line",

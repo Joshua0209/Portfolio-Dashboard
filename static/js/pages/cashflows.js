@@ -11,11 +11,52 @@
       window.api.get("/api/cashflows/monthly"),
       window.api.get("/api/cashflows/bank"),
     ]);
+    // Daily-resolution branch wraps the body in { resolution, monthly, daily }.
+    // Default response is a flat list — unwrap defensively to support both.
+    const monthlyList = Array.isArray(monthly) ? monthly : (monthly.monthly || []);
+    const dailyList = Array.isArray(monthly) ? null : (monthly.daily || null);
+
     renderKPIs(cf);
     renderRealVsCounterfactual(cf);
-    renderMonthlyFlows(monthly);
+    renderMonthlyFlows(monthlyList);
     renderBreakdown(cf.cumulative_flows);
     renderBank(bank);
+    if (dailyList && dailyList.length > 0) {
+      renderDailyFlows(dailyList);
+    }
+  }
+
+  function renderDailyFlows(daily) {
+    const section = document.getElementById("daily-flows-section");
+    if (!section) return;
+    section.hidden = false;
+    const ctx = document.getElementById("chart-daily-flows").getContext("2d");
+    const labels = daily.map((p) => fmt.label(p));
+    const flows = daily.map((p) => p.flow_twd || 0);
+    const cum = daily.map((p) => p.cumulative_twd || 0);
+    const colors = flows.map((v) => v >= 0 ? charts.cssVar("--pos") : charts.cssVar("--neg"));
+    new Chart(ctx, {
+      data: {
+        labels,
+        datasets: [
+          { type: "bar", label: "Daily flow", data: flows, backgroundColor: colors, borderRadius: 2, yAxisID: "y" },
+          { type: "line", label: "Cumulative", data: cum, borderColor: charts.cssVar("--accent"), borderWidth: 1.5, pointRadius: 0, tension: 0.25, yAxisID: "y1" },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top", align: "end" },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(c.parsed.y)}` } },
+          decimation: { enabled: true, algorithm: "lttb", samples: 200 },
+        },
+        scales: {
+          y: { position: "left", ticks: { callback: (v) => fmt.twdCompact(v) } },
+          y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: (v) => fmt.twdCompact(v) } },
+        },
+      },
+    });
   }
 
   function renderKPIs(cf) {

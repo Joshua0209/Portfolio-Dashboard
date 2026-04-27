@@ -114,7 +114,7 @@
 
   function renderCumChart(ts) {
     const ctx = document.getElementById("chart-cum").getContext("2d");
-    const labels = ts.monthly.map((m) => fmt.month(m.month));
+    const labels = ts.monthly.map((m) => fmt.label(m));
     const cum = ts.monthly.map((m) => (m.cum_twr || 0) * 100);
     const eq = ts.monthly.map((m) => m.equity_twd);
 
@@ -171,7 +171,7 @@
 
   function renderMonthlyChart(ts) {
     const ctx = document.getElementById("chart-monthly").getContext("2d");
-    const labels = ts.monthly.map((m) => fmt.month(m.month));
+    const labels = ts.monthly.map((m) => fmt.label(m));
     const data = ts.monthly.map((m) => (m.period_return || 0) * 100);
     const colors = data.map((v) => v >= 0 ? charts.cssVar("--pos") : charts.cssVar("--neg"));
 
@@ -194,7 +194,7 @@
 
   function renderDrawdown(ts) {
     const ctx = document.getElementById("chart-dd").getContext("2d");
-    const labels = ts.monthly.map((m) => fmt.month(m.month));
+    const labels = ts.monthly.map((m) => fmt.label(m));
     const dd = ts.monthly.map((m) => (m.drawdown || 0) * 100);
 
     document.getElementById("dd-max").textContent = `Max: ${fmt.pct(ts.max_drawdown)}`;
@@ -229,7 +229,12 @@
 
   function renderRolling(rolling) {
     const ctx = document.getElementById("chart-rolling").getContext("2d");
-    const labels = rolling.rolling_3m.map((p) => fmt.month(p.month));
+    // Daily branch returns rolling_30d/60d/90d instead of rolling_3m/6m/12m.
+    const r1 = rolling.rolling_3m || rolling.rolling_30d || [];
+    const r2 = rolling.rolling_6m || rolling.rolling_60d || [];
+    const r3 = rolling.rolling_12m || rolling.rolling_90d || [];
+    const isDaily = !rolling.rolling_3m;
+    const labels = r1.map((p) => fmt.label(p));
     const series = (data, label, color) => ({
       label,
       data: data.map((p) => p.value === null ? null : p.value * 100),
@@ -245,9 +250,9 @@
       data: {
         labels,
         datasets: [
-          series(rolling.rolling_3m, "3M", charts.cssVar("--c1")),
-          series(rolling.rolling_6m, "6M", charts.cssVar("--c2")),
-          series(rolling.rolling_12m, "12M", charts.cssVar("--c4")),
+          series(r1, isDaily ? "30D" : "3M", charts.cssVar("--c1")),
+          series(r2, isDaily ? "60D" : "6M", charts.cssVar("--c2")),
+          series(r3, isDaily ? "90D" : "12M", charts.cssVar("--c4")),
         ],
       },
       options: {
@@ -367,9 +372,9 @@
     while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
     for (const m of ts.monthly) {
       const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.month(m.month)));
-      tr.appendChild(td(fmt.twd(m.v_start), "num"));
-      tr.appendChild(td(fmt.twd(m.external_flow), `num ${fmt.tone(m.external_flow)}`));
+      tr.appendChild(td(fmt.label(m)));
+      tr.appendChild(td(fmt.twd(m.v_start ?? m.equity_twd), "num"));
+      tr.appendChild(td(fmt.twd(m.external_flow ?? m.flow_twd ?? 0), `num ${fmt.tone(m.external_flow ?? m.flow_twd ?? 0)}`));
       tr.appendChild(td(fmt.twd(m.weighted_flow ?? 0), "num text-mute"));
       tr.appendChild(td(fmt.twd(m.equity_twd), "num"));
       tr.appendChild(td(fmt.pct(m.period_return), `num ${fmt.tone(m.period_return)}`));
