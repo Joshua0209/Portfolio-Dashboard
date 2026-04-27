@@ -692,6 +692,70 @@ def monthly_flows(months: list[dict], venue_flows: list[dict] | None = None) -> 
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def reprice_holdings_with_daily(
+    holdings: list[dict],
+    get_latest_close,
+    current_fx_usd_twd: float | None = None,
+) -> list[dict]:
+    """Override each holding's ref_price/mv/unrealized with today's close.
+
+    Source-of-truth fields preserved: code, name, qty, avg_cost, cost_*.
+    Mutated fields: ref_price, mkt_value_local, mkt_value_twd,
+    unrealized_pnl_local, unrealized_pnl_twd, unrealized_pct, repriced_at.
+
+    Tickers with no daily price (e.g. delisted, very thinly-traded) keep
+    their month-end values — graceful per-ticker fallback. The function
+    is order-preserving and side-effect free (returns new list of new
+    dicts).
+
+    Args:
+        holdings: rows from `_holdings_for_month(last)` (unified shape).
+        get_latest_close: callable(symbol) -> {date, close, currency} or
+            None. Pass `daily_store.get_latest_close` directly.
+        current_fx_usd_twd: latest USD/TWD rate to convert foreign
+            positions. Falls back to the holding's stale fx if None.
+    """
+    out: list[dict] = []
+    for h in holdings:
+        code = h.get("code")
+        new = dict(h)
+        if not code:
+            out.append(new)
+            continue
+        latest = get_latest_close(code)
+        if not latest:
+            # Foreign holdings sometimes use ".TW" / ".HK" suffixes — daily
+            # store keys foreign tickers as their bare Yahoo symbol.
+            out.append(new)
+            continue
+        close = float(latest["close"])
+        qty = float(h.get("qty") or 0)
+        cost_local = float(h.get("cost_local") or h.get("cost_twd") or 0)
+        new["ref_price"] = close
+        venue = h.get("venue")
+        if venue == "TW":
+            mv_local = qty * close
+            new["mkt_value_local"] = mv_local
+            new["mkt_value_twd"] = mv_local
+            upnl = mv_local - cost_local
+            new["unrealized_pnl_local"] = upnl
+            new["unrealized_pnl_twd"] = upnl
+            new["unrealized_pct"] = (upnl / cost_local) if cost_local else 0
+        else:  # Foreign — apply current FX
+            mv_local = qty * close
+            ccy = h.get("ccy") or "USD"
+            rate = current_fx_usd_twd if ccy == "USD" and current_fx_usd_twd else 1.0
+            new["mkt_value_local"] = mv_local
+            new["mkt_value_twd"] = mv_local * rate
+            upnl_local = mv_local - cost_local
+            new["unrealized_pnl_local"] = upnl_local
+            new["unrealized_pnl_twd"] = upnl_local * rate
+            new["unrealized_pct"] = (upnl_local / cost_local) if cost_local else 0
+        new["repriced_at"] = latest["date"]
+        out.append(new)
+    return out
+
+
 def daily_fx_pnl(
     usd_exposure_series: list[dict],
     fx_series: list[dict],

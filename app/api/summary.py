@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, request
 
+from .. import analytics
+from .holdings import _holdings_for_month
 from ._helpers import envelope, store
 
 bp = Blueprint("summary", __name__, url_prefix="/api/summary")
@@ -17,6 +19,31 @@ bp = Blueprint("summary", __name__, url_prefix="/api/summary")
 
 def _daily_store():
     return current_app.extensions["daily_store"]
+
+
+def _today_repriced_totals(months):
+    """Recompute total MV + unrealized using today's prices.
+
+    Returns (mv_twd_today, unrealized_twd_today, repriced_count). When
+    the daily store is empty, returns (None, None, 0) so callers can
+    fall back to the month-end value.
+    """
+    if not months:
+        return None, None, 0
+    daily = _daily_store()
+    snap = daily.get_today_snapshot()
+    if not snap:
+        return None, None, 0
+    last = months[-1]
+    fx_today = snap.get("fx_usd_twd") or last.get("fx_usd_twd")
+    repriced = analytics.reprice_holdings_with_daily(
+        _holdings_for_month(last), daily.get_latest_close,
+        current_fx_usd_twd=fx_today,
+    )
+    mv = sum(h.get("mkt_value_twd", 0) for h in repriced)
+    upnl = sum(h.get("unrealized_pnl_twd", 0) for h in repriced)
+    n_repriced = sum(1 for h in repriced if h.get("repriced_at"))
+    return mv, upnl, n_repriced
 
 
 def _monthly_summary():
@@ -67,6 +94,25 @@ def _monthly_summary():
         "bank_twd": last.get("bank_twd", 0),
         "bank_usd": last.get("bank_usd_in_twd", 0),
     }
+
+    # Reprice headline KPIs to today's close where the daily layer has
+    # data. Realized side and counterfactual_twd are unaffected (cost
+    # basis doesn't change daily); only unrealized + total mv update.
+    today_mv, today_upnl, n_repriced = _today_repriced_totals(months)
+    if today_mv is not None:
+        # real_now_twd = mv_holdings + bank cash. Use repriced mv +
+        # last month-end bank balances (bank statements arrive monthly,
+        # there's no daily bank cash source).
+        bank_cash = (last.get("bank_twd", 0) or 0) + (last.get("bank_usd_in_twd", 0) or 0)
+        real_now_today = today_mv + bank_cash
+        kpis = {
+            **kpis,
+            "real_now_twd": real_now_today,
+            "profit_twd": real_now_today - invested_twd,
+            "unrealized_pnl_twd": today_upnl,
+            "repriced_holdings_count": n_repriced,
+        }
+        profit_twd = kpis["profit_twd"]
 
     return envelope({
         "kpis": kpis,

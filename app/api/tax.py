@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from flask import Blueprint
+from flask import Blueprint, current_app
 
 from .. import analytics
 from .holdings import _holdings_for_month
 from ._helpers import envelope, store
 
 bp = Blueprint("tax", __name__, url_prefix="/api/tax")
+
+
+def _daily_store():
+    return current_app.extensions["daily_store"]
 
 
 @bp.get("")
@@ -19,6 +23,11 @@ def tax():
     Uses FIFO basis (TW tax convention) and includes dividends in total
     return. Average-cost figures are kept side-by-side so users can spot
     discrepancies due to partially-closed lots.
+
+    Unrealized P&L is computed against today's close (from the daily
+    prices store) when available, not last month-end, so the headline
+    figure is never 25 days behind reality. Tickers without a daily
+    price keep their month-end value (per-ticker graceful fallback).
     """
     s = store()
     realized_avg = {r["code"]: r for r in analytics.realized_pnl_by_ticker(s.by_ticker)}
@@ -26,6 +35,14 @@ def tax():
 
     last = s.months[-1] if s.months else {}
     current = _holdings_for_month(last) if last else []
+
+    # Override unrealized with today's close where available.
+    daily = _daily_store()
+    snap = daily.get_today_snapshot()
+    fx_today = snap.get("fx_usd_twd") if snap else last.get("fx_usd_twd")
+    current = analytics.reprice_holdings_with_daily(
+        current, daily.get_latest_close, current_fx_usd_twd=fx_today
+    )
     current_by_code = {h["code"]: h for h in current if h.get("code")}
 
     enriched = []
