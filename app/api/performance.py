@@ -1,12 +1,71 @@
 """Performance: TWR, XIRR, drawdown, rolling, Sharpe, Sortino, Calmar, attribution."""
 from __future__ import annotations
 
-from flask import Blueprint, request
+from flask import Blueprint, current_app, request
 
 from .. import analytics
 from ._helpers import envelope, store
 
 bp = Blueprint("performance", __name__, url_prefix="/api/performance")
+
+
+def _daily_store():
+    return current_app.extensions["daily_store"]
+
+
+def _daily_timeseries() -> dict:
+    """Daily Modified Dietz timeseries — falls back to monthly envelope
+    silently when the daily layer is empty (cold start / pre-backfill).
+    Same key set as the monthly response so frontend can read either.
+    """
+    s = store()
+    equity_series = _daily_store().get_equity_curve()
+    if not equity_series:
+        return None  # caller falls back to monthly
+
+    flow_series = analytics.daily_external_flows(s.months)
+    rows = analytics.daily_twr(equity_series, flow_series)
+    period_returns = [r["period_return"] for r in rows]
+    cum = [r["cum_twr"] for r in rows]
+    dates = [r["date"] for r in rows]
+    twr_total = cum[-1] if cum else 0
+    dd_curve = analytics.drawdown_curve(cum)
+
+    # Re-shape rows to match the monthly response keys frontend expects.
+    out_rows = [
+        {
+            "date": rows[i]["date"],
+            "period_return": rows[i]["period_return"],
+            "cum_twr": rows[i]["cum_twr"],
+            "equity_twd": rows[i]["equity_twd"],
+            "flow_twd": rows[i]["flow_twd"],
+            "drawdown": dd_curve[i]["drawdown"],
+            "wealth_index": dd_curve[i]["wealth"],
+        }
+        for i in range(len(rows))
+    ]
+
+    return {
+        "resolution": "daily",
+        "monthly": out_rows,  # key kept as 'monthly' for frontend compat
+        "method": "daily_modified_dietz",
+        "twr_total": twr_total,
+        "max_drawdown": analytics.max_drawdown(cum),
+        "monthly_volatility": analytics.stdev(period_returns),
+        # daily volatility annualizes by sqrt(252), not sqrt(12)
+        "annualized_volatility": analytics.stdev(period_returns) * (252 ** 0.5),
+        "sharpe_annualized": analytics.sharpe(period_returns) * ((252 / 12) ** 0.5),
+        "sortino_annualized": analytics.sortino(period_returns) * ((252 / 12) ** 0.5),
+        "best_month": max(out_rows, key=lambda r: r["period_return"]) if out_rows else None,
+        "worst_month": min(out_rows, key=lambda r: r["period_return"]) if out_rows else None,
+        "positive_months": sum(1 for r in out_rows if r["period_return"] > 0),
+        "negative_months": sum(1 for r in out_rows if r["period_return"] < 0),
+        "hit_rate": (
+            sum(1 for r in out_rows if r["period_return"] > 0)
+            / max(1, sum(1 for r in out_rows if r["period_return"] != 0))
+        ),
+        "drawdown_episodes": analytics.drawdown_episodes(cum, dates),
+    }
 
 
 _VALID_METHODS = {"day_weighted", "mid_month", "eom"}
@@ -28,6 +87,12 @@ def _recomputed(months: list[dict], method: str) -> tuple[list[float], list[floa
 
 @bp.get("/timeseries")
 def timeseries():
+    if (request.args.get("resolution") or "").lower() == "daily":
+        daily = _daily_timeseries()
+        if daily is not None:
+            return envelope(daily)
+        # Fall through to monthly when daily layer is empty.
+
     s = store()
     months = s.months
     if not months:
@@ -102,6 +167,36 @@ def timeseries():
 
 @bp.get("/rolling")
 def rolling():
+    if (request.args.get("resolution") or "").lower() == "daily":
+        equity_series = _daily_store().get_equity_curve()
+        if equity_series:
+            s = store()
+            flow_series = analytics.daily_external_flows(s.months)
+            rows = analytics.daily_twr(equity_series, flow_series)
+            pr = [r["period_return"] for r in rows]
+            dates = [r["date"] for r in rows]
+            # Daily rolling windows (~30/60/90 trading days ≈ 1/3/6 months).
+            return envelope({
+                "resolution": "daily",
+                "rolling_30d": [
+                    {"date": d, "value": v}
+                    for d, v in zip(dates, analytics.rolling_returns(pr, 30))
+                ],
+                "rolling_60d": [
+                    {"date": d, "value": v}
+                    for d, v in zip(dates, analytics.rolling_returns(pr, 60))
+                ],
+                "rolling_90d": [
+                    {"date": d, "value": v}
+                    for d, v in zip(dates, analytics.rolling_returns(pr, 90))
+                ],
+                "rolling_sharpe_60d": [
+                    {"date": d, "value": v}
+                    for d, v in zip(dates, analytics.rolling_sharpe(pr, 60))
+                ],
+            })
+        # Empty daily layer → fall through to monthly.
+
     s = store()
     months = s.months
     method = _method_param()

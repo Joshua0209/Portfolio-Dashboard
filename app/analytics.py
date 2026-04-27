@@ -115,6 +115,134 @@ def period_returns(months: list[dict], method: PeriodMethod = "day_weighted") ->
     return out
 
 
+def daily_external_flows(months: list[dict]) -> list[dict]:
+    """Per-day external flow series (TWD) for daily Modified Dietz.
+
+    "External" means: capital that crosses the boundary between you and
+    the broker+bank as one system. Stock settlements, FX conversions, and
+    dividends are internal rotations and are excluded — they do not change
+    your invested capital, only its form.
+
+    Source: bank ledger transactions (`m["bank"]["tx_twd"]` and
+    `tx_foreign`), each carrying a `category` tag set by the parser.
+    Foreign-account flows are converted to TWD using the same month FX
+    that cashflows.py uses today (a per-day FX upgrade can come later via
+    daily_store.get_fx_series — not blocking this implementation).
+
+    Returns a sorted list of {date: 'YYYY-MM-DD', flow_twd: float}.
+    Sign matches Modified Dietz: positive = inflow into the portfolio
+    system (e.g. salary deposit), negative = outflow (e.g. transfer out).
+    """
+    EXCLUDED = {
+        "tw_dividend",
+        "foreign_dividend",
+        "stock_settle_tw",
+        "stock_settle_fx",
+        "fx_convert",
+    }
+    by_date: dict[str, float] = defaultdict(float)
+    for m in months:
+        bank = m.get("bank") or {}
+        fx = bank.get("fx") or {}
+        for tx in bank.get("tx_twd", []) or []:
+            if tx.get("category") in EXCLUDED:
+                continue
+            d = _normalize_iso_date(tx.get("date"))
+            if d:
+                by_date[d] += float(tx.get("signed_amount") or 0)
+        for tx in bank.get("tx_foreign", []) or []:
+            if tx.get("category") in EXCLUDED:
+                continue
+            d = _normalize_iso_date(tx.get("date"))
+            if not d:
+                continue
+            ccy = tx.get("ccy") or "USD"
+            rate = float(fx.get(ccy) or 0.0)
+            by_date[d] += float(tx.get("signed_amount") or 0) * rate
+    return [{"date": d, "flow_twd": by_date[d]} for d in sorted(by_date)]
+
+
+def _normalize_iso_date(s: str | None) -> str | None:
+    """'2026/03/15' or '2026-03-15' → '2026-03-15'. Returns None on garbage."""
+    if not s:
+        return None
+    try:
+        s = s.replace("/", "-")
+        # validate via fromisoformat
+        date.fromisoformat(s)
+        return s
+    except (ValueError, AttributeError):
+        return None
+
+
+def daily_twr(
+    equity_series: list[dict],
+    flow_series: list[dict],
+    weight: float = 0.5,
+) -> list[dict]:
+    """Per-day Modified Dietz TWR, chained across all priced days.
+
+    The standard daily Modified Dietz formula for one day d is:
+
+        r_d = (V_d − V_{d-1} − F_d) / (V_{d-1} + weight · F_d)
+
+    where:
+      V_d        = end-of-day equity (TWD) for trading day d
+      V_{d-1}    = end-of-day equity for the prior priced day
+      F_d        = net external flow on day d (positive = inflow, signed)
+      weight     = within-day flow timing assumption:
+                     0.0 → flow at end of day (most conservative)
+                     0.5 → flow at mid-day  (default; uniform-within-day)
+                     1.0 → flow at start of day (most generous)
+
+    Then chain across days:
+
+        cum_twr_d = ∏_{i ≤ d} (1 + r_i) − 1
+
+    Day 1 has no prior equity to compare against — return 0 for r_1 and
+    use V_1 itself as the starting wealth_index baseline.
+
+    Returns one dict per equity_series row:
+        {date, equity_twd, flow_twd, period_return, cum_twr, wealth_index}
+    """
+    if not equity_series:
+        return []
+
+    flow_by_date: dict[str, float] = {f["date"]: float(f["flow_twd"]) for f in flow_series}
+    out: list[dict] = []
+
+    # Day 1: no prior equity. Force r_1 = 0; wealth_index starts at 1.0.
+    first = equity_series[0]
+    running_wealth = 1.0
+    out.append({
+        "date": first["date"],
+        "equity_twd": float(first["equity_twd"]),
+        "flow_twd": flow_by_date.get(first["date"], 0.0),
+        "period_return": 0.0,
+        "cum_twr": 0.0,
+        "wealth_index": running_wealth,
+    })
+
+    for i in range(1, len(equity_series)):
+        curr = equity_series[i]
+        v_start = float(equity_series[i - 1]["equity_twd"])
+        v_end = float(curr["equity_twd"])
+        f_d = flow_by_date.get(curr["date"], 0.0)
+        denom = v_start + weight * f_d
+        r_d = (v_end - v_start - f_d) / denom if abs(denom) > 1e-6 else 0.0
+        running_wealth *= 1.0 + r_d
+        out.append({
+            "date": curr["date"],
+            "equity_twd": v_end,
+            "flow_twd": f_d,
+            "period_return": r_d,
+            "cum_twr": running_wealth - 1.0,
+            "wealth_index": running_wealth,
+        })
+
+    return out
+
+
 def _weighted_flow_sum(month: dict, days: int, f_total: float, method: PeriodMethod) -> float:
     if method == "mid_month":
         return 0.5 * f_total
