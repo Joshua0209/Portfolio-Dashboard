@@ -263,6 +263,107 @@ class DailyStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def get_latest_close(self, symbol: str) -> dict[str, Any] | None:
+        """Most recent close + currency + as-of date for one symbol.
+
+        Used by /api/tax and /api/summary to override month-end ref_price
+        with today's price so unrealized P&L reflects current prices, not
+        last statement close.
+        """
+        with self.connect_ro() as conn:
+            row = conn.execute(
+                "SELECT date, close, currency, source FROM prices "
+                "WHERE symbol = ? ORDER BY date DESC LIMIT 1",
+                (symbol,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_positions_snapshot(self, date: str) -> list[dict[str, Any]]:
+        """All open positions on a single trading day."""
+        with self.connect_ro() as conn:
+            return [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT date, symbol, qty, cost_local, mv_local, mv_twd, "
+                    "type, source FROM positions_daily "
+                    "WHERE date = ? AND qty != 0 ORDER BY mv_twd DESC",
+                    (date,),
+                ).fetchall()
+            ]
+
+    def get_allocation_timeseries(
+        self, start: str | None = None, end: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Daily TW vs Foreign allocation split for /risk and /holdings.
+
+        Aggregates positions_daily by date+venue (derived from symbol_market).
+        Returns one row per date with tw_twd, foreign_twd, n_tw, n_foreign.
+        """
+        sql = """
+            SELECT pd.date AS date,
+                   COALESCE(SUM(CASE WHEN sm.market = 'TW' THEN pd.mv_twd END), 0) AS tw_twd,
+                   COALESCE(SUM(CASE WHEN sm.market != 'TW' THEN pd.mv_twd END), 0) AS foreign_twd,
+                   COALESCE(SUM(CASE WHEN sm.market = 'TW' THEN 1 END), 0) AS n_tw,
+                   COALESCE(SUM(CASE WHEN sm.market != 'TW' THEN 1 END), 0) AS n_foreign
+            FROM positions_daily pd
+            LEFT JOIN symbol_market sm ON sm.symbol = pd.symbol
+            WHERE pd.qty != 0
+        """
+        params: list[Any] = []
+        if start:
+            sql += " AND pd.date >= ?"
+            params.append(start)
+        if end:
+            sql += " AND pd.date <= ?"
+            params.append(end)
+        sql += " GROUP BY pd.date ORDER BY pd.date ASC"
+        with self.connect_ro() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    def get_drawdown_series(
+        self, start: str | None = None, end: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Underwater curve: each day's running peak and drawdown_pct.
+
+        drawdown_pct is signed (≤ 0) — current equity vs running peak.
+        Implemented in Python rather than a SQL window function so it
+        works on older SQLite builds shipped with macOS system Python.
+        """
+        rows = self.get_equity_curve(start=start, end=end)
+        out: list[dict[str, Any]] = []
+        peak = 0.0
+        peak_date: str | None = None
+        for r in rows:
+            eq = float(r["equity_twd"])
+            if eq > peak:
+                peak = eq
+                peak_date = r["date"]
+            dd = (eq - peak) / peak if peak > 0 else 0.0
+            out.append({
+                "date": r["date"],
+                "equity_twd": eq,
+                "peak_twd": peak,
+                "peak_date": peak_date,
+                "drawdown_pct": dd,
+            })
+        return out
+
+    def get_fx_series(
+        self, ccy: str = "USD", start: str | None = None, end: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Daily FX-to-TWD rate for one currency from fx_daily."""
+        sql = "SELECT date, rate_to_twd FROM fx_daily WHERE ccy = ?"
+        params: list[Any] = [ccy]
+        if start:
+            sql += " AND date >= ?"
+            params.append(start)
+        if end:
+            sql += " AND date <= ?"
+            params.append(end)
+        sql += " ORDER BY date ASC"
+        with self.connect_ro() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
     def get_failed_tasks(self) -> list[dict[str, Any]]:
         with self.connect_ro() as conn:
             return [
