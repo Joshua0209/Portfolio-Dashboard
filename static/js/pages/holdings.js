@@ -3,8 +3,7 @@
  */
 (function () {
   let allRows = [];
-  let sortKey = "mkt_value_twd";
-  let sortDir = "desc";
+  let table = null;
 
   document.addEventListener("DOMContentLoaded", () => init().catch(showError));
 
@@ -20,10 +19,49 @@
     renderTreemap(hold.holdings);
     renderSectors(sectors);
     allRows = hold.holdings;
-    bindFilters();
-    bindSorting();
-    rerenderTable();
+    table = buildTable();
     document.getElementById("export-holdings").addEventListener("click", exportCsv);
+  }
+
+  function buildTable() {
+    return window.dataTable({
+      tableId: "holdings-table",
+      rows: allRows,
+      searchKeys: ["code", "name"],
+      searchPlaceholder: "Search code or name…",
+      filters: [
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+      ],
+      defaultSort: { key: "mkt_value_twd", dir: "desc" },
+      colspan: 13,
+      pageSize: 25,
+      emptyText: "No matching positions",
+      row: (r) => [
+        tdCodeLink(r.code),
+        td(r.name || ""),
+        tdPill(r.venue),
+        td(r.type || ""),
+        td(r.ccy || ""),
+        td(fmt.int(r.qty), "num"),
+        td(fmt.num(r.avg_cost, 2), "num"),
+        td(fmt.num(r.ref_price, 2), "num"),
+        td(fmt.twd(r.cost_twd), "num"),
+        td(fmt.twd(r.mkt_value_twd), "num"),
+        td(fmt.twd(r.unrealized_pnl_twd), `num ${fmt.tone(r.unrealized_pnl_twd)}`),
+        td(fmt.pct(r.unrealized_pct), `num ${fmt.tone(r.unrealized_pct)}`),
+        td(fmt.pctAbs(r.weight, 1), "num"),
+      ],
+    });
+  }
+
+  function tdCodeLink(code) {
+    const el = document.createElement("td");
+    el.className = "code";
+    const a = document.createElement("a");
+    a.href = `/ticker/${encodeURIComponent(code || "")}`;
+    a.textContent = code || "";
+    el.appendChild(a);
+    return el;
   }
 
   function renderKPIs(d) {
@@ -174,95 +212,6 @@
     });
   }
 
-  function bindFilters() {
-    document.getElementById("filter-q").addEventListener("input", rerenderTable);
-    document.getElementById("filter-venue").addEventListener("change", rerenderTable);
-  }
-
-  function bindSorting() {
-    document.querySelectorAll("#holdings-table thead th.sortable").forEach((th) => {
-      th.addEventListener("click", () => {
-        const k = th.dataset.key;
-        if (sortKey === k) {
-          sortDir = sortDir === "asc" ? "desc" : "asc";
-        } else {
-          sortKey = k;
-          sortDir = "desc";
-        }
-        rerenderTable();
-      });
-    });
-  }
-
-  function filteredRows() {
-    const q = (document.getElementById("filter-q").value || "").toLowerCase();
-    const v = document.getElementById("filter-venue").value;
-    return allRows.filter((r) => {
-      if (v && r.venue !== v) return false;
-      if (!q) return true;
-      const code = String(r.code || "").toLowerCase();
-      const name = String(r.name || "").toLowerCase();
-      return code.includes(q) || name.includes(q);
-    });
-  }
-
-  function rerenderTable() {
-    const rows = filteredRows();
-    rows.sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
-      const an = (av === null || av === undefined) ? -Infinity : av;
-      const bn = (bv === null || bv === undefined) ? -Infinity : bv;
-      if (typeof an === "number" && typeof bn === "number") {
-        return sortDir === "asc" ? an - bn : bn - an;
-      }
-      const as = String(av ?? ""), bs = String(bv ?? "");
-      return sortDir === "asc" ? as.localeCompare(bs) : bs.localeCompare(as);
-    });
-
-    document.querySelectorAll("#holdings-table thead th.sortable").forEach((th) => {
-      th.classList.remove("sorted-asc", "sorted-desc");
-      if (th.dataset.key === sortKey) {
-        th.classList.add(sortDir === "asc" ? "sorted-asc" : "sorted-desc");
-      }
-    });
-
-    const tbody = document.querySelector("#holdings-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!rows.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 13;
-      td.className = "table-empty";
-      td.textContent = "No matching positions";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-      return;
-    }
-    for (const r of rows) {
-      const tr = document.createElement("tr");
-      const codeTd = document.createElement("td");
-      codeTd.className = "code";
-      const a = document.createElement("a");
-      a.href = `/ticker/${encodeURIComponent(r.code || "")}`;
-      a.textContent = r.code || "";
-      codeTd.appendChild(a);
-      tr.appendChild(codeTd);
-      tr.appendChild(td(r.name || ""));
-      tr.appendChild(tdPill(r.venue));
-      tr.appendChild(td(r.type || ""));
-      tr.appendChild(td(r.ccy || ""));
-      tr.appendChild(td(fmt.int(r.qty), "num"));
-      tr.appendChild(td(fmt.num(r.avg_cost, 2), "num"));
-      tr.appendChild(td(fmt.num(r.ref_price, 2), "num"));
-      tr.appendChild(td(fmt.twd(r.cost_twd), "num"));
-      tr.appendChild(td(fmt.twd(r.mkt_value_twd), "num"));
-      tr.appendChild(td(fmt.twd(r.unrealized_pnl_twd), `num ${fmt.tone(r.unrealized_pnl_twd)}`));
-      tr.appendChild(td(fmt.pct(r.unrealized_pct), `num ${fmt.tone(r.unrealized_pct)}`));
-      tr.appendChild(td(fmt.pctAbs(r.weight, 1), "num"));
-      tbody.appendChild(tr);
-    }
-  }
-
   function td(text, cls) {
     const el = document.createElement("td");
     if (cls) el.className = cls;
@@ -285,7 +234,7 @@
   }
 
   function exportCsv() {
-    const rows = filteredRows();
+    const rows = table ? table.filtered() : allRows;
     const headers = [
       "code", "name", "venue", "type", "ccy", "qty", "avg_cost", "ref_price",
       "cost_twd", "mkt_value_twd", "unrealized_pnl_twd", "unrealized_pct", "weight",

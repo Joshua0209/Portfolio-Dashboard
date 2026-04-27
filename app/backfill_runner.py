@@ -21,13 +21,14 @@ import calendar
 import json
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from app import backfill_state
 from app.daily_store import BACKFILL_FLOOR_DEFAULT, DailyStore
-from app.price_sources import get_fx_rates, get_prices
+from app.price_sources import get_fx_rates, get_prices, get_yfinance_prices
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +110,28 @@ def compute_fetch_window(
         return None
 
     return (fetch_start, fetch_end)
+
+
+def describe_skip(
+    trade_dates: Iterable[str],
+    held_months: Iterable[str],
+    floor: str,
+) -> str:
+    """Human-readable explanation for why compute_fetch_window returned None.
+
+    Mirrors the early-return cases in compute_fetch_window so the CLI can
+    surface "why was this symbol skipped?" without re-deriving it.
+    """
+    trade_list = sorted({_normalize_trade_date(d) for d in trade_dates})
+    held_list = sorted(set(held_months))
+    if not trade_list and not held_list:
+        return "no trades or holdings on file"
+    last_trade = trade_list[-1] if trade_list else None
+    last_held_date = month_end_iso(held_list[-1]) if held_list else None
+    last_activity = max(d for d in (last_trade, last_held_date) if d)
+    if last_activity < floor:
+        return f"last activity {last_activity} predates floor {floor}"
+    return "no overlap with backfill window"
 
 
 # --- Portfolio.json walkers -----------------------------------------------
@@ -241,6 +264,90 @@ def _qty_history_for_symbol(
     return out
 
 
+def _qty_per_priced_date_for_symbol(
+    portfolio: dict,
+    code: str,
+    venue: str,
+    priced_dates: list[str],
+) -> dict[str, float]:
+    """Map each priced date → qty held that day, anchored to PDF holdings.
+
+    Pure trade summation breaks under stock splits — e.g. 00631L's pre-split
+    trade ledger sums to 210 shares while the post-split March holding row
+    is 4620 (a ~1:22 split). The PDF holdings table reflects post-split qty,
+    so we use it as the anchor in split months and fall back to prior-anchor +
+    intra-month trade deltas elsewhere.
+
+    Algorithm per priced date d:
+      base_qty = qty_at_(prior_PDF_month_end) + Σ trades in (prior_me, d]
+      If d's month has its own PDF anchor:
+          expected = qty_at_(prior_PDF_month_end) + Σ all_trades_in_month
+          If anchor >> expected (≥1.5×): split was implied; use anchor for
+              every day in the month (the price-side handles pre-split
+              scaling separately).
+          Otherwise: stick with base_qty so mid-month buys don't appear
+              prematurely (e.g. 00991A's Feb 5 buy doesn't inflate Feb 2's V).
+      No PDF month for d: fall back to base_qty; for dates that precede
+      every snapshot (intra-month round-trips that never closed at a
+      month-end), sum trades from the start.
+    """
+    venue_key = "tw" if venue == "TW" else "foreign"
+    anchors_by_month: dict[str, float] = {}
+    for m in portfolio.get("months", []):
+        ym = m.get("month")
+        if not ym:
+            continue
+        for h in m.get(venue_key, {}).get("holdings", []):
+            if h.get("code") == code:
+                qty = float(h.get("qty", 0) or 0)
+                if qty > 0:
+                    anchors_by_month[ym] = qty
+                break
+
+    deltas = _qty_history_for_symbol(portfolio, code, venue)
+    sorted_yms = sorted(anchors_by_month)
+
+    def _prior_ym_for(target_ym: str) -> str | None:
+        prior: str | None = None
+        for ym in sorted_yms:
+            if ym < target_ym:
+                prior = ym
+            else:
+                break
+        return prior
+
+    out: dict[str, float] = {}
+    for d in priced_dates:
+        d_ym = d[:7]
+        prior_ym = _prior_ym_for(d_ym)
+        if prior_ym is None:
+            base_qty = sum(q for td, q in deltas if td <= d)
+        else:
+            prior_me = month_end_iso(prior_ym)
+            base_qty = anchors_by_month[prior_ym] + sum(
+                q for td, q in deltas if prior_me < td <= d
+            )
+        base_qty = max(0.0, base_qty)
+
+        if d_ym in anchors_by_month:
+            anchor_qty = anchors_by_month[d_ym]
+            month_me = month_end_iso(d_ym)
+            prior_me_or_zero = (
+                month_end_iso(prior_ym) if prior_ym else "0000-00-00"
+            )
+            intra_total = sum(
+                q for td, q in deltas if prior_me_or_zero < td <= month_me
+            )
+            expected = (anchors_by_month[prior_ym] if prior_ym else 0.0) + intra_total
+            if expected > 1 and anchor_qty > expected * 1.5:
+                # Split detected — month-end anchor wins; price-side scales
+                # pre-split-day closes elsewhere in the pipeline.
+                out[d] = anchor_qty
+                continue
+        out[d] = base_qty
+    return out
+
+
 def _forward_fill_fx(
     fx_rows: list[tuple[str, float]], dates: Iterable[str]
 ) -> dict[str, float]:
@@ -280,31 +387,37 @@ def _derive_positions_and_portfolio(
     via fx_daily (forward-fill on weekend gaps), and aggregate to
     portfolio_daily.equity_twd.
     """
-    tw_qty_changes: dict[str, list[tuple[str, float]]] = {}
-    foreign_qty_changes: dict[str, list[tuple[str, float]]] = {}
+    tw_codes = [e["code"] for e in iter_tw_symbols_with_metadata(portfolio)]
+    foreign_codes: list[str] = []
     foreign_currency: dict[str, str] = {}
     cost_at: dict[str, float] = {}
 
-    for entry in iter_tw_symbols_with_metadata(portfolio):
-        code = entry["code"]
-        tw_qty_changes[code] = _qty_history_for_symbol(portfolio, code, "TW")
-
     for entry in iter_foreign_symbols_with_metadata(portfolio):
-        code = entry["code"]
-        foreign_qty_changes[code] = _qty_history_for_symbol(
-            portfolio, code, "Foreign"
-        )
-        foreign_currency[code] = entry["currency"]
+        foreign_codes.append(entry["code"])
+        foreign_currency[entry["code"]] = entry["currency"]
 
+    # ref_price_by_month_code = month-end MV-per-share from holdings, used
+    # as a last-resort price when neither TWSE/yfinance nor forward-fill
+    # produce a close. Without this, symbols TWSE permanently blocks (the
+    # circuit-breaker survivors) silently drop out of daily V — the daily
+    # equity curve under-tracks the true portfolio for those holdings.
+    ref_price_by_month_code: dict[str, dict[str, float]] = {"tw": {}, "foreign": {}}
     for m in portfolio.get("months", []):
+        ym = m.get("month")
         for h in m.get("tw", {}).get("holdings", []):
             code = h.get("code")
             if code:
                 cost_at[code] = float(h.get("avg_cost", 0) or 0)
+                ref = h.get("ref_price")
+                if ref and ym:
+                    ref_price_by_month_code["tw"][f"{code}|{ym}"] = float(ref)
         for h in m.get("foreign", {}).get("holdings", []):
             code = h.get("code")
             if code:
                 cost_at[code] = float(h.get("avg_cost_local", 0) or 0)
+                close_l = h.get("close")
+                if close_l and ym:
+                    ref_price_by_month_code["foreign"][f"{code}|{ym}"] = float(close_l)
 
     with store.connect_ro() as conn:
         priced_dates = [
@@ -331,20 +444,167 @@ def _derive_positions_and_portfolio(
         ccy: _forward_fill_fx(rows, priced_dates) for ccy, rows in fx_by_ccy.items()
     }
 
+    # Forward-fill closes across priced_dates. Two distinct gap sources:
+    #   • foreign symbols: yfinance is silent on US holidays/weekends but
+    #     those can still be TW trading days (and vice versa).
+    #   • TW symbols: TWSE WAF intermittently rejects some symbols during
+    #     a backfill, leaving holes inside the fetched window.
+    # Without forward-fill, holdings *vanish from V* on every gap day and
+    # the daily equity curve gyrates wildly (e.g. r_d = +1274% when 16
+    # symbols re-appear on the next priced day). Carrying the most-recent
+    # close forward keeps V continuous.
+    def _build_filled(codes: list[str]) -> dict[str, dict[str, float]]:
+        out: dict[str, dict[str, float]] = {}
+        for code in codes:
+            rows_for_code = sorted(
+                (d, c) for (d, sym), c in all_prices.items() if sym == code
+            )
+            out[code] = _forward_fill_fx(rows_for_code, priced_dates)
+        return out
+
+    tw_close_filled = _build_filled(tw_codes)
+    foreign_close_filled = _build_filled(foreign_codes)
+
+    # Stock splits cause a sudden mismatch between PDF holdings qty
+    # (post-split) and TWSE close (pre-split for days before the split
+    # date). e.g. 00631L Feb→Mar 2026 went 220→4620 shares while the
+    # underlying price dropped ~22×. Without adjustment, daily MV spikes
+    # to (4620 × pre-split 530) ≈ 2.45M, then crashes back at month-end.
+    # Detect the split factor from holdings, find the split day from
+    # TWSE prices, and rescale pre-split closes to the post-split scale.
+    def _split_adjusted(
+        venue: str, code: str, filled: dict[str, float]
+    ) -> dict[str, float]:
+        venue_key = "tw" if venue == "TW" else "foreign"
+        anchors: list[tuple[str, float]] = []
+        for m in portfolio.get("months", []):
+            ym = m.get("month")
+            for h in m.get(venue_key, {}).get("holdings", []):
+                if h.get("code") == code:
+                    qty = float(h.get("qty", 0) or 0)
+                    if qty > 0 and ym:
+                        anchors.append((ym, qty))
+                    break
+        anchors.sort()
+        deltas = _qty_history_for_symbol(portfolio, code, venue)
+        adjusted = dict(filled)
+        for i in range(1, len(anchors)):
+            prev_ym, prev_qty = anchors[i - 1]
+            curr_ym, curr_qty = anchors[i]
+            prev_me = month_end_iso(prev_ym)
+            curr_me = month_end_iso(curr_ym)
+            intra = sum(q for td, q in deltas if prev_me < td <= curr_me)
+            expected = prev_qty + intra
+            if expected <= 1 or curr_qty <= expected * 1.5:
+                continue
+            split_factor = curr_qty / expected
+            month_prices = sorted(
+                (d, adjusted[d]) for d in adjusted
+                if d[:7] == curr_ym and adjusted[d] > 0
+            )
+            split_day = None
+            target = 1.0 / split_factor
+            for j in range(1, len(month_prices)):
+                d_prev, c_prev = month_prices[j - 1]
+                d_curr, c_curr = month_prices[j]
+                if c_prev <= 0:
+                    continue
+                ratio = c_curr / c_prev
+                if abs(ratio - target) / target < 0.15:
+                    split_day = d_curr
+                    break
+            if split_day is None:
+                # No price-drop signal — assume the split landed on the
+                # month-end (worst case scales the whole month, which still
+                # beats letting MV spike 22×).
+                split_day = curr_me
+            # Only days WITHIN the split month and BEFORE the split day
+            # need price-scaling. PDF holdings for prior months carry
+            # pre-split qty already, so their MV (pre-split qty × pre-split
+            # close) is correct as-is — no scaling needed there.
+            for d in list(adjusted.keys()):
+                if d[:7] == curr_ym and d < split_day:
+                    adjusted[d] = adjusted[d] / split_factor
+        return adjusted
+
+    tw_close_filled = {
+        code: _split_adjusted("TW", code, filled)
+        for code, filled in tw_close_filled.items()
+    }
+    foreign_close_filled = {
+        code: _split_adjusted("Foreign", code, filled)
+        for code, filled in foreign_close_filled.items()
+    }
+
+    # Pre-compute per-day qty per symbol once — anchored to PDF holdings so
+    # stock splits don't drift the daily share count.
+    tw_qty_by_date = {
+        code: _qty_per_priced_date_for_symbol(portfolio, code, "TW", priced_dates)
+        for code in tw_codes
+    }
+    foreign_qty_by_date = {
+        code: _qty_per_priced_date_for_symbol(portfolio, code, "Foreign", priced_dates)
+        for code in foreign_codes
+    }
+
+    # Synthesized broker-cash schedule. The daily layer has no source for
+    # broker cash balances, so we approximate: anchor at 0 on the first
+    # priced day and accumulate trade.net_twd as we walk forward. Buys make
+    # net_twd negative (cash leaves broker → buys position); sells make it
+    # positive (cash credited). Without this offset, equity_twd plunges on
+    # rotation days because the MV change from a sale isn't matched by the
+    # cash credit. With it, mv − net_twd stays conserved across a buy/sell
+    # pair (modulo fees, which are real costs).
+    #
+    # Caveats: external bank↔broker transfers aren't dated daily, so deposit
+    # days appear flat instead of jumping. Dividend credits and broker-side
+    # fees outside trades are also missing. Within a month with no external
+    # flows this is exact for rotations.
+    trades_chrono: list[tuple[str, float]] = sorted(
+        (
+            (_normalize_trade_date(t["date"]), float(t.get("net_twd") or 0))
+            for t in portfolio.get("summary", {}).get("all_trades", [])
+        ),
+        key=lambda r: r[0],
+    )
+
     n_positions = 0
     n_portfolio = 0
     with store.connect_rw() as conn:
+        trade_idx = 0
+        running_cash_twd = 0.0
         for d in priced_dates:
-            day_equity = 0.0
+            while (
+                trade_idx < len(trades_chrono)
+                and trades_chrono[trade_idx][0] <= d
+            ):
+                running_cash_twd += trades_chrono[trade_idx][1]
+                trade_idx += 1
+
+            day_mv_twd = 0.0
             day_n = 0
             day_fx_usd = fx_filled.get("USD", {}).get(d, 0.0)
 
             # TW positions — local == TWD, mv_twd == mv_local
-            for code, changes in tw_qty_changes.items():
-                qty = sum(q for date_, q in changes if date_ <= d)
+            for code, qty_by_date in tw_qty_by_date.items():
+                qty = qty_by_date.get(d, 0.0)
                 if qty <= 0:
                     continue
-                close = all_prices.get((d, code))
+                close = tw_close_filled.get(code, {}).get(d)
+                if close is None:
+                    # Last resort: PDF-month ref_price for the month of d.
+                    # NOTE — same-month-only fallback. If the symbol is held
+                    # mid-month but exits before the next month-end, it is
+                    # absent from that month's holdings table, so this lookup
+                    # returns None and the row is skipped below — silently
+                    # under-counting equity_twd for the holding window. Used
+                    # to compound the TWSE-WAF circuit-breaker bug; now that
+                    # TW prices route through yfinance the daily-price path
+                    # almost always succeeds and this fallback rarely fires.
+                    # If a future regression brings the fallback back into
+                    # play, walk back through prior months' anchors instead
+                    # of giving up at d[:7].
+                    close = ref_price_by_month_code["tw"].get(f"{code}|{d[:7]}")
                 if close is None:
                     continue
                 mv_local = qty * close
@@ -365,15 +625,17 @@ def _derive_positions_and_portfolio(
                     (d, code, qty, cost, mv_local, mv_local, "現股", "pdf"),
                 )
                 n_positions += 1
-                day_equity += mv_local
+                day_mv_twd += mv_local
                 day_n += 1
 
             # Foreign positions — convert mv_local via fx_filled
-            for code, changes in foreign_qty_changes.items():
-                qty = sum(q for date_, q in changes if date_ <= d)
+            for code, qty_by_date in foreign_qty_by_date.items():
+                qty = qty_by_date.get(d, 0.0)
                 if qty <= 0:
                     continue
-                close = all_prices.get((d, code))
+                close = foreign_close_filled.get(code, {}).get(d)
+                if close is None:
+                    close = ref_price_by_month_code["foreign"].get(f"{code}|{d[:7]}")
                 if close is None:
                     continue
                 ccy = foreign_currency.get(code, "USD")
@@ -402,22 +664,24 @@ def _derive_positions_and_portfolio(
                     (d, code, qty, cost, mv_local, mv_twd, "foreign", "pdf"),
                 )
                 n_positions += 1
-                day_equity += mv_twd
+                day_mv_twd += mv_twd
                 day_n += 1
 
-            if day_n == 0:
+            if day_n == 0 and running_cash_twd == 0.0:
                 continue
+            day_equity_twd = day_mv_twd + running_cash_twd
             conn.execute(
                 """
                 INSERT INTO portfolio_daily(
                     date, equity_twd, cash_twd, fx_usd_twd, n_positions, has_overlay
-                ) VALUES (?, ?, NULL, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, 0)
                 ON CONFLICT(date) DO UPDATE SET
                     equity_twd = excluded.equity_twd,
+                    cash_twd = excluded.cash_twd,
                     fx_usd_twd = excluded.fx_usd_twd,
                     n_positions = excluded.n_positions
                 """,
-                (d, day_equity, day_fx_usd, day_n),
+                (d, day_equity_twd, running_cash_twd, day_fx_usd, day_n),
             )
             n_portfolio += 1
 
@@ -440,6 +704,8 @@ def _persist_symbol_prices(
     there (so OTC symbols land as 'tpex', not 'twse'). The runner only
     handles the prices table.
     """
+    if not rows:
+        return 0
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with store.connect_rw() as conn:
         for r in rows:
@@ -460,6 +726,8 @@ def _persist_symbol_prices(
 
 def _persist_fx_rows(store: DailyStore, ccy: str, rows: list[dict]) -> int:
     """UPSERT fx_daily rows for one currency. Idempotent on (date, ccy) PK."""
+    if not rows:
+        return 0
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with store.connect_rw() as conn:
         for r in rows:
@@ -496,7 +764,10 @@ def run_fx_backfill(
     for ccy in sorted(_foreign_currencies_in_scope(portfolio)):
         log.info("fx backfill: %s [%s..%s]", ccy, floor, today)
         rows = fetch_with_dlq(
-            store, "fx_rates", ccy, get_fx_rates, ccy, floor, today
+            store, "fx_rates", ccy,
+            lambda c=ccy, s=floor, e=today, t=today: get_fx_rates(
+                c, s, e, store=store, today=t,
+            ),
         )
         if rows is None:
             continue
@@ -523,6 +794,7 @@ def run_foreign_backfill(
     latest_month = _latest_data_month(portfolio)
 
     skipped: list[str] = []
+    skip_reasons: dict[str, str] = {}
     fetched: list[str] = []
     rows_written = 0
     processed = 0
@@ -539,6 +811,9 @@ def run_foreign_backfill(
         )
         if window is None:
             skipped.append(code)
+            skip_reasons[code] = describe_skip(
+                entry["trade_dates"], entry["held_months"], floor,
+            )
             continue
         if only_codes is not None and code not in only_codes:
             continue
@@ -548,8 +823,8 @@ def run_foreign_backfill(
         log.info("foreign backfill: %s [%s..%s]", code, start, end)
         rows = fetch_with_dlq(
             store, "foreign_prices", code,
-            lambda c=code, ccy=currency, s=start, e=end: get_prices(
-                c, ccy, s, e, store=store
+            lambda c=code, ccy=currency, s=start, e=end, t=today: get_prices(
+                c, ccy, s, e, store=store, today=t,
             ),
         )
         if rows is None:
@@ -560,33 +835,149 @@ def run_foreign_backfill(
 
     return {
         "skipped": skipped,
+        "skip_reasons": skip_reasons,
         "fetched": fetched,
         "price_rows_written": rows_written,
     }
 
 
-def run_full_backfill(
+def run_benchmark_backfill(
     store: DailyStore,
-    portfolio_path: Path | str,
     floor: str = BACKFILL_FLOOR_DEFAULT,
     today: str | None = None,
 ) -> dict[str, Any]:
-    """End-to-end Phase 6 backfill: TW prices, FX rates, foreign prices,
-    then derive positions_daily / portfolio_daily.
+    """Fetch daily yfinance prices for benchmark strategy tickers.
 
-    The three sub-runs are independent enough that any one can fail (DLQ
-    in Phase 10) without blocking the others. The derivation pass must
-    run last because it consumes prices + fx_daily.
+    Strategy tickers (`0050.TW`, `SPY`, `QQQ`, etc.) are fetched directly
+    via yfinance — they bypass the TW/foreign router because their Yahoo
+    symbols already carry the venue suffix and the router would otherwise
+    probe TWSE for symbols that don't exist there. Rows land in the same
+    `prices` table as portfolio tickers; key collisions are impossible
+    because portfolio rows use bare codes (`0050`, `2330`) while strategy
+    rows use Yahoo-suffixed (`0050.TW`, `2330.TW`).
     """
-    portfolio_path = Path(portfolio_path)
-    portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
-    today = today or _today_iso()
-    latest_month = _latest_data_month(portfolio)
+    from app import benchmarks as bm  # local import to avoid eager yfinance import
 
-    # 1. TW prices (wrapped in fetch_with_dlq per Phase 10)
-    tw_skipped: list[str] = []
-    tw_fetched: list[str] = []
-    tw_rows = 0
+    today = today or _today_iso()
+    tickers: set[tuple[str, str]] = set()
+    for strat in bm.STRATEGIES:
+        ccy = "TWD" if strat.market == "TW" else "USD"
+        for t in strat.weights:
+            tickers.add((t, ccy))
+
+    fetched: list[str] = []
+    rows_written = 0
+    for ticker, ccy in sorted(tickers):
+        log.info("benchmark backfill: %s [%s..%s]", ticker, floor, today)
+        rows = fetch_with_dlq(
+            store, "benchmark_prices", ticker,
+            lambda t=ticker, s=floor, e=today, td=today: get_yfinance_prices(
+                t, s, e, store=store, today=td,
+            ),
+        )
+        if rows is None:
+            continue
+        # Tag with symbol/currency/source — get_yfinance_prices returns
+        # bare {date, close, volume} rows (the price_sources router does
+        # the tagging in the normal portfolio path, but we bypass it here).
+        tagged = [
+            {**r, "symbol": ticker, "currency": ccy, "source": "yfinance"}
+            for r in rows
+        ]
+        rows_written += _persist_symbol_prices(store, ticker, tagged)
+        fetched.append(ticker)
+
+    return {"fetched": fetched, "price_rows_written": rows_written}
+
+
+@dataclass
+class FetchTask:
+    """One unit of network work for the round-robin orchestrator.
+
+    Each task carries everything needed to execute, persist, and (on
+    second-pass failure) emit a DLQ row. `upstream` groups tasks for
+    round-robin scheduling and stats accumulation; `dlq_task_type`
+    matches the existing `failed_tasks.task_type` taxonomy."""
+
+    upstream: str           # tw | fx | foreign | benchmark
+    target: str             # symbol or ccy — used in DLQ writes + log lines
+    descriptor: str         # human label for log lines, e.g. "2330 [..]"
+    dlq_task_type: str      # tw_prices | fx_rates | foreign_prices | benchmark_prices
+    fetch_fn: "Callable[[], list[dict]]"
+    persist_fn: "Callable[[list[dict]], int]"
+
+
+def _round_robin(queues: dict[str, list[FetchTask]]) -> Iterable[FetchTask]:
+    """Yield one task per non-empty queue per cycle until all drain.
+
+    Insertion order of the queues dict defines the rotation order:
+    tw → fx → foreign → benchmark → tw → … This spreads consecutive
+    upstream calls across different APIs so no single one (e.g. TWSE's
+    WAF) sees back-to-back hits."""
+    while any(queues.values()):
+        for upstream in list(queues.keys()):
+            if queues[upstream]:
+                yield queues[upstream].pop(0)
+
+
+def _try_fetch(fn) -> tuple[Any, BaseException | None]:
+    """Call fn; return (rows, None) on success, (None, exc) on failure.
+    Distinct from fetch_with_dlq: this never writes to the DLQ — that's
+    the caller's choice based on which retry pass we're on."""
+    try:
+        return (fn(), None)
+    except Exception as exc:  # noqa: BLE001 — boundary by design
+        return (None, exc)
+
+
+def _record_dlq_failure(
+    store: DailyStore, task_type: str, target: str, exc: BaseException
+) -> None:
+    """Mirror of fetch_with_dlq's exception branch — writes / bumps a row
+    in failed_tasks. Used by the deferred-retry pass when a task fails a
+    second time."""
+    message = f"{type(exc).__name__}: {exc}"
+    now = _now_utc_iso()
+    log.warning("retry pass: %s/%s failed again: %s", task_type, target, message)
+    with store.connect_rw() as conn:
+        existing = conn.execute(
+            """
+            SELECT id, attempts FROM failed_tasks
+            WHERE task_type = ? AND target = ? AND resolved_at IS NULL
+            """,
+            (task_type, target),
+        ).fetchone()
+        if existing is not None:
+            conn.execute(
+                """
+                UPDATE failed_tasks
+                SET attempts = ?, last_attempt_at = ?, error_message = ?
+                WHERE id = ?
+                """,
+                (existing["attempts"] + 1, now, message, existing["id"]),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO failed_tasks(
+                    task_type, target, error_message,
+                    attempts, first_seen_at, last_attempt_at
+                ) VALUES (?, ?, ?, 1, ?, ?)
+                """,
+                (task_type, target, message, now, now),
+            )
+
+
+def _build_tw_tasks(
+    store: DailyStore,
+    portfolio: dict,
+    floor: str,
+    today: str,
+    latest_month: str,
+) -> tuple[list[FetchTask], list[str], dict[str, str]]:
+    tasks: list[FetchTask] = []
+    skipped: list[str] = []
+    skip_reasons: dict[str, str] = {}
     for entry in iter_tw_symbols_with_metadata(portfolio):
         code = entry["code"]
         window = compute_fetch_window(
@@ -597,33 +988,228 @@ def run_full_backfill(
             today=today,
         )
         if window is None:
-            tw_skipped.append(code)
+            skipped.append(code)
+            skip_reasons[code] = describe_skip(
+                entry["trade_dates"], entry["held_months"], floor,
+            )
             continue
         start, end = window
-        rows = fetch_with_dlq(
-            store, "tw_prices", code,
-            lambda c=code, s=start, e=end: get_prices(c, "TWD", s, e, store=store),
+        tasks.append(FetchTask(
+            upstream="tw",
+            target=code,
+            descriptor=f"{code} [{start}..{end}]",
+            dlq_task_type="tw_prices",
+            fetch_fn=(lambda c=code, s=start, e=end:
+                      get_prices(c, "TWD", s, e, store=store, today=today)),
+            persist_fn=(lambda rows, c=code: _persist_symbol_prices(store, c, rows)),
+        ))
+    return tasks, skipped, skip_reasons
+
+
+def _build_fx_tasks(
+    store: DailyStore, portfolio: dict, floor: str, today: str,
+) -> list[FetchTask]:
+    tasks: list[FetchTask] = []
+    for ccy in sorted(_foreign_currencies_in_scope(portfolio)):
+        tasks.append(FetchTask(
+            upstream="fx",
+            target=ccy,
+            descriptor=f"{ccy} [{floor}..{today}]",
+            dlq_task_type="fx_rates",
+            fetch_fn=(lambda c=ccy, s=floor, e=today:
+                      get_fx_rates(c, s, e, store=store, today=today)),
+            persist_fn=(lambda rows, c=ccy: _persist_fx_rows(store, c, rows)),
+        ))
+    return tasks
+
+
+def _build_foreign_tasks(
+    store: DailyStore,
+    portfolio: dict,
+    floor: str,
+    today: str,
+    latest_month: str,
+) -> tuple[list[FetchTask], list[str], dict[str, str]]:
+    tasks: list[FetchTask] = []
+    skipped: list[str] = []
+    skip_reasons: dict[str, str] = {}
+    for entry in iter_foreign_symbols_with_metadata(portfolio):
+        code = entry["code"]
+        currency = entry["currency"]
+        window = compute_fetch_window(
+            trade_dates=entry["trade_dates"],
+            held_months=entry["held_months"],
+            latest_data_month=latest_month,
+            floor=floor,
+            today=today,
         )
-        if rows is None:
+        if window is None:
+            skipped.append(code)
+            skip_reasons[code] = describe_skip(
+                entry["trade_dates"], entry["held_months"], floor,
+            )
             continue
-        tw_rows += _persist_symbol_prices(store, code, rows)
-        tw_fetched.append(code)
+        start, end = window
+        tasks.append(FetchTask(
+            upstream="foreign",
+            target=code,
+            descriptor=f"{code} ({currency}) [{start}..{end}]",
+            dlq_task_type="foreign_prices",
+            fetch_fn=(lambda c=code, ccy=currency, s=start, e=end:
+                      get_prices(c, ccy, s, e, store=store, today=today)),
+            persist_fn=(lambda rows, c=code: _persist_symbol_prices(store, c, rows)),
+        ))
+    return tasks, skipped, skip_reasons
 
-    # 2. FX
-    fx_summary = run_fx_backfill(store, portfolio_path, floor=floor, today=today)
 
-    # 3. Foreign equities
-    fr_summary = run_foreign_backfill(
-        store, portfolio_path, floor=floor, today=today
+def _build_benchmark_tasks(
+    store: DailyStore, floor: str, today: str,
+) -> list[FetchTask]:
+    from app import benchmarks as bm  # local import: avoid eager yfinance load
+    seen: set[tuple[str, str]] = set()
+    for strat in bm.STRATEGIES:
+        ccy = "TWD" if strat.market == "TW" else "USD"
+        for t in strat.weights:
+            seen.add((t, ccy))
+
+    tasks: list[FetchTask] = []
+    for ticker, ccy in sorted(seen):
+        def make_persist(t: str, c: str):
+            def persist(rows: list[dict]) -> int:
+                tagged = [
+                    {**r, "symbol": t, "currency": c, "source": "yfinance"}
+                    for r in rows
+                ]
+                return _persist_symbol_prices(store, t, tagged)
+            return persist
+
+        tasks.append(FetchTask(
+            upstream="benchmark",
+            target=ticker,
+            descriptor=f"{ticker} [{floor}..{today}]",
+            dlq_task_type="benchmark_prices",
+            fetch_fn=(lambda t=ticker, s=floor, e=today:
+                      get_yfinance_prices(t, s, e, store=store, today=today)),
+            persist_fn=make_persist(ticker, ccy),
+        ))
+    return tasks
+
+
+def run_full_backfill(
+    store: DailyStore,
+    portfolio_path: Path | str,
+    floor: str = BACKFILL_FLOOR_DEFAULT,
+    today: str | None = None,
+    max_failures_per_market: int = 3,
+) -> dict[str, Any]:
+    """End-to-end backfill: TW + FX + foreign + benchmark prices, derived
+    positions, Shioaji overlay.
+
+    Round-robin scheduling across upstreams (tw → fx → foreign → benchmark)
+    spreads consecutive calls across different APIs so no single upstream
+    sees back-to-back hits. On per-task failure, the task is deferred to
+    a single retry pass; second-pass failures land in `failed_tasks`.
+
+    Circuit breaker: when an upstream accumulates `max_failures_per_market`
+    fetch failures (across both passes), every remaining task in that
+    upstream is short-circuited — both not-yet-attempted first-pass tasks
+    and already-deferred tasks. A circuit-broken task still gets a DLQ row
+    so the operator can see what was abandoned.
+    """
+    portfolio_path = Path(portfolio_path)
+    portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
+    today = today or _today_iso()
+    latest_month = _latest_data_month(portfolio)
+
+    # Build queues — task descriptors capture closures over (start, end, today).
+    tw_tasks, tw_skipped, tw_skip_reasons = _build_tw_tasks(
+        store, portfolio, floor, today, latest_month,
     )
+    fx_tasks = _build_fx_tasks(store, portfolio, floor, today)
+    fr_tasks, fr_skipped, fr_skip_reasons = _build_foreign_tasks(
+        store, portfolio, floor, today, latest_month,
+    )
+    bm_tasks = _build_benchmark_tasks(store, floor, today)
 
-    # 4. Derive positions_daily + portfolio_daily
+    # Insertion order defines round-robin rotation.
+    queues: dict[str, list[FetchTask]] = {
+        "tw": list(tw_tasks),
+        "fx": list(fx_tasks),
+        "foreign": list(fr_tasks),
+        "benchmark": list(bm_tasks),
+    }
+
+    fetched: dict[str, list[str]] = {"tw": [], "fx": [], "foreign": [], "benchmark": []}
+    rows_by: dict[str, int] = {"tw": 0, "fx": 0, "foreign": 0, "benchmark": 0}
+    deferred: list[FetchTask] = []
+    failures_by_upstream: dict[str, int] = {k: 0 for k in queues}
+    tripped: set[str] = set()
+    breaker_skipped: dict[str, list[str]] = {k: [] for k in queues}
+
+    def _note_failure(upstream: str) -> None:
+        failures_by_upstream[upstream] += 1
+        if (
+            upstream not in tripped
+            and failures_by_upstream[upstream] >= max_failures_per_market
+        ):
+            tripped.add(upstream)
+            log.warning(
+                "%s: circuit breaker tripped after %d failures — "
+                "skipping remaining tasks in this market",
+                upstream, failures_by_upstream[upstream],
+            )
+
+    total = sum(len(q) for q in queues.values())
+    log.info("=== Phase 1/3: Round-robin fetch (%d task(s)) ===", total)
+    for task in _round_robin(queues):
+        if task.upstream in tripped:
+            breaker_skipped[task.upstream].append(task.target)
+            continue
+        log.info("%s: %s", task.upstream, task.descriptor)
+        rows, exc = _try_fetch(task.fetch_fn)
+        if exc is not None:
+            log.warning(
+                "%s: %s failed (%s) — deferring", task.upstream, task.target, exc,
+            )
+            _note_failure(task.upstream)
+            deferred.append(task)
+            continue
+        n = task.persist_fn(rows or [])
+        fetched[task.upstream].append(task.target)
+        rows_by[task.upstream] += n
+
+    if deferred:
+        log.info("=== Phase 2/3: Retry pass (%d deferred) ===", len(deferred))
+        for task in deferred:
+            if task.upstream in tripped:
+                breaker_skipped[task.upstream].append(task.target)
+                _record_dlq_failure(
+                    store, task.dlq_task_type, task.target,
+                    RuntimeError(
+                        f"circuit_breaker: {task.upstream} market exceeded "
+                        f"{max_failures_per_market} failures"
+                    ),
+                )
+                continue
+            log.info("retry %s: %s", task.upstream, task.descriptor)
+            rows, exc = _try_fetch(task.fetch_fn)
+            if exc is not None:
+                _note_failure(task.upstream)
+                _record_dlq_failure(store, task.dlq_task_type, task.target, exc)
+                continue
+            n = task.persist_fn(rows or [])
+            fetched[task.upstream].append(task.target)
+            rows_by[task.upstream] += n
+    else:
+        log.info("=== Phase 2/3: Retry pass — skipped (no deferrals) ===")
+
+    log.info("=== Phase 3/3: Derive positions + portfolio + overlay ===")
     derived = _derive_positions_and_portfolio(store, portfolio)
 
-    # 5. Phase 11 overlay: post-PDF gap filled from Shioaji (no-op without
-    #    creds). Layered AFTER the PDF derivation so PDF rows are already
-    #    in place; the overlay only writes to dates strictly after the
-    #    last PDF month-end and never overwrites source='pdf' rows.
+    # Shioaji overlay — post-PDF gap filled from broker (no-op without creds).
+    # Layered AFTER the PDF derivation so PDF rows are already in place; the
+    # overlay only writes to dates strictly after the last PDF month-end and
+    # never overwrites source='pdf' rows.
     from . import trade_overlay
     from .shioaji_client import ShioajiClient
     overlay_summary = {"overlay_trades": 0, "skipped_reason": "no_gap"}
@@ -642,12 +1228,20 @@ def run_full_backfill(
         "today": today,
         "floor": floor,
         "tw_skipped": tw_skipped,
-        "tw_fetched": tw_fetched,
-        "tw_price_rows": tw_rows,
-        "fx_rows": fx_summary["fx_rows_written"],
-        "foreign_skipped": fr_summary["skipped"],
-        "foreign_fetched": fr_summary["fetched"],
-        "foreign_price_rows": fr_summary["price_rows_written"],
+        "tw_skip_reasons": tw_skip_reasons,
+        "tw_fetched": fetched["tw"],
+        "tw_price_rows": rows_by["tw"],
+        "fx_rows": rows_by["fx"],
+        "foreign_skipped": fr_skipped,
+        "foreign_skip_reasons": fr_skip_reasons,
+        "foreign_fetched": fetched["foreign"],
+        "foreign_price_rows": rows_by["foreign"],
+        "benchmark_fetched": fetched["benchmark"],
+        "benchmark_price_rows": rows_by["benchmark"],
+        "deferred_count": len(deferred),
+        "tripped_markets": sorted(tripped),
+        "circuit_breaker_skipped": breaker_skipped,
+        "max_failures_per_market": max_failures_per_market,
         "overlay": overlay_summary,
         **derived,
     }
@@ -662,6 +1256,7 @@ def run_tw_backfill(
     today: str | None = None,
     limit: int | None = None,
     only_codes: set[str] | None = None,
+    max_failures_per_market: int = 3,
 ) -> dict[str, Any]:
     """Run a TW-only backfill against the given DailyStore.
 
@@ -676,6 +1271,27 @@ def run_tw_backfill(
 
     `only_codes`: if set, only fetch these symbols. Skip-tracking still
     runs for the rest.
+
+    `max_failures_per_market`: trip the TW circuit breaker after this many
+    fetch failures and skip every remaining symbol. Aligned with the
+    multi-market breaker in run_full_backfill.
+
+    KNOWN HAZARD — circuit-breaker silent loss (legacy from TWSE-direct era):
+    when the breaker trips, alphabetically-later codes are added to
+    `breaker_skipped` *without ever being attempted* and never enter
+    `failed_tasks`, so `retry_failed_tasks.py` cannot recover them. A
+    cold-start run during a TWSE-WAF flare therefore left ~half the user's
+    portfolio without daily prices, and `_derive_positions_and_portfolio`
+    silently dropped any mid-month position whose code lacked both a daily
+    price and a same-month PDF ref_price (i.e. positions exited before the
+    next month-end). This caused systematic mid-month under-counting of
+    equity_twd.
+
+    Now mitigated: TW is routed through yfinance (.TW / .TWO probing) in
+    app/price_sources.py, removing the TWSE freeze that was the dominant
+    failure mode. The breaker is retained as defence-in-depth, but if it
+    ever trips again, breaker-skipped codes should also be persisted to
+    failed_tasks so retry_failed_tasks.py can resume them.
     """
     portfolio_path = Path(portfolio_path)
     portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
@@ -684,8 +1300,12 @@ def run_tw_backfill(
     latest_month = _latest_data_month(portfolio)
 
     skipped: list[str] = []
+    skip_reasons: dict[str, str] = {}
     fetched: list[str] = []
+    breaker_skipped: list[str] = []
     rows_written = 0
+    failures = 0
+    tripped = False
 
     candidates = list(iter_tw_symbols_with_metadata(portfolio))
     processed = 0
@@ -700,21 +1320,38 @@ def run_tw_backfill(
             today=today,
         )
         if window is None:
+            reason = describe_skip(
+                entry["trade_dates"], entry["held_months"], floor,
+            )
             skipped.append(code)
-            log.info("backfill: skipping %s (out of floor)", code)
+            skip_reasons[code] = reason
+            log.info("backfill: skipping %s (%s)", code, reason)
             continue
         if only_codes is not None and code not in only_codes:
             continue
         if limit is not None and processed >= limit:
             log.info("backfill: --limit reached at %d, remaining symbols deferred", limit)
             break
+        if tripped:
+            breaker_skipped.append(code)
+            continue
         start, end = window
         log.info("backfill: %s [%s..%s]", code, start, end)
         rows = fetch_with_dlq(
             store, "tw_prices", code,
-            lambda c=code, s=start, e=end: get_prices(c, "TWD", s, e, store=store),
+            lambda c=code, s=start, e=end, t=today: get_prices(
+                c, "TWD", s, e, store=store, today=t,
+            ),
         )
         if rows is None:
+            failures += 1
+            if failures >= max_failures_per_market:
+                tripped = True
+                log.warning(
+                    "tw: circuit breaker tripped after %d failures — "
+                    "skipping remaining symbols",
+                    failures,
+                )
             continue
         rows_written += _persist_symbol_prices(store, code, rows)
         fetched.append(code)
@@ -727,8 +1364,12 @@ def run_tw_backfill(
         "today": today,
         "floor": floor,
         "skipped": skipped,
+        "skip_reasons": skip_reasons,
         "fetched": fetched,
         "price_rows_written": rows_written,
+        "tripped_markets": ["tw"] if tripped else [],
+        "circuit_breaker_skipped": {"tw": breaker_skipped} if breaker_skipped else {},
+        "max_failures_per_market": max_failures_per_market,
         **derived,
     }
     log.info("backfill summary: %s", summary)

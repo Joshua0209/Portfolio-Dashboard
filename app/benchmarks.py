@@ -208,6 +208,90 @@ def fetch_monthly_prices(
 # ---------------------------------------------------------------------------
 
 
+def strategy_daily_returns(
+    strategy: Strategy,
+    dates: list[str],
+    daily_store,
+) -> list[dict]:
+    """Per-day weighted TWR for a strategy across the given trading dates.
+
+    Reads daily closes from `daily_store.prices` (populated by
+    `run_benchmark_backfill`). Each ticker's price is forward-filled to
+    cover non-trading days on the strategy's home market (e.g. SPY has
+    no quote on a TW-only trading day, and vice versa). On the first
+    date a ticker is unpriced, the strategy excludes that ticker's weight
+    for that day; once any ticker prices in, forward-fill takes over.
+
+    Returns [{date, period_return, cum_return}], one row per date.
+    """
+    if not dates:
+        return []
+
+    # Pre-fetch each ticker's full series, indexed by date.
+    series: dict[str, dict[str, float]] = {}
+    for ticker in strategy.weights:
+        rows = daily_store.get_ticker_history(
+            ticker, start=dates[0], end=dates[-1]
+        )
+        series[ticker] = {r["date"]: float(r["close"]) for r in rows}
+
+    # Forward-fill each ticker so a TW holiday doesn't drop SPY out of
+    # the index, etc.
+    filled: dict[str, dict[str, float]] = {}
+    for ticker, by_date in series.items():
+        sorted_dates = sorted(by_date)
+        last: float | None = None
+        ff: dict[str, float] = {}
+        idx = 0
+        for d in dates:
+            while idx < len(sorted_dates) and sorted_dates[idx] <= d:
+                last = by_date[sorted_dates[idx]]
+                idx += 1
+            if last is not None:
+                ff[d] = last
+        filled[ticker] = ff
+
+    # Day 1 baseline = first day with at least one ticker priced. Earlier
+    # dates render cum_return = 0 (we have no basis to compare).
+    baseline: dict[str, float] = {}
+    out: list[dict] = []
+    cum_wealth = 1.0
+    for i, d in enumerate(dates):
+        if not baseline:
+            for t in strategy.weights:
+                if d in filled[t]:
+                    baseline[t] = filled[t][d]
+            out.append({"date": d, "period_return": 0.0, "cum_return": 0.0})
+            continue
+
+        weighted_r = 0.0
+        any_priced = False
+        for t, w in strategy.weights.items():
+            prev_d = dates[i - 1]
+            p_now = filled[t].get(d)
+            p_prev = filled[t].get(prev_d)
+            if p_now is None or p_prev is None or p_prev == 0:
+                continue
+            weighted_r += w * ((p_now - p_prev) / p_prev)
+            any_priced = True
+
+        if any_priced:
+            cum_wealth *= 1.0 + weighted_r
+            out.append({
+                "date": d,
+                "period_return": weighted_r,
+                "cum_return": cum_wealth - 1.0,
+            })
+        else:
+            out.append({
+                "date": d,
+                "period_return": 0.0,
+                "cum_return": cum_wealth - 1.0,
+            })
+
+    return out
+
+
 def strategy_monthly_returns(
     strategy: Strategy, months: list[str]
 ) -> list[dict]:

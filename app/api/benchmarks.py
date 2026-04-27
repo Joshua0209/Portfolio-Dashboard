@@ -1,16 +1,12 @@
 """Benchmark comparison: portfolio TWR vs strategy TWR side-by-side."""
 from __future__ import annotations
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint, request
 
 from .. import analytics, benchmarks
-from ._helpers import envelope, store
+from ._helpers import daily_store, envelope, store, want_daily
 
 bp = Blueprint("benchmarks", __name__, url_prefix="/api/benchmarks")
-
-
-def _daily_store():
-    return current_app.extensions["daily_store"]
 
 
 @bp.get("/strategies")
@@ -44,8 +40,13 @@ def compare():
     strat_keys = [k.strip() for k in requested.split(",") if k.strip()]
 
     month_list = [m["month"] for m in months]
-    portfolio_returns = [m.get("period_return", 0) or 0 for m in months]
-    portfolio_cum = [m.get("cum_twr", 0) or 0 for m in months]
+    # Recompute via day_weighted so this matches /api/summary's TWR. The
+    # parser-stored period_return/cum_twr fields use the legacy mid_month
+    # method (~+193% over the demo period vs +152% under day_weighted) and
+    # would silently disagree with the Overview KPI.
+    pr_rows = analytics.period_returns(months, method="day_weighted")
+    portfolio_returns = [r["period_return"] for r in pr_rows]
+    portfolio_cum = analytics.cumulative_curve(portfolio_returns)
 
     portfolio_curve = [
         {"month": m, "period_return": pr, "cum_return": cr}
@@ -101,18 +102,54 @@ def compare():
         "strategies": strategies_out,
     }
 
-    # Daily portfolio overlay — strategy curves stay monthly. Mixing
-    # resolutions on one chart is fine: monthly strategy renders as
-    # step-points; daily portfolio as a continuous line.
-    if (request.args.get("resolution") or "").lower() == "daily":
-        equity_series = _daily_store().get_equity_curve()
+    # Daily portfolio overlay + daily strategy curves. Both render at
+    # daily precision when the daily store has rows.
+    if want_daily():
+        equity_series = daily_store().get_equity_curve()
         if equity_series:
-            flow_series = analytics.daily_external_flows(s.months)
-            daily_rows = analytics.daily_twr(equity_series, flow_series)
+            # Anchor the daily portfolio overlay to the monthly chain's
+            # month-end values via linear interpolation, matching the
+            # Performance page's chart treatment. The line lands exactly
+            # on portfolio.stats.twr_total at the last month-end, so a
+            # head-to-head against the strategy curves stays apples-to-
+            # apples (strategies still run their own daily Mod Dietz, but
+            # the comparison floor — your TWR — agrees with Overview).
+            from app.api.performance import _monthly_anchored_cum
+            daily_dates = [r["date"] for r in equity_series]
+            anchored_cum = _monthly_anchored_cum(daily_dates, months, portfolio_cum)
             body["portfolio_daily_curve"] = [
-                {"date": r["date"], "cum_return": r["cum_twr"]}
-                for r in daily_rows
+                {"date": d, "cum_return": c}
+                for d, c in zip(daily_dates, anchored_cum)
             ]
             body["resolution"] = "daily"
 
+            # Daily strategy curves over the same date window.
+            for s_out in body["strategies"]:
+                strat = benchmarks.get_strategy(s_out["key"])
+                if not strat:
+                    continue
+                rows_d = benchmarks.strategy_daily_returns(
+                    strat, daily_dates, daily_store()
+                )
+                s_out["curve_daily"] = rows_d
+
     return envelope(body)
+
+
+def _anchor_for_daily(
+    months: list[dict], monthly_cum: list[float], first_daily_date: str
+) -> float:
+    """Last monthly cum_twr strictly before first_daily_date, else 0.
+
+    See performance._anchor_for_daily — duplicated here to avoid a cross-
+    blueprint import. Both call sites need the same anchor semantics so
+    the Performance and Benchmark daily curves agree at every point.
+    """
+    first_ym = first_daily_date[:7]
+    anchor = 0.0
+    for i, m in enumerate(months):
+        if m["month"] >= first_ym:
+            break
+        if i < len(monthly_cum):
+            anchor = monthly_cum[i]
+    return anchor

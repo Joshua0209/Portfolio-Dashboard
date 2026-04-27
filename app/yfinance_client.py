@@ -60,7 +60,7 @@ def _download_daily(symbol: str, start: str, end: str):
     yf = _ensure_yf()
     # `end` is exclusive in yfinance, so bump by one day to make the
     # window inclusive on both ends.
-    return yf.download(
+    df = yf.download(
         symbol,
         start=start,
         end=_next_day_iso(end),
@@ -68,6 +68,13 @@ def _download_daily(symbol: str, start: str, end: str):
         progress=False,
         auto_adjust=True,
     )
+    # yfinance ≥0.2.40 returns single-symbol downloads with a MultiIndex
+    # on columns: ('Close', 'LITE') instead of 'Close'. Flatten so callers
+    # can read row["Close"] uniformly.
+    cols = getattr(df, "columns", None)
+    if cols is not None and getattr(cols, "nlevels", 1) > 1:
+        df = df.droplevel(1, axis=1)
+    return df
 
 
 def fetch_prices(symbol: str, start: str, end: str) -> list[dict]:

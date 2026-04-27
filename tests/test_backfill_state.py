@@ -53,10 +53,10 @@ def test_mark_failed_records_error_message():
     from app.backfill_state import BackfillState
 
     s = BackfillState()
-    s.mark_failed("twse fetch exploded")
+    s.mark_failed("yfinance fetch exploded")
     snap = s.snapshot()
     assert snap["state"] == "FAILED"
-    assert snap["error"] == "twse fetch exploded"
+    assert snap["error"] == "yfinance fetch exploded"
 
 
 def test_set_progress_round_trips_total_and_done():

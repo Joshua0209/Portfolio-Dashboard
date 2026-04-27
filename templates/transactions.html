@@ -30,29 +30,27 @@
   <div class="card">
     <div class="card-header">
       <h3 class="card-title">Trade log<span tabindex="0" class="info-icon" data-info="Every single trade ticket, filterable. Use the search + venue + month filters to drill into specific activity. Click 'Export CSV' to pull into Excel."></span></h3>
-      <div class="toolbar" style="margin: 0;">
-        <input id="q" class="input" placeholder="Search code or name…" style="width:200px;" />
-        <select id="venue" class="select"><option value="">All venues</option><option>TW</option><option>Foreign</option></select>
-        <select id="side" class="select">
-          <option value="">All sides</option>
-          <option value="buy">Buys only</option>
-          <option value="sell">Sells only</option>
-        </select>
-        <select id="month" class="select"><option value="">All months</option></select>
-        <button id="export-tx" class="btn">Export CSV</button>
-      </div>
+      <button id="export-tx" class="btn">Export CSV</button>
     </div>
-    <div class="table-wrap scroll-lg">
+    <div class="table-wrap">
       <table class="data" id="tx-table">
         <thead><tr>
-          <th>Date</th><th>Venue</th><th>Side</th><th>Code</th><th>Name</th>
-          <th class="num">Qty</th><th class="num">Price</th><th>Ccy</th>
-          <th class="num">Gross (TWD)</th><th class="num">Fee</th><th class="num">Tax</th><th class="num">Net (TWD)</th>
+          <th class="sortable" data-key="date">Date</th>
+          <th class="sortable" data-key="venue">Venue</th>
+          <th class="sortable" data-key="side">Side</th>
+          <th class="sortable" data-key="code">Code</th>
+          <th class="sortable" data-key="name">Name</th>
+          <th class="num sortable" data-key="qty">Qty</th>
+          <th class="num sortable" data-key="price">Price</th>
+          <th class="sortable" data-key="ccy">Ccy</th>
+          <th class="num sortable" data-key="gross_twd">Gross (TWD)</th>
+          <th class="num sortable" data-key="fee_twd">Fee</th>
+          <th class="num sortable" data-key="tax_twd">Tax</th>
+          <th class="num sortable" data-key="net_twd">Net (TWD)</th>
         </tr></thead>
         <tbody></tbody>
       </table>
     </div>
-    <div id="tx-pager"></div>
   </div>
 </div>
 {% endblock %}

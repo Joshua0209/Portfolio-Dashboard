@@ -21,6 +21,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -38,6 +39,7 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "failed_tasks",
         "reconcile_events",
         "meta",
+        "dates_checked",
     }
 )
 
@@ -114,6 +116,20 @@ CREATE TABLE IF NOT EXISTS reconcile_events (
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
+);
+
+-- Tombstone table: persists "we asked the upstream API for this symbol on
+-- this calendar day and got a definitive answer." A row's absence in
+-- `prices` for the same (symbol, date) means "no trade that day" iff the
+-- (symbol, date) is present here. Lets the backfill skip already-fetched
+-- ranges without inferring trading-day calendars.
+--
+-- Today never enters this table — today's data is always volatile until
+-- the market closes. The mark step clips effective_end to today - 1.
+CREATE TABLE IF NOT EXISTS dates_checked (
+    symbol  TEXT NOT NULL,
+    date    TEXT NOT NULL,
+    PRIMARY KEY (symbol, date)
 );
 """
 
@@ -220,12 +236,65 @@ class DailyStore:
                 (key, value),
             )
 
+    # --- dates_checked: tombstone for "asked & got definitive answer" ---------
+
+    def find_missing_dates(
+        self, symbol: str, start: str, end: str
+    ) -> list[str]:
+        """Sorted ISO calendar days in [start, end] not yet present in
+        dates_checked for this symbol. Includes weekends/holidays — the
+        caller is expected to either fetch the upstream's full response
+        (which covers them implicitly) or coalesce to the upstream's
+        granularity (e.g., calendar months for TWSE)."""
+        if end < start:
+            return []
+        with self.connect_ro() as conn:
+            rows = conn.execute(
+                "SELECT date FROM dates_checked "
+                "WHERE symbol = ? AND date >= ? AND date <= ?",
+                (symbol, start, end),
+            ).fetchall()
+        checked = {r["date"] for r in rows}
+        out: list[str] = []
+        d = date.fromisoformat(start)
+        e = date.fromisoformat(end)
+        while d <= e:
+            iso = d.isoformat()
+            if iso not in checked:
+                out.append(iso)
+            d += timedelta(days=1)
+        return out
+
+    def mark_dates_checked(
+        self, symbol: str, start: str, end: str
+    ) -> int:
+        """Insert (symbol, date) for every calendar day in [start, end].
+        Caller is responsible for any today-clip — this method does not
+        clip. Idempotent via INSERT OR IGNORE."""
+        if end < start:
+            return 0
+        rows: list[tuple[str, str]] = []
+        d = date.fromisoformat(start)
+        e = date.fromisoformat(end)
+        while d <= e:
+            rows.append((symbol, d.isoformat()))
+            d += timedelta(days=1)
+        with self.connect_rw() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO dates_checked(symbol, date) VALUES (?, ?)",
+                rows,
+            )
+        return len(rows)
+
     # --- read helpers (Phase 1: stubs returning empty results) ----------------
 
     def get_equity_curve(
         self, start: str | None = None, end: str | None = None
     ) -> list[dict[str, Any]]:
-        sql = "SELECT date, equity_twd, fx_usd_twd, n_positions, has_overlay FROM portfolio_daily"
+        sql = (
+            "SELECT date, equity_twd, cash_twd, fx_usd_twd, n_positions, "
+            "has_overlay FROM portfolio_daily"
+        )
         params: list[Any] = []
         clauses = []
         if start:
@@ -258,18 +327,13 @@ class DailyStore:
     def get_today_snapshot(self) -> dict[str, Any] | None:
         with self.connect_ro() as conn:
             row = conn.execute(
-                "SELECT date, equity_twd, fx_usd_twd, n_positions, has_overlay "
-                "FROM portfolio_daily ORDER BY date DESC LIMIT 1"
+                "SELECT date, equity_twd, cash_twd, fx_usd_twd, n_positions, "
+                "has_overlay FROM portfolio_daily ORDER BY date DESC LIMIT 1"
             ).fetchone()
         return dict(row) if row else None
 
     def get_latest_close(self, symbol: str) -> dict[str, Any] | None:
-        """Most recent close + currency + as-of date for one symbol.
-
-        Used by /api/tax and /api/summary to override month-end ref_price
-        with today's price so unrealized P&L reflects current prices, not
-        last statement close.
-        """
+        """Most recent close + currency + as-of date for one symbol."""
         with self.connect_ro() as conn:
             row = conn.execute(
                 "SELECT date, close, currency, source FROM prices "
@@ -277,6 +341,40 @@ class DailyStore:
                 (symbol,),
             ).fetchone()
         return dict(row) if row else None
+
+    def get_latest_closes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Most recent close per symbol — single batched query.
+
+        Returns {symbol: {date, close, currency, source}}. Symbols
+        with no rows in the prices table are omitted. Used by the
+        request-path repricing helper to avoid N+1 SELECTs across N
+        portfolio holdings.
+        """
+        if not symbols:
+            return {}
+        unique = list(dict.fromkeys(symbols))
+        placeholders = ",".join("?" * len(unique))
+        sql = f"""
+            SELECT p.date, p.symbol, p.close, p.currency, p.source
+            FROM prices p
+            INNER JOIN (
+                SELECT symbol, MAX(date) AS max_date
+                FROM prices
+                WHERE symbol IN ({placeholders})
+                GROUP BY symbol
+            ) m ON p.symbol = m.symbol AND p.date = m.max_date
+        """
+        with self.connect_ro() as conn:
+            rows = conn.execute(sql, unique).fetchall()
+        return {
+            r["symbol"]: {
+                "date": r["date"],
+                "close": r["close"],
+                "currency": r["currency"],
+                "source": r["source"],
+            }
+            for r in rows
+        }
 
     def get_positions_snapshot(self, date: str) -> list[dict[str, Any]]:
         """All open positions on a single trading day."""
@@ -290,6 +388,31 @@ class DailyStore:
                     (date,),
                 ).fetchall()
             ]
+
+    def get_positions_for_ticker(
+        self, symbol: str, start: str | None = None, end: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Daily position snapshots for one symbol — qty + cost + MV per
+        trading day. Used by /api/tickers/<code>?resolution=daily to drive
+        the Position-over-time and Cost-vs-MV charts at daily resolution.
+
+        Includes zero-qty rows so chart gaps are visible (a sell-to-flat
+        day appears as qty=0, mv=0). Caller can filter if undesired.
+        """
+        sql = (
+            "SELECT date, symbol, qty, cost_local, mv_local, mv_twd, "
+            "type, source FROM positions_daily WHERE symbol = ?"
+        )
+        params: list[Any] = [symbol]
+        if start:
+            sql += " AND date >= ?"
+            params.append(start)
+        if end:
+            sql += " AND date <= ?"
+            params.append(end)
+        sql += " ORDER BY date ASC"
+        with self.connect_ro() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
     def get_allocation_timeseries(
         self, start: str | None = None, end: str | None = None

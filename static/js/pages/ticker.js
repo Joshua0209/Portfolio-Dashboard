@@ -24,10 +24,22 @@
     if (data.daily_prices && data.daily_prices.points && data.daily_prices.points.length) {
       renderDailyPriceChart(data.daily_prices);
     }
-    renderPositionChart(data.position_history);
-    renderPnlChart(data.position_history);
+    // Prefer daily-resolution position history when the backend supplies
+    // it (only happens when the daily store has rows for this ticker).
+    // Falls back to monthly snapshots so closed positions and tickers
+    // outside the daily backfill window still render correctly.
+    const usesDaily = Array.isArray(data.position_history_daily)
+      && data.position_history_daily.length > 0;
+    const history = usesDaily ? data.position_history_daily : data.position_history;
+    renderPositionChart(history, usesDaily);
+    renderPnlChart(history, usesDaily);
     renderTrades(data.trades);
     renderDividends(data.dividends);
+  }
+
+  function labelOf(row, useDaily) {
+    if (useDaily) return row.date;
+    return fmt.month(row.month);
   }
 
   /**
@@ -172,9 +184,9 @@
     }
   }
 
-  function renderPositionChart(history) {
+  function renderPositionChart(history, useDaily) {
     const ctx = document.getElementById("chart-pos").getContext("2d");
-    const labels = history.map((h) => fmt.month(h.month));
+    const labels = history.map((h) => labelOf(h, useDaily));
     const qty = history.map((h) => h.qty);
     const price = history.map((h) => h.ref_price);
     new Chart(ctx, {
@@ -217,9 +229,9 @@
     });
   }
 
-  function renderPnlChart(history) {
+  function renderPnlChart(history, useDaily) {
     const ctx = document.getElementById("chart-pnl").getContext("2d");
-    const labels = history.map((h) => fmt.month(h.month));
+    const labels = history.map((h) => labelOf(h, useDaily));
     const cost = history.map((h) => h.cost_twd);
     const mv = history.map((h) => h.mkt_value_twd);
     new Chart(ctx, {
@@ -264,53 +276,45 @@
   }
 
   function renderTrades(trades) {
-    const tbody = document.querySelector("#trade-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!trades.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 7;
-      td.className = "table-empty";
-      td.textContent = "No trades";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-      return;
-    }
-    for (const t of trades) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.date(t.date), "text-mute"));
-      tr.appendChild(td(t.side || ""));
-      tr.appendChild(td(fmt.int(t.qty), "num"));
-      tr.appendChild(td(fmt.num(t.price, 2), "num"));
-      tr.appendChild(td(fmt.twd(t.gross_twd), "num"));
-      tr.appendChild(td(fmt.twd(t.fee_twd), "num text-mute"));
-      tr.appendChild(td(fmt.twd(t.net_twd), `num ${fmt.tone(t.net_twd)}`));
-      tbody.appendChild(tr);
-    }
+    window.dataTable({
+      tableId: "trade-table",
+      rows: trades || [],
+      searchKeys: ["side", "date"],
+      searchPlaceholder: "Search side or date…",
+      defaultSort: { key: "date", dir: "desc" },
+      colspan: 7,
+      pageSize: 25,
+      emptyText: "No trades",
+      row: (t) => [
+        td(fmt.date(t.date), "text-mute"),
+        td(t.side || ""),
+        td(fmt.int(t.qty), "num"),
+        td(fmt.num(t.price, 2), "num"),
+        td(fmt.twd(t.gross_twd), "num"),
+        td(fmt.twd(t.fee_twd), "num text-mute"),
+        td(fmt.twd(t.net_twd), `num ${fmt.tone(t.net_twd)}`),
+      ],
+    });
   }
 
   function renderDividends(divs) {
-    const tbody = document.querySelector("#div-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!divs.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 5;
-      td.className = "table-empty";
-      td.textContent = "No dividends";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-      return;
-    }
-    for (const d of divs) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.month(d.month)));
-      tr.appendChild(td(fmt.date(d.date), "text-mute"));
-      tr.appendChild(td(d.ccy || "", "text-mute"));
-      tr.appendChild(td(fmt.num(d.amount_local, 2), "num"));
-      tr.appendChild(td(fmt.twd(d.amount_twd), "num value-pos"));
-      tbody.appendChild(tr);
-    }
+    window.dataTable({
+      tableId: "div-table",
+      rows: divs || [],
+      searchKeys: ["ccy", "month", "date"],
+      searchPlaceholder: "Search month or ccy…",
+      defaultSort: { key: "date", dir: "desc" },
+      colspan: 5,
+      pageSize: 15,
+      emptyText: "No dividends",
+      row: (d) => [
+        td(fmt.month(d.month)),
+        td(fmt.date(d.date), "text-mute"),
+        td(d.ccy || "", "text-mute"),
+        td(fmt.num(d.amount_local, 2), "num"),
+        td(fmt.twd(d.amount_twd), "num value-pos"),
+      ],
+    });
   }
 
   function td(text, cls) {

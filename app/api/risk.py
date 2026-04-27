@@ -1,25 +1,21 @@
 """Risk metrics: drawdown, volatility, concentration."""
 from __future__ import annotations
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint
 
 from .. import analytics
 from .holdings import _holdings_for_month
-from ._helpers import envelope, store
+from ._helpers import daily_store, envelope, store, want_daily
 
 bp = Blueprint("risk", __name__, url_prefix="/api/risk")
 
 
-def _daily_store():
-    return current_app.extensions["daily_store"]
-
-
 def _daily_drawdown_curve():
-    """Build drawdown_curve from portfolio_daily — keyed by `date` instead
-    of `month`. Returns ([], current_dd) when daily layer is empty so the
-    caller can fall back to monthly transparently.
+    """Drawdown curve keyed by `date` instead of `month`. Returns
+    (None, None) when the daily layer is empty so the caller can fall
+    back to monthly.
     """
-    rows = _daily_store().get_drawdown_series()
+    rows = daily_store().get_drawdown_series()
     if not rows:
         return None, None
     curve = [
@@ -36,7 +32,7 @@ def _daily_drawdown_curve():
 
 @bp.get("")
 def risk():
-    use_daily = (request.args.get("resolution") or "").lower() == "daily"
+    use_daily = want_daily()
     s = store()
     months = s.months
     if not months:

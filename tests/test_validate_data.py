@@ -1,15 +1,17 @@
-"""Phase 7 acceptance tests for scripts/validate_data.py.
+"""Acceptance tests for scripts/validate_data.py.
 
-The script implements 5 integrity checks per spec §7:
+The script implements 4 integrity checks:
   (a) per-symbol gap detection in prices for every held symbol
   (b) symbol_market resolution coverage (no NULLs / no missing rows)
   (c) fx_daily has no gaps in held-position window
-  (d) cross-source agreement spot-check (≤0.5% diff)
-  (e) most-recent month-end portfolio_daily equity matches portfolio.json
+  (d) most-recent month-end portfolio_daily equity matches portfolio.json
 
 Each check returns a list of issues. The CLI exits 0 if all are empty,
-1 otherwise. The cross-source check (d) is mocked here — the test asserts
-the comparison logic, not yfinance behavior.
+1 otherwise.
+
+(Earlier revisions had a fifth cross-source agreement check comparing
+cached TWSE/TPEX prices to a fresh yfinance probe. With yfinance now the
+sole TW backend, both sides agree by construction — the check was removed.)
 """
 from __future__ import annotations
 
@@ -35,7 +37,7 @@ def _now() -> str:
 
 
 def _seed_prices(store: DailyStore, symbol: str, dates: list[str], close: float = 100.0,
-                  currency: str = "TWD", source: str = "twse") -> None:
+                  currency: str = "TWD", source: str = "yfinance") -> None:
     now = _now()
     with store.connect_rw() as conn:
         for d in dates:
@@ -113,7 +115,8 @@ def test_check_symbol_market_flags_missing_resolution(store: DailyStore) -> None
 
 def test_check_symbol_market_flags_unknown_market(store: DailyStore) -> None:
     """A held symbol cached as 'unknown' is also a problem — it means
-    neither TWSE nor TPEX recognized it, so we have no prices."""
+    yfinance recognized neither the `.TW` nor `.TWO` suffix, so we
+    couldn't pin a market and have no prices."""
     _seed_symbol_market(store, "5483", "unknown")
     issues = validate_data.check_symbol_market_coverage(store, {"5483"})
     assert len(issues) == 1
@@ -140,49 +143,7 @@ def test_check_fx_gaps_flags_missing_dates(store: DailyStore) -> None:
     assert "2025-08-18" in issues[0]["missing"]
 
 
-# --- Check (d): cross-source agreement ---------------------------------
-
-
-def test_check_cross_source_agreement_within_tolerance(store: DailyStore) -> None:
-    _seed_prices(store, "2330", ["2026-04-01"], close=1850.0)
-    # yfinance is mocked to return very close value (0.2% diff)
-    issues = validate_data.check_cross_source_agreement(
-        store,
-        symbols=["2330"],
-        sample_date="2026-04-01",
-        yfinance_fetch=lambda yf_sym, d: 1853.5,  # 1853.5 / 1850 = 1.0019 → 0.19%
-        tolerance_pct=0.5,
-    )
-    assert issues == []
-
-
-def test_check_cross_source_agreement_flags_outside_tolerance(store: DailyStore) -> None:
-    _seed_prices(store, "2330", ["2026-04-01"], close=1850.0)
-    issues = validate_data.check_cross_source_agreement(
-        store,
-        symbols=["2330"],
-        sample_date="2026-04-01",
-        yfinance_fetch=lambda yf_sym, d: 1900.0,  # 2.7% diff, > 0.5%
-        tolerance_pct=0.5,
-    )
-    assert len(issues) == 1
-    assert issues[0]["symbol"] == "2330"
-    assert issues[0]["diff_pct"] > 0.5
-
-
-def test_check_cross_source_skips_symbols_without_prices(store: DailyStore) -> None:
-    """If a symbol has no price for the sample date, skip it (don't error)."""
-    issues = validate_data.check_cross_source_agreement(
-        store,
-        symbols=["2330"],
-        sample_date="2026-04-01",
-        yfinance_fetch=lambda *_: 1850.0,
-        tolerance_pct=0.5,
-    )
-    assert issues == []
-
-
-# --- Check (e): month-end equity reconciliation -------------------------
+# --- Check (d): month-end equity reconciliation -------------------------
 
 
 def test_check_month_end_equity_within_tolerance(store: DailyStore) -> None:

@@ -29,24 +29,36 @@
     // Chart.js v4 stores scale defaults via `defaults.set` with a routes
     // registry. Direct property assignment silently drops internal v4 keys
     // (tickLength, lineWidth, display) that bar baseline math depends on.
+    // Tick density caps prevent label squeeze on dense daily series.
+    // - autoSkip + maxRotation:0 keeps labels horizontal and drops every Nth.
+    // - maxTicksLimit clamps the count so y-axis currency ticks don't crowd.
+    const baseTicks = {
+      color: tickColor,
+      padding: 8,
+      font: { size: 11, family: cssVar("--font-mono") },
+      autoSkip: true,
+      autoSkipPadding: 16,
+      maxRotation: 0,
+      minRotation: 0,
+    };
     C.defaults.set("scale", {
       grid: { color: gridColor, drawTicks: false, tickLength: 0 },
       border: { display: false, color: borderColor },
-      ticks: {
-        color: tickColor,
-        padding: 8,
-        font: { size: 11, family: cssVar("--font-mono") },
-      },
+      ticks: baseTicks,
     });
-    for (const t of ["linear", "logarithmic", "category", "time", "timeseries", "radialLinear"]) {
+    const TICK_LIMITS = {
+      linear: 6,
+      logarithmic: 6,
+      category: 10,
+      time: 8,
+      timeseries: 8,
+      radialLinear: 6,
+    };
+    for (const t of Object.keys(TICK_LIMITS)) {
       C.defaults.set(`scales.${t}`, {
         grid: { color: gridColor, drawTicks: false, tickLength: 0 },
         border: { display: false, color: borderColor },
-        ticks: {
-          color: tickColor,
-          padding: 8,
-          font: { size: 11, family: cssVar("--font-mono") },
-        },
+        ticks: { ...baseTicks, maxTicksLimit: TICK_LIMITS[t] },
       });
     }
 
@@ -113,7 +125,49 @@
     };
   }
 
+  /** Time x-axis config for daily-resolution line charts. */
+  function dailyTimeAxis() {
+    return {
+      type: "time",
+      time: { unit: "month", tooltipFormat: "PP" },
+      ticks: { maxTicksLimit: 8, color: cssVar("--text-faint") },
+      grid: { display: false },
+    };
+  }
+
+  /** Build a Chart.js doughnut/pie legend `labels` config that pins
+   * fontColor per-item — Chart.js v4 still honors the legacy v2 prop
+   * inside generateLabels and it wins over labels.color when the canvas
+   * fillStyle would otherwise default to black (dark-mode bug).
+   *
+   * `format(label, value, index)` returns the legend text for one slice.
+   */
+  function pieLegendLabels(format) {
+    return {
+      boxWidth: 10,
+      boxHeight: 10,
+      padding: 12,
+      color: cssVar("--text-soft") || "#aab0bc",
+      generateLabels: (chart) => {
+        const { labels, datasets } = chart.data;
+        const data = datasets[0].data;
+        const colors = datasets[0].backgroundColor;
+        const textColor = cssVar("--text-soft") || "#aab0bc";
+        return labels.map((label, i) => ({
+          text: format(label, data[i], i),
+          fillStyle: colors[i],
+          strokeStyle: colors[i],
+          fontColor: textColor,
+          lineWidth: 0,
+          pointStyle: "circle",
+          index: i,
+        }));
+      },
+    };
+  }
+
   global.charts = {
     cssVar, palette, applyDefaults, gradientFill, hexWithAlpha, moneyTooltip,
+    dailyTimeAxis, pieLegendLabels,
   };
 })(window);

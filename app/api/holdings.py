@@ -1,16 +1,18 @@
 """Holdings: current positions across TW + foreign, with computed unified shape."""
 from __future__ import annotations
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint
 
 from .. import analytics
-from ._helpers import envelope, store
+from ._helpers import (
+    daily_store,
+    envelope,
+    reprice_holdings_today,
+    store,
+    want_daily,
+)
 
 bp = Blueprint("holdings", __name__, url_prefix="/api/holdings")
-
-
-def _daily_store():
-    return current_app.extensions["daily_store"]
 
 
 def _normalize_tw(h: dict, fx: float) -> dict:
@@ -68,19 +70,29 @@ def _holdings_for_month(month: dict) -> list[dict]:
     return rows
 
 
+def _reprice_with_today(rows: list[dict], last: dict) -> list[dict]:
+    """Replace month-end ref_price/mv/unrealized with today's daily close.
+
+    Empty daily store → returns rows unchanged.
+    """
+    repriced = reprice_holdings_today(rows, fallback_fx=last.get("fx_usd_twd"))
+    return repriced if repriced is not None else rows
+
+
 @bp.get("/current")
 def current():
     s = store()
     if not s.months:
         return envelope({"holdings": [], "total_twd": 0})
     last = s.months[-1]
-    rows = _holdings_for_month(last)
+    rows = _reprice_with_today(_holdings_for_month(last), last)
     rows.sort(key=lambda r: r["mkt_value_twd"], reverse=True)
     total = sum(r["mkt_value_twd"] for r in rows)
     for r in rows:
         r["weight"] = (r["mkt_value_twd"] / total) if total else 0
     total_cost = sum(r["cost_twd"] for r in rows)
     total_upnl = sum(r["unrealized_pnl_twd"] for r in rows)
+    n_repriced = sum(1 for r in rows if r.get("repriced_at"))
     return envelope({
         "as_of": last["month"],
         "fx_usd_twd": last.get("fx_usd_twd"),
@@ -89,6 +101,7 @@ def current():
         "total_cost_twd": total_cost,
         "total_upnl_twd": total_upnl,
         "total_upnl_pct": (total_upnl / total_cost) if total_cost else 0,
+        "repriced_holdings_count": n_repriced,
     })
 
 
@@ -118,7 +131,7 @@ def _daily_timeline() -> list[dict]:
             "tw_mv_twd": r["tw_twd"],
             "foreign_mv_twd": r["foreign_twd"],
         }
-        for r in _daily_store().get_allocation_timeseries()
+        for r in daily_store().get_allocation_timeseries()
     ]
 
 
@@ -130,7 +143,7 @@ def timeline():
     rows from positions_daily; empty daily store falls back to monthly so
     the frontend never sees a 404.
     """
-    if (request.args.get("resolution") or "").lower() == "daily":
+    if want_daily():
         daily = _daily_timeline()
         if daily:
             return envelope({"resolution": "daily", "rows": daily})
@@ -143,7 +156,7 @@ def sectors():
     if not s.months:
         return envelope([])
     last = s.months[-1]
-    rows = _holdings_for_month(last)
+    rows = _reprice_with_today(_holdings_for_month(last), last)
     total = sum(r["mkt_value_twd"] for r in rows) or 1
     for r in rows:
         r["weight"] = r["mkt_value_twd"] / total

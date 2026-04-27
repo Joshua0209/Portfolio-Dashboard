@@ -96,15 +96,41 @@
 
   function drawCum(data) {
     const ctx = document.getElementById("chart-cum").getContext("2d");
-    const labels = data.months.map(fmt.month);
+    // Daily branch: when portfolio_daily_curve is present, render
+    // everything on a time x-axis. Strategy curves are still monthly
+    // (one anchor per month-end); spanGaps interpolates across the
+    // intervening days. The portfolio renders as a continuous daily line.
+    const dailyCurve = data.portfolio_daily_curve;
+    const isDaily = Array.isArray(dailyCurve) && dailyCurve.length > 0;
+
+    const portfolioPoints = isDaily
+      ? dailyCurve.map((p) => ({ x: p.date, y: (p.cum_return || 0) * 100 }))
+      : data.portfolio.curve.map((p, i) => ({ x: data.months[i], y: (p.cum_return || 0) * 100 }));
+
+    // Strategy curves use daily resolution when the API attached a
+    // `curve_daily` (paired with portfolio_daily_curve so they share an
+    // x-axis). Falls back to monthly anchors otherwise.
+    const stratPoints = (s) => {
+      if (isDaily && Array.isArray(s.curve_daily) && s.curve_daily.length) {
+        return s.curve_daily.map((p) => ({
+          x: p.date,
+          y: p.cum_return === null ? null : (p.cum_return || 0) * 100,
+        }));
+      }
+      return s.curve.map((p, i) => ({
+        x: data.months[i],
+        y: p.cum_return === null ? null : (p.cum_return || 0) * 100,
+      }));
+    };
+
     const datasets = [
       {
         label: data.portfolio.name,
-        data: data.portfolio.curve.map((p) => (p.cum_return || 0) * 100),
+        data: portfolioPoints,
         borderColor: charts.cssVar("--accent"),
         borderWidth: 2.5,
         pointRadius: 0,
-        tension: 0.3,
+        tension: isDaily ? 0 : 0.3,
         fill: true,
         backgroundColor: (c) => c.chart.chartArea
           ? charts.gradientFill(c.chart.ctx, c.chart.chartArea, charts.cssVar("--accent"), 0.18)
@@ -112,7 +138,7 @@
       },
       ...data.strategies.map((s, i) => ({
         label: s.name,
-        data: s.curve.map((p) => p.cum_return === null ? null : (p.cum_return || 0) * 100),
+        data: stratPoints(s),
         borderColor: colorFor(i),
         borderWidth: 1.5,
         borderDash: [4, 4],
@@ -122,20 +148,38 @@
       })),
     ];
 
+    const xScale = isDaily ? charts.dailyTimeAxis() : {};
+
     if (cumChart) cumChart.destroy();
     cumChart = new Chart(ctx, {
       type: "line",
-      data: { labels, datasets },
+      data: { datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { position: "top", align: "end" },
-          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(2)}%` } },
+          tooltip: {
+            callbacks: {
+              label: (c) => c.parsed.y === null
+                ? `${c.dataset.label}: —`
+                : `${c.dataset.label}: ${c.parsed.y.toFixed(2)}%`,
+            },
+          },
         },
-        scales: { y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } } },
+        scales: {
+          x: xScale,
+          y: { ticks: { callback: (v) => `${v.toFixed(0)}%` } },
+        },
       },
     });
+
+    const hint = document.getElementById("cum-hint");
+    if (hint) {
+      hint.textContent = isDaily
+        ? "Daily resolution: portfolio and benchmark strategies both rendered per trading day."
+        : "All curves start at 0% on the first month of your portfolio.";
+    }
   }
 
   function drawMonthly(data) {

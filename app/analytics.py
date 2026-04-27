@@ -115,6 +115,48 @@ def period_returns(months: list[dict], method: PeriodMethod = "day_weighted") ->
     return out
 
 
+def daily_investment_flows(months: list[dict]) -> list[dict]:
+    """Per-day broker-side cashflows in TWD (the F for daily TWR).
+
+    "Investment flow" here means cash that crosses the boundary between
+    the bank and the brokerage — i.e. the same definition as monthly
+    `external_flow_twd`, but resolved per trade day instead of aggregated
+    per month. Sign convention matches Modified Dietz F:
+        F > 0  →  cash INTO the investments (a buy that drew down bank)
+        F < 0  →  cash OUT of investments  (a sell that returned cash)
+
+    Why this and not `daily_external_flows()`? Daily portfolio equity
+    (`portfolio_daily.equity_twd`) is *positions-only* market value — it
+    does not carry bank cash. Modified Dietz is only correct when V and
+    F use consistent definitions: stocks-only V pairs with broker-side F
+    (this function); stocks+cash V would pair with deposit-side F
+    (`daily_external_flows`). The cashflows page uses the latter for its
+    real-vs-counterfactual chart; daily TWR on Performance/Benchmark
+    uses this one.
+
+    Source: per-trade `tw.trades[]` and `foreign.trades[]`. Foreign
+    trades are USD-only today (HKD/JPY would be added if those venues
+    appeared) and are converted via the trade's month FX (same
+    convention as monthly `external_flow_twd`).
+    """
+    by_date: dict[str, float] = defaultdict(float)
+    for m in months:
+        fx = m.get("fx_usd_twd") or 0.0
+        for t in (m.get("tw") or {}).get("trades", []) or []:
+            d = _normalize_iso_date(t.get("date"))
+            if d is None:
+                continue
+            by_date[d] += -float(t.get("net_twd") or 0)
+        for t in (m.get("foreign") or {}).get("trades", []) or []:
+            if t.get("ccy") != "USD" or not fx:
+                continue
+            d = _normalize_iso_date(t.get("date"))
+            if d is None:
+                continue
+            by_date[d] += -float(t.get("net_ccy") or 0) * fx
+    return [{"date": d, "flow_twd": by_date[d]} for d in sorted(by_date)]
+
+
 def daily_external_flows(months: list[dict]) -> list[dict]:
     """Per-day external flow series (TWD) for daily Modified Dietz.
 
@@ -179,6 +221,7 @@ def daily_twr(
     equity_series: list[dict],
     flow_series: list[dict],
     weight: float = 0.5,
+    anchor_cum_return: float = 0.0,
 ) -> list[dict]:
     """Per-day Modified Dietz TWR, chained across all priced days.
 
@@ -202,6 +245,12 @@ def daily_twr(
     Day 1 has no prior equity to compare against — return 0 for r_1 and
     use V_1 itself as the starting wealth_index baseline.
 
+    `anchor_cum_return` lets callers continue an existing TWR curve into
+    the daily window. Pass the monthly cum_twr at the month-end just
+    before the first daily date and the day-1 wealth_index will start at
+    (1 + anchor) instead of 1.0. period_return on day 1 stays 0 (no
+    intra-day comparison available); only the wealth/cum baseline shifts.
+
     Returns one dict per equity_series row:
         {date, equity_twd, flow_twd, period_return, cum_twr, wealth_index}
     """
@@ -211,15 +260,15 @@ def daily_twr(
     flow_by_date: dict[str, float] = {f["date"]: float(f["flow_twd"]) for f in flow_series}
     out: list[dict] = []
 
-    # Day 1: no prior equity. Force r_1 = 0; wealth_index starts at 1.0.
+    # Day 1: no prior equity. Force r_1 = 0; wealth_index seeded with anchor.
     first = equity_series[0]
-    running_wealth = 1.0
+    running_wealth = 1.0 + anchor_cum_return
     out.append({
         "date": first["date"],
         "equity_twd": float(first["equity_twd"]),
         "flow_twd": flow_by_date.get(first["date"], 0.0),
         "period_return": 0.0,
-        "cum_twr": 0.0,
+        "cum_twr": running_wealth - 1.0,
         "wealth_index": running_wealth,
     })
 

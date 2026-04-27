@@ -116,11 +116,11 @@ def test_run_advances_last_known_date_after_fetch(store, portfolio, monkeypatch)
     def fake_get_prices(symbol, ccy, start, end, store=None):
         return [
             {"date": "2026-04-23", "symbol": symbol, "close": 920.0,
-             "currency": "TWD", "source": "twse"},
+             "currency": "TWD", "source": "yfinance"},
             {"date": "2026-04-24", "symbol": symbol, "close": 925.0,
-             "currency": "TWD", "source": "twse"},
+             "currency": "TWD", "source": "yfinance"},
             {"date": "2026-04-25", "symbol": symbol, "close": 930.0,
-             "currency": "TWD", "source": "twse"},
+             "currency": "TWD", "source": "yfinance"},
         ]
 
     monkeypatch.setattr(snap_mod, "_get_prices", fake_get_prices)

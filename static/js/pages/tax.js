@@ -3,7 +3,7 @@
  */
 (function () {
   let allRows = [];
-  let pager = null;
+  let table = null;
 
   document.addEventListener("DOMContentLoaded", () => init().catch(showError));
 
@@ -13,14 +13,63 @@
     renderKPIs(d.totals);
     allRows = d.by_ticker;
     renderMovers();
-    bindFilters();
-    pager = window.createPager({
-      containerId: "tax-pager",
-      pageSize: 50,
-      onChange: renderRows,
-    });
-    rerender();
+    table = buildTable();
     document.getElementById("export-tax").addEventListener("click", exportCsv);
+  }
+
+  function buildTable() {
+    return window.dataTable({
+      tableId: "tax-table",
+      rows: allRows,
+      searchKeys: ["code", "name"],
+      searchPlaceholder: "Search code or name…",
+      filters: [
+        {
+          id: "status", key: "status", label: "All",
+          options: [
+            { value: "closed",  label: "Fully closed" },
+            { value: "open",    label: "Open positions" },
+            { value: "winners", label: "Winners only" },
+            { value: "losers",  label: "Losers only" },
+          ],
+          predicate: (r, v) =>
+            v === "closed"  ? !!r.fully_closed :
+            v === "open"    ? !r.fully_closed :
+            v === "winners" ? r.realized_pnl_twd > 0 :
+            v === "losers"  ? r.realized_pnl_twd < 0 : true,
+        },
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+      ],
+      defaultSort: { key: "total_pnl_twd", dir: "desc" },
+      colspan: 13,
+      pageSize: 50,
+      emptyText: "No matching tickers",
+      row: (r) => [
+        tdCodeLink(r.code),
+        td(r.name || ""),
+        td(r.venue || "", "text-mute text-tiny"),
+        td(fmt.int(r.sell_qty || 0), "num"),
+        td(fmt.int(r.open_qty || 0), "num"),
+        td(fmt.twd(r.cost_of_sold_twd || 0), "num text-mute"),
+        td(fmt.twd(r.sell_proceeds_twd || 0), "num"),
+        td(fmt.twd(r.realized_pnl_twd || 0), `num ${fmt.tone(r.realized_pnl_twd || 0)}`),
+        td(fmt.twd(r.dividends_twd || 0), "num value-pos"),
+        td(fmt.twd(r.unrealized_pnl_twd || 0), `num ${fmt.tone(r.unrealized_pnl_twd || 0)}`),
+        td(fmt.twd(r.total_pnl_twd || 0), `num ${fmt.tone(r.total_pnl_twd || 0)}`),
+        td(r.win_rate != null ? `${(r.win_rate * 100).toFixed(0)}%` : "—", "num text-mute"),
+        td(r.avg_holding_days != null ? `${Math.round(r.avg_holding_days)}` : "—", "num text-mute"),
+      ],
+    });
+  }
+
+  function tdCodeLink(code) {
+    const el = document.createElement("td");
+    el.className = "code";
+    const a = document.createElement("a");
+    a.href = `/ticker/${encodeURIComponent(code || "")}`;
+    a.textContent = code;
+    el.appendChild(a);
+    return el;
   }
 
   function renderKPIs(t) {
@@ -98,87 +147,6 @@
     }
   }
 
-  function bindFilters() {
-    ["q", "filter", "venue-filter", "sort-key"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener("input", rerender);
-      el.addEventListener("change", rerender);
-    });
-  }
-
-  function filtered() {
-    const q = (document.getElementById("q").value || "").toLowerCase();
-    const f = document.getElementById("filter").value;
-    const v = document.getElementById("venue-filter").value;
-    return allRows.filter((r) => {
-      if (q) {
-        const code = String(r.code || "").toLowerCase();
-        const name = String(r.name || "").toLowerCase();
-        if (!code.includes(q) && !name.includes(q)) return false;
-      }
-      if (v && r.venue !== v) return false;
-      if (f === "closed" && !r.fully_closed) return false;
-      if (f === "open" && r.fully_closed) return false;
-      if (f === "winners" && r.realized_pnl_twd <= 0) return false;
-      if (f === "losers" && r.realized_pnl_twd >= 0) return false;
-      return true;
-    });
-  }
-
-  function sortedFiltered() {
-    const key = document.getElementById("sort-key").value || "total_pnl_twd";
-    const rows = filtered();
-    rows.sort((a, b) => (b[key] || 0) - (a[key] || 0));
-    return rows;
-  }
-
-  function rerender() {
-    const rows = sortedFiltered();
-    pager.update(rows.length);
-    renderRows();
-  }
-
-  function renderRows() {
-    const rows = sortedFiltered();
-    const pageRows = pager.slice(rows);
-    const tbody = document.querySelector("#tax-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!pageRows.length) {
-      const tr = document.createElement("tr");
-      const td_ = document.createElement("td");
-      td_.colSpan = 13;
-      td_.className = "table-empty";
-      td_.textContent = "No matching tickers";
-      tr.appendChild(td_);
-      tbody.appendChild(tr);
-      return;
-    }
-    for (const r of pageRows) {
-      const tr = document.createElement("tr");
-      const codeTd = document.createElement("td");
-      codeTd.className = "code";
-      const a = document.createElement("a");
-      a.href = `/ticker/${encodeURIComponent(r.code || "")}`;
-      a.textContent = r.code;
-      codeTd.appendChild(a);
-      tr.appendChild(codeTd);
-      tr.appendChild(td(r.name || ""));
-      tr.appendChild(td(r.venue || "", "text-mute text-tiny"));
-      tr.appendChild(td(fmt.int(r.sell_qty || 0), "num"));
-      tr.appendChild(td(fmt.int(r.open_qty || 0), "num"));
-      tr.appendChild(td(fmt.twd(r.cost_of_sold_twd || 0), "num text-mute"));
-      tr.appendChild(td(fmt.twd(r.sell_proceeds_twd || 0), "num"));
-      tr.appendChild(td(fmt.twd(r.realized_pnl_twd || 0), `num ${fmt.tone(r.realized_pnl_twd || 0)}`));
-      tr.appendChild(td(fmt.twd(r.dividends_twd || 0), "num value-pos"));
-      tr.appendChild(td(fmt.twd(r.unrealized_pnl_twd || 0), `num ${fmt.tone(r.unrealized_pnl_twd || 0)}`));
-      tr.appendChild(td(fmt.twd(r.total_pnl_twd || 0), `num ${fmt.tone(r.total_pnl_twd || 0)}`));
-      tr.appendChild(td(r.win_rate != null ? `${(r.win_rate * 100).toFixed(0)}%` : "—", "num text-mute"));
-      tr.appendChild(td(r.avg_holding_days != null ? `${Math.round(r.avg_holding_days)}` : "—", "num text-mute"));
-      tbody.appendChild(tr);
-    }
-  }
-
   function td(text, cls) {
     const el = document.createElement("td");
     if (cls) el.className = cls;
@@ -188,7 +156,7 @@
   function setText(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 
   function exportCsv() {
-    const rows = filtered();
+    const rows = table ? table.filtered() : allRows;
     const headers = [
       "code", "name", "venue", "sell_qty", "open_qty",
       "cost_of_sold_twd", "sell_proceeds_twd",

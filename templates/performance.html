@@ -124,8 +124,49 @@
   <div class="card">
     <div class="card-header">
       <h3 class="card-title">Attribution totals (TWD)<span tabindex="0" class="info-icon" data-info="Cumulative P&L from each source over your full history. Helps you see whether your money was actually made on TW stocks, US stocks, or just from the NTD/USD rate moving. The dashboard takes care to separate these three sources so you don't credit currency luck as stock-picking skill."></span></h3>
+      <span class="card-sub" id="attr-totals-sub">stacked composition · total at top</span>
     </div>
-    <div id="attr-totals" class="flex-col gap-2 p-2"></div>
+    <div class="chart-box h-260"><canvas id="chart-attr-totals"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid" style="grid-template-columns: 1.4fr 1fr;">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Per-ticker contribution map<span tabindex="0" class="info-icon" data-info="Treemap: each rectangle is one ticker, sized by |total P&L contribution to the portfolio| (realized + dividends + unrealized). Green = net contributor, red = net detractor. The big squares — wherever the portfolio P&L came from (or got eaten). Click to drill into the ticker page."></span></h3>
+      <span class="card-sub" id="contrib-sub">size = |total P&L| · color = sign</span>
+    </div>
+    <div class="chart-box h-360"><canvas id="contrib-treemap"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Concentration of P&L<span tabindex="0" class="info-icon" data-info="What share of your gains came from your top-N contributors? If 80% of your profit came from 3 names, you have concentration risk on the *upside* — a few stocks are doing all the work. The top-3 / top-5 / top-10 numbers tell you exactly how dependent the portfolio is on its winners."></span></h3>
+      <span class="card-sub">how dependent are you on a few names?</span>
+    </div>
+    <div id="contrib-stats" class="flex-col gap-3 p-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Per-ticker P&L breakdown<span tabindex="0" class="info-icon" data-info="Realized + dividends + unrealized per ticker, sortable. The 'Contribution' column is share of total portfolio P&L — 25% means this single ticker delivered a quarter of all profit (or loss) so far. Use the search to drill into one name."></span></h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="contrib-table">
+        <thead><tr>
+          <th class="sortable" data-key="code">Code</th>
+          <th class="sortable" data-key="name">Name</th>
+          <th class="sortable" data-key="venue">Venue</th>
+          <th class="num sortable" data-key="realized_pnl_twd">Realized</th>
+          <th class="num sortable" data-key="dividends_twd">Dividends</th>
+          <th class="num sortable" data-key="unrealized_pnl_twd">Unrealized</th>
+          <th class="num sortable" data-key="total_pnl_twd">Total P&amp;L</th>
+          <th class="num sortable" data-key="contribution_share">Contribution</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -137,14 +178,14 @@
     <div class="table-wrap">
       <table class="data" id="months-table">
         <thead><tr>
-          <th>Month</th>
-          <th class="num">V_start</th>
-          <th class="num">Flow F</th>
-          <th class="num">Wt. flow</th>
-          <th class="num">Equity</th>
-          <th class="num">Period return</th>
-          <th class="num">Cum TWR</th>
-          <th class="num">Drawdown</th>
+          <th class="sortable" data-key="sort_key">Month</th>
+          <th class="num sortable" data-key="v_start">V_start</th>
+          <th class="num sortable" data-key="external_flow">Flow F</th>
+          <th class="num sortable" data-key="weighted_flow">Wt. flow</th>
+          <th class="num sortable" data-key="equity_twd">Equity</th>
+          <th class="num sortable" data-key="period_return">Period return</th>
+          <th class="num sortable" data-key="cum_twr">Cum TWR</th>
+          <th class="num sortable" data-key="drawdown">Drawdown</th>
         </tr></thead>
         <tbody></tbody>
       </table>

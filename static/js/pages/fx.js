@@ -59,7 +59,7 @@
           data,
           borderColor: charts.cssVar("--c2"),
           borderWidth: 2,
-          pointRadius: 3,
+          pointRadius: 0,
           pointBackgroundColor: charts.cssVar("--c2"),
           tension: 0.3,
           fill: false,

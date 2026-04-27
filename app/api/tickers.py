@@ -1,13 +1,16 @@
 """Per-ticker drill-down: position history, all trades, dividend, P&L."""
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import datetime
-
-from flask import Blueprint, current_app, request
+from flask import Blueprint, request
 
 from .. import analytics, benchmarks
-from ._helpers import envelope, store
+from ._helpers import (
+    daily_store,
+    envelope,
+    reprice_holdings_today,
+    store,
+    want_daily,
+)
 
 
 def _normalize_trade_date(d: str) -> str:
@@ -20,8 +23,7 @@ def _daily_prices_for(code: str, start: str | None, end: str | None) -> dict:
     Mirrors /api/daily/prices/<symbol>'s shape so ticker.js receives a
     self-contained payload without a second roundtrip.
     """
-    daily = current_app.extensions["daily_store"]
-    points = daily.get_ticker_history(code, start=start, end=end)
+    points = daily_store().get_ticker_history(code, start=start, end=end)
 
     pdf = store()
     trades = []
@@ -46,6 +48,44 @@ def _daily_prices_for(code: str, start: str | None, end: str | None) -> dict:
         "trades": trades,
         "empty": len(points) == 0,
     }
+
+
+def _daily_position_history_for(
+    code: str, start: str | None, end: str | None
+) -> list[dict]:
+    """Per-day position rows for one ticker — feeds the Position-over-time
+    and Cost-vs-MV charts when the page requests daily resolution.
+
+    Shape matches the monthly position_history rows the frontend already
+    knows how to render, with `date` substituting for `month` so
+    ticker.js can switch axes without a separate code path.
+    """
+    rows = daily_store().get_positions_for_ticker(code, start=start, end=end)
+
+    def _row(r: dict) -> dict:
+        # cost_twd is derived via the implied fx (mv_twd / mv_local) for
+        # the day. Zero-MV days (pre-position / sold-to-flat) leave the
+        # ratio undefined; we fall back to cost_local since those rows
+        # render as zeros on the chart anyway.
+        mv_local = r.get("mv_local") or 0
+        mv_twd = r.get("mv_twd") or 0
+        cost_local = r.get("cost_local") or 0
+        fx = (mv_twd / mv_local) if mv_local else 1.0
+        cost_twd = cost_local * fx
+        qty = r.get("qty") or 0
+        return {
+            "date": r["date"],
+            "qty": qty,
+            "cost_local": cost_local,
+            "cost_twd": cost_twd,
+            "mkt_value_local": mv_local,
+            "mkt_value_twd": mv_twd,
+            "ref_price": (mv_local / qty) if qty else None,
+            "type": r.get("type"),
+            "source": r.get("source"),
+        }
+
+    return [_row(r) for r in rows]
 
 
 def _yahoo_symbol(code: str, venue: str | None, ccy: str | None) -> str | None:
@@ -217,6 +257,11 @@ def ticker_detail(code: str):
     is_open = bool(last_entry and last_entry["month"] == last_month)
     current = last_entry if is_open else None
 
+    if current:
+        repriced = reprice_holdings_today([{**current, "code": code}])
+        if repriced and repriced[0].get("repriced_at"):
+            current = {**current, **repriced[0]}
+
     payload = {
         "code": code,
         "name": t.get("name"),
@@ -229,11 +274,12 @@ def ticker_detail(code: str):
         "last_seen_month": last_entry["month"] if last_entry else None,
     }
 
-    if request.args.get("resolution") == "daily":
-        payload["daily_prices"] = _daily_prices_for(
-            code,
-            start=request.args.get("start") or None,
-            end=request.args.get("end") or None,
-        )
+    if want_daily():
+        start = request.args.get("start") or None
+        end = request.args.get("end") or None
+        payload["daily_prices"] = _daily_prices_for(code, start=start, end=end)
+        daily_history = _daily_position_history_for(code, start=start, end=end)
+        if daily_history:
+            payload["position_history_daily"] = daily_history
 
     return envelope(payload)

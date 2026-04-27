@@ -67,16 +67,16 @@ def test_run_full_backfill_continues_after_per_symbol_failure(
     has one open row for the failed symbol."""
     from app import backfill_runner, price_sources
 
-    def fake_get_prices(symbol, currency, start, end, store=None):
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
         if symbol == "2454":
-            raise RuntimeError("twse 503 for 2454")
+            raise RuntimeError("yfinance 503 for 2454")
         # Return a single fake row for 2330
         return [{
             "date": "2025-08-15", "close": 600.0,
-            "symbol": symbol, "currency": currency, "source": "twse",
+            "symbol": symbol, "currency": currency, "source": "yfinance",
         }]
 
-    def fake_get_fx(ccy, start, end):
+    def fake_get_fx(ccy, start, end, store=None, today=None):
         return []
 
     monkeypatch.setattr(price_sources, "get_prices", fake_get_prices)

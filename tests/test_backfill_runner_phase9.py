@@ -79,7 +79,7 @@ def test_start_transitions_state_to_failed_on_exception(
     from app import backfill_runner
 
     def boom(store, portfolio_path, **kwargs):
-        raise RuntimeError("twse 503 fire drill")
+        raise RuntimeError("yfinance 503 fire drill")
 
     monkeypatch.setattr(backfill_runner, "run_full_backfill", boom)
 
@@ -88,7 +88,7 @@ def test_start_transitions_state_to_failed_on_exception(
 
     snap = backfill_state.get().snapshot()
     assert snap["state"] == "FAILED"
-    assert "twse 503 fire drill" in snap["error"]
+    assert "yfinance 503 fire drill" in snap["error"]
 
 
 def test_start_does_nothing_if_already_running(

@@ -194,9 +194,9 @@ def app_seeded_daily(tmp_path, monkeypatch, portfolio_with_holdings):
             "INSERT INTO prices(date, symbol, close, currency, source, fetched_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             [
-                ("2026-04-22", "2330", 1040.0, "TWD", "twse", "2026-04-22T16:00:00Z"),
-                ("2026-04-23", "2330", 1080.0, "TWD", "twse", "2026-04-23T16:00:00Z"),
-                ("2026-04-24", "2330", 1100.0, "TWD", "twse", "2026-04-24T16:00:00Z"),
+                ("2026-04-22", "2330", 1040.0, "TWD", "yfinance", "2026-04-22T16:00:00Z"),
+                ("2026-04-23", "2330", 1080.0, "TWD", "yfinance", "2026-04-23T16:00:00Z"),
+                ("2026-04-24", "2330", 1100.0, "TWD", "yfinance", "2026-04-24T16:00:00Z"),
             ],
         )
         conn.executemany(
@@ -269,6 +269,57 @@ def test_summary_kpis_untouched_without_daily(app_empty_daily):
     assert "repriced_holdings_count" not in kpis
 
 
+def test_summary_daily_curve_carries_cum_twr(app_seeded_daily):
+    """Regression: daily branch was returning curve rows without cum_twr,
+    so the Overview chart's cumulative TWR line plotted all 0%. The fix
+    monthly-anchors cum_twr per row (see _monthly_anchored_cum)."""
+    data = _json(
+        app_seeded_daily.test_client(), "/api/summary?resolution=daily"
+    )
+    assert data["resolution"] == "daily"
+    curve = data["equity_curve"]
+    assert curve, "expected at least one daily row"
+    for row in curve:
+        assert "cum_twr" in row, "every daily row must carry cum_twr"
+    # Anchors are 0% (2026-03-31) and 5% (2026-04-30). Daily dates Apr
+    # 22-24 fall between them, so each cum_twr must interpolate strictly
+    # between the surrounding monthly anchors — and crucially must NOT
+    # be zero (the bug this guards against). Monotonic in date because
+    # both anchors are non-decreasing.
+    cum_values = [row["cum_twr"] for row in curve]
+    assert all(0 < v < 0.05 for v in cum_values)
+    assert cum_values == sorted(cum_values)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /api/holdings/current — same repricer Phase 7 used for /tax + /summary
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_holdings_current_repriced_to_today(app_seeded_daily):
+    """Holdings page must agree with /summary + /tax — all three pull
+    from reprice_holdings_with_daily(), so the unrealized totals match."""
+    holdings = _json(app_seeded_daily.test_client(), "/api/holdings/current")
+    summary = _json(app_seeded_daily.test_client(), "/api/summary")
+    tax = _json(app_seeded_daily.test_client(), "/api/tax")
+    # 2330: 1000 shares × (1100 − 800) = 300_000 unrealized
+    assert holdings["total_upnl_twd"] == pytest.approx(300_000)
+    assert holdings["repriced_holdings_count"] == 1
+    # All three surfaces agree on unrealized
+    assert holdings["total_upnl_twd"] == pytest.approx(
+        summary["kpis"]["unrealized_pnl_twd"]
+    )
+    assert holdings["total_upnl_twd"] == pytest.approx(
+        tax["totals"]["unrealized_pnl_twd"]
+    )
+
+
+def test_holdings_current_falls_back_to_month_end_without_daily(app_empty_daily):
+    holdings = _json(app_empty_daily.test_client(), "/api/holdings/current")
+    # Empty daily store → keeps the parser's month-end 250_000 unrealized.
+    assert holdings["total_upnl_twd"] == pytest.approx(250_000)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # /api/holdings/timeline
 # ─────────────────────────────────────────────────────────────────────────
@@ -314,11 +365,21 @@ def test_performance_daily_returns_daily_rows(app_seeded_daily):
         "/api/performance/timeseries?resolution=daily",
     )
     assert data["resolution"] == "daily"
-    assert data["method"] == "daily_modified_dietz"
+    # Method now reflects the chosen monthly weighting (default
+    # day_weighted) so headline KPIs stay consistent with /api/summary.
+    # The daily series itself still chains via daily_twr; only the KPI
+    # source changed.
+    assert data["method"] in {"day_weighted", "mid_month", "eom"}
     assert all("date" in r for r in data["monthly"])
     assert len(data["monthly"]) == 3
     # Day 1 forced to 0% per daily_twr contract.
     assert data["monthly"][0]["period_return"] == 0.0
+    # Headline KPIs come from the monthly source-of-truth — same Sharpe
+    # function that /overview uses, no daily double-scaling.
+    assert "sharpe_annualized" in data
+    assert "sortino_annualized" in data
+    assert "calmar" in data
+    assert "cagr" in data
 
 
 def test_performance_daily_falls_back_when_empty(app_empty_daily):
@@ -385,20 +446,53 @@ def test_cashflows_monthly_default_no_daily_field(app_seeded_daily):
     assert isinstance(data, list)
 
 
-def test_cashflows_monthly_with_daily_param_includes_daily(app_seeded_daily):
+def test_cashflows_monthly_with_daily_param_returns_legacy_list(app_seeded_daily):
+    """The Phase 6 daily-flow chart was retired in favor of the daily
+    Real-vs-Counterfactual chart (now on /cumulative). /monthly is back
+    to its original list shape regardless of ?resolution."""
     data = _json(
         app_seeded_daily.test_client(), "/api/cashflows/monthly?resolution=daily"
     )
-    # Branch wraps the response in a dict with both monthly + daily.
-    assert isinstance(data, dict)
-    assert data["resolution"] == "daily"
-    assert "daily" in data
-    # Two salary inflows of 100k each, no other non-excluded txs.
-    flows = {r["date"]: r["flow_twd"] for r in data["daily"]}
-    assert flows.get("2026-03-15") == pytest.approx(100_000)
-    assert flows.get("2026-04-15") == pytest.approx(100_000)
-    # stock_settle_tw on 2026-03-20 must be excluded.
-    assert "2026-03-20" not in flows
+    assert isinstance(data, list)
+
+
+def test_cashflows_cumulative_daily_adds_real_and_cf_curves(app_seeded_daily):
+    """?resolution=daily on /cumulative attaches per-day real_curve_daily
+    + counterfactual_curve_daily so the Real-vs-Counterfactual chart
+    can render at daily precision."""
+    data = _json(
+        app_seeded_daily.test_client(), "/api/cashflows/cumulative?resolution=daily"
+    )
+    assert data.get("resolution") == "daily"
+    assert isinstance(data.get("real_curve_daily"), list)
+    assert len(data["real_curve_daily"]) > 0
+    assert all("date" in p and "value" in p for p in data["real_curve_daily"])
+    cf = data["counterfactual_curve_daily"]
+    assert isinstance(cf, list) and len(cf) == len(data["real_curve_daily"])
+    # Counterfactual is monotonic (non-decreasing as flows accumulate).
+    values = [p["value"] for p in cf]
+    assert values == sorted(values)
+    # Two salary inflows of 100k each → final cumulative ≥ 200k.
+    assert values[-1] >= 200_000
+
+
+def test_cashflows_cumulative_default_no_daily_curves(app_seeded_daily):
+    data = _json(app_seeded_daily.test_client(), "/api/cashflows/cumulative")
+    assert "real_curve_daily" not in data
+    assert "counterfactual_curve_daily" not in data
+
+
+def test_cashflows_daily_excludes_stock_settle(app_seeded_daily):
+    """stock_settle_tw must not appear in the daily counterfactual flow."""
+    data = _json(
+        app_seeded_daily.test_client(), "/api/cashflows/cumulative?resolution=daily"
+    )
+    cf = data["counterfactual_curve_daily"]
+    # Counterfactual is monotonic and rises only on real external flows;
+    # stock settlements are internal rotations and must be filtered out.
+    by_date = {p["date"]: p["value"] for p in cf}
+    if "2026-03-20" in by_date and "2026-03-19" in by_date:
+        assert by_date["2026-03-20"] == by_date["2026-03-19"]
 
 
 # ─────────────────────────────────────────────────────────────────────────

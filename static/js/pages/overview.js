@@ -28,7 +28,7 @@
     renderEquityCurve(summary);
     renderAllocation(summary);
     renderTopMovers(holdings.holdings);
-    renderActivity(txs.slice(0, 12));
+    renderActivity(txs);
   }
 
   function setText(id, text) {
@@ -158,9 +158,18 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: "65%",
+        cutout: "62%",
+        layout: { padding: 4 },
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: true,
+            position: "right",
+            align: "center",
+            labels: charts.pieLegendLabels((label, v) => {
+              const pct = total > 0 ? (v / total) * 100 : 0;
+              return `${label} — ${pct.toFixed(1)}%`;
+            }),
+          },
           tooltip: {
             callbacks: {
               label: (c) => {
@@ -172,34 +181,6 @@
         },
       },
     });
-
-    const legend = document.getElementById("alloc-legend");
-    while (legend.firstChild) legend.removeChild(legend.firstChild);
-    for (const seg of segments) {
-      const pct = (seg.value / total) * 100;
-      const row = document.createElement("div");
-      row.className = "bar-row";
-
-      const labelCell = document.createElement("span");
-      labelCell.className = "text-sm";
-      labelCell.style.cssText = "display:flex; align-items:center; gap:6px;";
-      const swatch = document.createElement("i");
-      swatch.style.cssText = `width:8px;height:8px;border-radius:2px;background:${seg.color};display:inline-block;`;
-      labelCell.append(swatch, document.createTextNode(seg.label));
-
-      const bar = document.createElement("span");
-      bar.className = "bar";
-      const fill = document.createElement("span");
-      fill.style.width = `${pct.toFixed(2)}%`;
-      bar.appendChild(fill);
-
-      const pctCell = document.createElement("span");
-      pctCell.className = "num text-sm";
-      pctCell.textContent = `${pct.toFixed(1)}%`;
-
-      row.append(labelCell, bar, pctCell);
-      legend.appendChild(row);
-    }
   }
 
   function renderTopMovers(holdings) {
@@ -251,30 +232,29 @@
   }
 
   function renderActivity(rows) {
-    const tbody = document.querySelector("#activity-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!rows.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 8;
-      td.className = "table-empty";
-      td.textContent = "No transactions";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-      return;
-    }
-    for (const t of rows) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.date(t.date), "text-mute"));
-      tr.appendChild(tdPill(t.venue));
-      tr.appendChild(td(t.side || ""));
-      tr.appendChild(tdLink(t.code || "", `/ticker/${encodeURIComponent(t.code || "")}`, "code"));
-      tr.appendChild(td(t.name || ""));
-      tr.appendChild(td(fmt.int(t.qty), "num"));
-      tr.appendChild(td(fmt.num(t.price, 2), "num"));
-      tr.appendChild(td(fmt.twd(t.net_twd), `num ${fmt.tone(t.net_twd)}`));
-      tbody.appendChild(tr);
-    }
+    window.dataTable({
+      tableId: "activity-table",
+      rows: rows || [],
+      searchKeys: ["code", "name", "venue", "side"],
+      searchPlaceholder: "Search code, name, side…",
+      filters: [
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+      ],
+      defaultSort: { key: "date", dir: "desc" },
+      colspan: 8,
+      pageSize: 15,
+      emptyText: "No transactions",
+      row: (t) => [
+        td(fmt.date(t.date), "text-mute"),
+        tdPill(t.venue),
+        td(t.side || ""),
+        tdLink(t.code || "", `/ticker/${encodeURIComponent(t.code || "")}`, "code"),
+        td(t.name || ""),
+        td(fmt.int(t.qty), "num"),
+        td(fmt.num(t.price, 2), "num"),
+        td(fmt.twd(t.net_twd), `num ${fmt.tone(t.net_twd)}`),
+      ],
+    });
   }
 
   function td(text, cls) {

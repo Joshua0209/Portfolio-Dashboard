@@ -2,8 +2,10 @@
 
 A personal investment performance dashboard built on top of Sinopac (永豐金)
 monthly PDF statements. The pipeline turns encrypted statement PDFs into a
-single JSON dataset, which a Flask backend then serves to an 11-page,
-no-build-step dashboard.
+single JSON dataset, which a Flask backend then serves to a 12-page,
+no-build-step dashboard. A second daily-resolution layer (yfinance prices
+and FX rates in a local SQLite cache) powers the `/today` tactical view
+and the equity-curve / sparkline visualizations on top of the monthly base.
 
 ```
 PDFs (Gmail) ──► decrypt ──► parse ──► data/portfolio.json ──► Flask + JS
@@ -17,12 +19,13 @@ gitignored — the repository ships *code only*.
 
 ## What's in the dashboard
 
-Eleven pages, each focused on a different question you'd ask about your
+Twelve pages, each focused on a different question you'd ask about your
 portfolio. Every metric and chart has an info icon (`ⓘ`) you can hover for
 a plain-English explanation aimed at someone less than a year into investing.
 
 | Page | URL | What it answers |
 | --- | --- | --- |
+| Today | `/today` | "What did markets do for me today?" Hero with weekday-named Δ vs prior session, top movers, 30-day sparkline, MTD/QTD/YTD/Inception strip, underwater drawdown curve, risk-and-return tile, daily-return calendar heatmap, freshness dot, and a Developer Tools accordion (failed-task DLQ + manual reconciliation). |
 | Overview | `/` | "How am I doing right now?" Hero KPIs (equity, profit, TWR, XIRR), equity curve, allocation donut, top winners/losers, recent activity. |
 | Holdings | `/holdings` | "What do I own?" Sortable table, real squarified treemap (area = market value, color = unrealized %), sector breakdown, CSV export. |
 | Performance | `/performance` | "How is the strategy actually performing?" TWR / CAGR / XIRR / Sharpe / Sortino / Calmar with reference bands, monthly returns, drawdown timeline, rolling 3/6/12M, venue attribution (TW vs Foreign price vs FX). Switch between **day-weighted**, **mid-month**, and **end-of-month** Modified Dietz from the page actions. |
@@ -46,6 +49,22 @@ a plain-English explanation aimed at someone less than a year into investing.
   cash credits resolved per ticker; broker-side data used as backfill only.
 - **Margin-aware leverage** — 融資 positions tracked separately so equity-based
   returns aren't conflated with self-funded ones.
+- **Daily-resolution layer** — `data/dashboard.db` (SQLite, WAL mode) caches
+  yfinance prices (TW symbols via `.TW`/`.TWO` suffix, foreign as bare
+  tickers) and FX rates, then derives `positions_daily` and
+  `portfolio_daily`. Powers `/today`, the equity-curve sparkline, and the
+  drawdown / calendar widgets. Cold-start backfill takes ~30–60s; refresh
+  between server restarts via `python scripts/snapshot_daily.py` or the
+  "Refresh now" button on `/today`.
+- **Post-PDF trade overlay (optional)** — when `SINOPAC_API_KEY` /
+  `SINOPAC_SECRET_KEY` are set, the daily layer folds in trades that
+  happened *after* the most recent monthly statement closed via a
+  read-only Shioaji client. PDFs remain canonical; overlay rows never
+  overwrite `source='pdf'` rows.
+- **Manual reconciliation** — `POST /api/admin/reconcile?month=YYYY-MM`
+  diffs PDF trades vs Shioaji-overlay trades for a given month and
+  surfaces a global banner when they disagree. Always operator-triggered;
+  never auto-fires from the backfill or parser.
 
 ---
 
@@ -103,6 +122,23 @@ Never commit this value. Put it in `.env` or set it in your shell profile.
 
 ---
 
+## Environment variables
+
+Copy `.env.example` to `.env` (gitignored) and fill in what you need. None
+are strictly required — the dashboard runs in PDF-only mode when everything
+is unset.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `SINOPAC_PDF_PASSWORDS` | for `decrypt_pdfs.py` | Comma-separated unlock candidates; the decrypter tries each per file. |
+| `SINOPAC_API_KEY` | optional | Read-only Shioaji credential. When set, the daily layer overlays post-PDF trades. Never used to place orders — `app/shioaji_client.py` does not import any order/CA symbols. |
+| `SINOPAC_SECRET_KEY` | optional | Pair of `SINOPAC_API_KEY`. |
+| `BACKFILL_ON_STARTUP` | optional, default `false` | When `true`, `create_app()` spawns the cold-start backfill in a daemon thread. The Flask debug-reloader is detected and the parent process is skipped to avoid double-spawning. |
+| `DAILY_DB_PATH` | optional | Override the default `data/dashboard.db` location (useful for tests). |
+| `FLASK_DEBUG` | optional | Standard Flask flag; required if you want hot-reload on `app.py`. |
+
+---
+
 ## Refresh workflow (new statements arrived)
 
 Run the four steps in order. Each one is idempotent — re-running it
@@ -133,8 +169,8 @@ dashboard page and it will pick up the new data on the next API call.
 
 The daily-resolution layer (`data/dashboard.db`, added in the daily-prices
 work) is a regenerable cache — if you delete it, the next run rebuilds it
-from `portfolio.json` plus the public TWSE/TPEX/yfinance APIs in roughly
-30–60 seconds. So backups are nice-to-have, not required.
+from `portfolio.json` plus the public yfinance API in roughly 30–60
+seconds. So backups are nice-to-have, not required.
 
 If you do want a snapshot anyway, **never `cp` the file**. WAL mode keeps
 in-flight pages in `dashboard.db-wal` and `dashboard.db-shm` sidecars, so a
@@ -156,12 +192,20 @@ consistent copy taken through the same connection pool.
 investment/
 ├── app.py                        # Flask entrypoint
 ├── app/                          # Backend application package
-│   ├── __init__.py               # create_app(), routes, blueprint registration
+│   ├── __init__.py               # create_app(), routes, blueprint registration, layered health
 │   ├── data_store.py             # Mtime-cached portfolio.json loader
+│   ├── daily_store.py            # SQLite (WAL) wrapper around data/dashboard.db
 │   ├── analytics.py              # Drawdown, Sharpe, HHI, FX P&L, sectors, FIFO
 │   ├── benchmarks.py             # yfinance fetcher + cached strategy curves
 │   ├── filters.py                # Jinja currency/percent/date filters
-│   └── api/                      # 11 blueprints, all under /api/*
+│   ├── backfill_runner.py        # Background daemon: cold-start fetch + DLQ wrapper
+│   ├── backfill_state.py         # READY/INITIALIZING/FAILED state machine + progress
+│   ├── price_sources.py          # TW (.TW/.TWO probe) + foreign yfinance router
+│   ├── yfinance_client.py        # yfinance HTTP wrapper (TW + foreign + FX)
+│   ├── shioaji_client.py         # Read-only Shioaji wrapper (no Order/CA imports)
+│   ├── trade_overlay.py          # Folds post-PDF Shioaji trades into the daily layer
+│   ├── reconcile.py              # PDF-vs-overlay trade diff per month (manual trigger)
+│   └── api/                      # 13 blueprints, all under /api/*
 │       ├── summary.py            # KPIs, equity curve, allocation
 │       ├── holdings.py           # Current/historical positions, sectors
 │       ├── performance.py        # TWR/XIRR/drawdown/rolling/attribution (3 methods)
@@ -172,19 +216,30 @@ investment/
 │       ├── fx.py                 # USD/TWD curve, FX P&L attribution
 │       ├── tax.py                # Realized + unrealized P&L by ticker
 │       ├── tickers.py            # Per-security drill-down
-│       └── benchmarks.py         # Strategy comparison
+│       ├── benchmarks.py         # Strategy comparison
+│       ├── daily.py              # Daily equity curve + per-symbol price history
+│       └── today.py              # /today widgets + /api/admin/* (refresh, DLQ, reconcile)
 ├── scripts/                      # Pipeline (run from any CWD)
 │   ├── download_sinopac_pdfs.py  # Gmail → sinopac_pdfs/
 │   ├── decrypt_pdfs.py           # Env-based password unlock
-│   └── parse_statements.py       # PDFs → data/portfolio.json
-├── templates/                    # Jinja2 page templates (11 pages)
+│   ├── parse_statements.py       # PDFs → data/portfolio.json
+│   ├── backfill_daily.py         # CLI cold-start backfill of dashboard.db
+│   ├── snapshot_daily.py         # Incremental refresh (gap-fill since last_known_date)
+│   ├── reconcile.py              # CLI mirror of POST /api/admin/reconcile
+│   ├── retry_failed_tasks.py     # CLI mirror of POST /api/admin/retry-failed
+│   └── validate_data.py          # Sanity checks across portfolio.json + dashboard.db
+├── templates/                    # Jinja2 page templates (12 pages + 2 partials)
+│   ├── _developer_tools.html     # DLQ + reconcile accordion, included on /today
+│   ├── _reconcile_banner.html    # Global banner included from base.html
 ├── static/                       # css/, js/ (vanilla; no build step)
 │   ├── css/{tokens,app}.css      # Design system tokens + components
 │   └── js/{api,charts,format,help,pagination,app}.js + pages/*.js
 ├── data/                         # gitignored — actual portfolio data
-│   ├── portfolio.json            # Parsed dataset consumed by Flask
+│   ├── portfolio.json            # Parsed dataset consumed by Flask (canonical)
 │   ├── tw_ticker_map.json        # Manual TW name → ticker overrides
-│   └── benchmarks.json           # yfinance price cache (7-day TTL)
+│   ├── benchmarks.json           # yfinance price cache (7-day TTL)
+│   └── dashboard.db              # Daily-resolution SQLite cache (WAL; regenerable)
+├── logs/                         # gitignored — daily.log (rotating, 5 MB × 3)
 ├── sinopac_pdfs/                 # gitignored — encrypted source PDFs
 │   └── decrypted/                # gitignored — decrypted copies
 ├── credentials.json              # gitignored — Gmail OAuth client
@@ -199,24 +254,64 @@ All endpoints return `{"ok": true, "data": ...}`. Errors are HTTP non-200.
 Convention: TWD unless field name says otherwise; foreign positions show
 both `_local` and `_twd` values where relevant.
 
+### Monthly base layer (always available)
+
 ```
-GET /api/health
-GET /api/summary
-GET /api/holdings/{current,sectors,timeline}
-GET /api/holdings/snapshot/<month>
-GET /api/performance/{timeseries,rolling,attribution}[?method=day_weighted|mid_month|eom]
-GET /api/transactions[?venue=&side=&code=&month=&q=]
-GET /api/transactions/aggregates
-GET /api/cashflows/{monthly,cumulative,bank}
-GET /api/dividends
-GET /api/risk
-GET /api/fx
-GET /api/tax
-GET /api/tickers
-GET /api/tickers/<code>
-GET /api/benchmarks/strategies
-GET /api/benchmarks/compare?strategies=passive_tw,passive_us,...
+GET  /api/health
+       → { months_loaded, as_of, daily_state: READY|INITIALIZING|FAILED,
+           daily_last_known, daily_progress, daily_error }
+GET  /api/summary
+GET  /api/holdings/{current,sectors,timeline}
+GET  /api/holdings/snapshot/<month>
+GET  /api/performance/{timeseries,rolling,attribution}[?method=day_weighted|mid_month|eom]
+GET  /api/transactions[?venue=&side=&code=&month=&q=]
+GET  /api/transactions/aggregates
+GET  /api/cashflows/{monthly,cumulative,bank}
+GET  /api/dividends
+GET  /api/risk
+GET  /api/fx
+GET  /api/tax
+GET  /api/tickers
+GET  /api/tickers/<code>
+GET  /api/benchmarks/strategies
+GET  /api/benchmarks/compare?strategies=passive_tw,passive_us,...
 ```
+
+### Daily-resolution layer (returns 202 + progress while INITIALIZING)
+
+```
+GET  /api/daily/equity[?start=YYYY-MM-DD&end=YYYY-MM-DD]
+GET  /api/daily/prices/<symbol>            # daily price history + trade markers
+```
+
+### `/today` widgets
+
+```
+GET  /api/today/snapshot                    # latest equity + Δ vs prior priced day
+GET  /api/today/movers                      # gainers/decliners between two priced dates
+GET  /api/today/sparkline                   # last 30 trading days of equity_twd
+GET  /api/today/period-returns              # MTD / QTD / YTD / Inception
+GET  /api/today/drawdown                    # underwater curve + max-DD metadata
+GET  /api/today/risk-metrics                # ann return/vol, Sharpe, Sortino, hit rate
+GET  /api/today/calendar                    # daily-return calendar heatmap
+GET  /api/today/freshness                   # data_date, today_in_tpe, stale_days, band
+GET  /api/today/reconcile                   # open reconciliation events for the banner
+```
+
+### Admin / operator (manual trigger only)
+
+```
+POST /api/admin/refresh                     # incremental gap-fill (calls snapshot_daily)
+GET  /api/admin/failed-tasks                # open DLQ rows
+POST /api/admin/retry-failed                # drain the DLQ; { resolved, still_failing }
+POST /api/admin/reconcile?month=YYYY-MM     # PDF vs Shioaji-overlay diff for one month
+POST /api/admin/reconcile/<event_id>/dismiss
+```
+
+While the daily layer is still warming up, daily/today endpoints return
+HTTP 202 with a `progress` payload instead of 500. The frontend (`static/js/api.js`)
+retries with exponential backoff; on `FAILED` the response is HTTP 503 with
+the error string, and the warming banner deep-links to `/today#developer-tools`.
 
 ---
 

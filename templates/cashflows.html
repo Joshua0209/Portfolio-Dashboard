@@ -47,13 +47,6 @@
     </div>
     <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
     <div class="text-mute text-tiny" id="flow-hint" style="padding-top: 8px;"></div>
-    <div id="daily-flows-section" hidden style="margin-top: 16px;">
-      <div class="card-sub" style="margin-bottom: 8px;">
-        Daily-precision external flows
-        <span tabindex="0" class="info-icon" data-info="Same external-deposit definition (salary, transfers, interest, rebates), now keyed to the actual bank-tx date. Useful when a deposit is large enough that 'this month' is too coarse — e.g. a year-end bonus."></span>
-      </div>
-      <div class="chart-box h-220"><canvas id="chart-daily-flows"></canvas></div>
-    </div>
   </div>
   <div class="card">
     <div class="card-header">
@@ -68,36 +61,22 @@
   <div class="card">
     <div class="card-header">
       <h3 class="card-title">Bank ledger<span tabindex="0" class="info-icon" data-info="Raw bank-statement transactions, latest first. The source data feeding everything else on this page. Filter by account (TWD vs foreign USD/HKD), category, or month, and search the memo text. Useful when you need to verify a specific dividend, fee, or settlement."></span></h3>
-      <div class="toolbar" style="margin: 0;">
-        <input id="bank-q" class="input" placeholder="Search memo or category…" style="width:200px;" />
-        <select id="bank-account" class="select">
-          <option value="">All accounts</option>
-          <option value="TWD">TWD</option>
-          <option value="FOREIGN">Foreign</option>
-        </select>
-        <select id="bank-category" class="select">
-          <option value="">All categories</option>
-        </select>
-        <select id="bank-month" class="select">
-          <option value="">All months</option>
-        </select>
-      </div>
     </div>
-    <div class="table-wrap scroll-lg">
+    <div class="table-wrap">
       <table class="data" id="bank-table">
         <thead><tr>
-          <th>Month</th><th>Date</th><th>Account</th><th>Category</th><th>Memo</th><th>Ccy</th><th class="num">Amount</th><th class="num">Amount (TWD)</th><th class="num">Balance</th>
+          <th class="sortable" data-key="month">Month</th>
+          <th class="sortable" data-key="date">Date</th>
+          <th class="sortable" data-key="account">Account</th>
+          <th class="sortable" data-key="category">Category</th>
+          <th>Memo</th>
+          <th class="sortable" data-key="ccy">Ccy</th>
+          <th class="num sortable" data-key="amount">Amount</th>
+          <th class="num sortable" data-key="amount_twd">Amount (TWD)</th>
+          <th class="num sortable" data-key="balance">Balance</th>
         </tr></thead>
         <tbody></tbody>
       </table>
-    </div>
-    <div class="toolbar" style="justify-content: space-between; padding-top: 8px;">
-      <span class="text-mute text-tiny" id="bank-count">—</span>
-      <div class="toolbar" style="margin: 0;">
-        <button id="bank-prev" class="btn">◀ Prev</button>
-        <span class="text-mute text-tiny" id="bank-page">1 / 1</span>
-        <button id="bank-next" class="btn">Next ▶</button>
-      </div>
     </div>
   </div>
 </div>

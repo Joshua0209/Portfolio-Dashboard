@@ -1,24 +1,13 @@
-"""Phase 2 acceptance tests for app/price_sources.py (TWSE-only branch).
+"""Acceptance tests for app/price_sources.py.
 
-This phase only wires the TW route. TPEX comes in Phase 5 and yfinance in
-Phase 6, so calls for non-TWD currencies should raise NotImplementedError
-to fail loudly until those phases land.
+After the TWSE/TPEX-removal refactor, all price fetching goes through
+yfinance — TW symbols are queried with `.TW` (listed) or `.TWO` (OTC)
+suffixes; foreign symbols use bare tickers. The `symbol_market` cache
+still distinguishes 'twse' / 'tpex' / 'unknown' as market verdicts.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-import pytest
-
 from app.price_sources import get_prices, months_in_range
-
-
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-
-
-def _load_fixture(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
 # --- date math ----------------------------------------------------------
@@ -42,70 +31,83 @@ def test_months_in_range_clips_to_first_of_month_logic() -> None:
     assert months_in_range("2026-04-26", "2026-04-26") == [(2026, 4)]
 
 
-# --- TWSE dispatch ------------------------------------------------------
+# --- TW dispatch (yfinance with .TW / .TWO suffix) ----------------------
 
 
-def test_get_prices_tw_routes_to_twse(monkeypatch) -> None:
-    """For TWD currency, get_prices walks calendar months and calls fetch_month."""
+def test_get_prices_tw_routes_to_yfinance_dot_tw(monkeypatch) -> None:
+    """For TWD currency with no cache hit, the router probes yfinance with
+    the `.TW` suffix first and tags rows with the bare symbol."""
     calls: list[tuple] = []
 
-    def fake_fetch_month(stockNo, year, month):
-        calls.append((stockNo, year, month))
-        # mock 2 rows per month
+    def fake_yf(symbol, start, end):
+        calls.append((symbol, start, end))
         return [
-            {"date": f"{year:04d}-{month:02d}-01", "close": 100.0, "volume": 1},
-            {"date": f"{year:04d}-{month:02d}-15", "close": 105.0, "volume": 2},
+            {"date": "2026-04-01", "close": 1855.0, "volume": 46_000_000},
+            {"date": "2026-04-02", "close": 1860.0, "volume": 45_000_000},
         ]
 
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", fake_fetch_month)
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake_yf)
 
-    rows = get_prices("2330", "TWD", "2026-03-15", "2026-04-20")
-    assert calls == [("2330", 2026, 3), ("2330", 2026, 4)]
-    # 2026-03-01 is dropped (before window start); 2026-03-15, -04-01, -04-15 kept.
-    assert len(rows) == 3
-    assert [r["date"] for r in rows] == ["2026-03-15", "2026-04-01", "2026-04-15"]
-    # All rows tagged with the correct symbol/source
+    rows = get_prices("2330", "TWD", "2026-04-01", "2026-04-02")
+    # Single yfinance call with the .TW suffix — no month batching.
+    assert calls == [("2330.TW", "2026-04-01", "2026-04-02")]
+    assert len(rows) == 2
+    # Tagged rows carry the bare symbol (the `prices` table key) and
+    # source='yfinance' regardless of which suffix succeeded.
     assert all(r["symbol"] == "2330" for r in rows)
     assert all(r["currency"] == "TWD" for r in rows)
-    assert all(r["source"] == "twse" for r in rows)
+    assert all(r["source"] == "yfinance" for r in rows)
 
 
-def test_get_prices_filters_to_window(monkeypatch) -> None:
-    """Rows outside [start, end] are dropped even if TWSE returned them."""
-    def fake_fetch_month(stockNo, year, month):
+def test_get_prices_tw_filters_to_window(monkeypatch) -> None:
+    """Rows outside [start, end] are dropped even if yfinance returned them."""
+    def fake_yf(symbol, start, end):
         return [
             {"date": "2026-04-01", "close": 100.0, "volume": 1},
             {"date": "2026-04-15", "close": 105.0, "volume": 2},
             {"date": "2026-04-30", "close": 110.0, "volume": 3},
         ]
 
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", fake_fetch_month)
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake_yf)
 
     rows = get_prices("2330", "TWD", "2026-04-10", "2026-04-20")
     assert [r["date"] for r in rows] == ["2026-04-15"]
 
 
-def test_get_prices_dedupes_when_overlapping_months(monkeypatch) -> None:
-    """Asking the same month twice (shouldn't happen, but) returns one row."""
-    def fake_fetch_month(stockNo, year, month):
-        return [{"date": "2026-04-01", "close": 100.0, "volume": 1}]
-
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", fake_fetch_month)
-    rows = get_prices("2330", "TWD", "2026-04-01", "2026-04-01")
-    assert len(rows) == 1
-
-
-def test_get_prices_returns_empty_when_twse_returns_nothing(monkeypatch) -> None:
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", lambda *_: [])
+def test_get_prices_tw_returns_empty_when_neither_suffix_responds(
+    monkeypatch,
+) -> None:
+    """`.TW` empty AND `.TWO` empty → empty result, no exceptions."""
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", lambda *_: [])
     assert get_prices("9999", "TWD", "2026-04-01", "2026-04-30") == []
 
 
+def test_get_prices_tw_falls_back_to_dot_two_for_otc(monkeypatch) -> None:
+    """If `.TW` returns nothing, the router probes `.TWO` (TPEX/OTC)."""
+    queried: list[str] = []
+
+    def fake_yf(symbol, start, end):
+        queried.append(symbol)
+        if symbol.endswith(".TWO"):
+            return [{"date": "2026-04-01", "close": 80.0, "volume": 1}]
+        return []  # .TW returns empty
+
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake_yf)
+
+    rows = get_prices("5483", "TWD", "2026-04-01", "2026-04-30")
+    assert queried == ["5483.TW", "5483.TWO"]
+    assert len(rows) == 1
+    assert rows[0]["source"] == "yfinance"
+    assert rows[0]["symbol"] == "5483"
+
+
 def test_get_prices_usd_routed_to_yfinance(monkeypatch) -> None:
-    """Phase 6 wires the USD branch; this test pins the historical
-    NotImplementedError contract is gone and USD now flows through."""
+    """Foreign branch passes bare ticker to yfinance — no suffix logic."""
     monkeypatch.setattr(
         "app.price_sources.yfinance_fetch_prices",
         lambda s, st, ed: [{"date": "2026-04-01", "close": 150.0, "volume": 1}],
     )
     rows = get_prices("SNDK", "USD", "2026-04-01", "2026-04-30")
     assert rows and rows[0]["currency"] == "USD"
+    assert rows[0]["symbol"] == "SNDK"
+    assert rows[0]["source"] == "yfinance"

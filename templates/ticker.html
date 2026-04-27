@@ -31,12 +31,16 @@
 <div class="section card-grid cards-2">
   <div class="card">
     <div class="card-header"><h3 class="card-title">Trade history<span tabindex="0" class="info-icon" data-info="Every buy and sell ticket for this ticker, oldest first. Useful to see your full entry/exit story — date, price paid, how many shares each time."></span></h3></div>
-    <div class="table-wrap scroll-md">
+    <div class="table-wrap">
       <table class="data" id="trade-table">
         <thead><tr>
-          <th>Date</th><th>Side</th>
-          <th class="num">Qty</th><th class="num">Price</th>
-          <th class="num">Gross (TWD)</th><th class="num">Fee</th><th class="num">Net (TWD)</th>
+          <th class="sortable" data-key="date">Date</th>
+          <th class="sortable" data-key="side">Side</th>
+          <th class="num sortable" data-key="qty">Qty</th>
+          <th class="num sortable" data-key="price">Price</th>
+          <th class="num sortable" data-key="gross_twd">Gross (TWD)</th>
+          <th class="num sortable" data-key="fee_twd">Fee</th>
+          <th class="num sortable" data-key="net_twd">Net (TWD)</th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -44,9 +48,15 @@
   </div>
   <div class="card">
     <div class="card-header"><h3 class="card-title">Dividends<span tabindex="0" class="info-icon" data-info="Every dividend payment received for THIS ticker. Includes both TW (集保 ACH 股息) and foreign (USD broker) where applicable. Useful for total-return calc on this position."></span></h3></div>
-    <div class="table-wrap scroll-md">
+    <div class="table-wrap">
       <table class="data" id="div-table">
-        <thead><tr><th>Month</th><th>Date</th><th>Ccy</th><th class="num">Local</th><th class="num">TWD</th></tr></thead>
+        <thead><tr>
+          <th class="sortable" data-key="month">Month</th>
+          <th class="sortable" data-key="date">Date</th>
+          <th class="sortable" data-key="ccy">Ccy</th>
+          <th class="num sortable" data-key="amount_local">Local</th>
+          <th class="num sortable" data-key="amount_twd">TWD</th>
+        </tr></thead>
         <tbody></tbody>
       </table>
     </div>

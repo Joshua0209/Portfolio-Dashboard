@@ -1,19 +1,13 @@
 """Tax / cost-basis report."""
 from __future__ import annotations
 
-from collections import defaultdict
-
-from flask import Blueprint, current_app
+from flask import Blueprint
 
 from .. import analytics
 from .holdings import _holdings_for_month
-from ._helpers import envelope, store
+from ._helpers import envelope, reprice_holdings_today, store
 
 bp = Blueprint("tax", __name__, url_prefix="/api/tax")
-
-
-def _daily_store():
-    return current_app.extensions["daily_store"]
 
 
 @bp.get("")
@@ -24,10 +18,9 @@ def tax():
     return. Average-cost figures are kept side-by-side so users can spot
     discrepancies due to partially-closed lots.
 
-    Unrealized P&L is computed against today's close (from the daily
-    prices store) when available, not last month-end, so the headline
-    figure is never 25 days behind reality. Tickers without a daily
-    price keep their month-end value (per-ticker graceful fallback).
+    Unrealized P&L is computed against today's close when the daily
+    store has data; tickers without a daily price keep their month-end
+    value (per-ticker graceful fallback).
     """
     s = store()
     realized_avg = {r["code"]: r for r in analytics.realized_pnl_by_ticker(s.by_ticker)}
@@ -35,14 +28,10 @@ def tax():
 
     last = s.months[-1] if s.months else {}
     current = _holdings_for_month(last) if last else []
-
-    # Override unrealized with today's close where available.
-    daily = _daily_store()
-    snap = daily.get_today_snapshot()
-    fx_today = snap.get("fx_usd_twd") if snap else last.get("fx_usd_twd")
-    current = analytics.reprice_holdings_with_daily(
-        current, daily.get_latest_close, current_fx_usd_twd=fx_today
-    )
+    if current:
+        repriced = reprice_holdings_today(current, fallback_fx=last.get("fx_usd_twd"))
+        if repriced is not None:
+            current = repriced
     current_by_code = {h["code"]: h for h in current if h.get("code")}
 
     enriched = []
@@ -61,16 +50,48 @@ def tax():
             "unrealized_pct": unrealized_pct,
             "total_pnl_twd": r["realized_pnl_twd"] + unrealized + r.get("dividends_twd", 0),
         })
+
+    # Surface holdings that have an open position but no trade history in
+    # by_ticker (e.g. transferred-in lots) so their unrealized P&L is
+    # included in the totals.
+    fifo_codes = {r["code"] for r in realized_fifo}
+    for code, cur in current_by_code.items():
+        if code in fifo_codes:
+            continue
+        upnl = cur.get("unrealized_pnl_twd", 0) or 0
+        if not cur.get("qty") and not upnl:
+            continue
+        enriched.append({
+            "code": code,
+            "name": cur.get("name"),
+            "venue": cur.get("venue"),
+            "realized_pnl_twd": 0.0,
+            "realized_pnl_avg_twd": 0.0,
+            "sell_proceeds_twd": 0.0,
+            "cost_of_sold_twd": 0.0,
+            "sell_qty": 0,
+            "open_qty": cur.get("qty", 0),
+            "current_qty": cur.get("qty", 0),
+            "open_cost_twd": cur.get("cost_twd", 0),
+            "wins": 0, "losses": 0,
+            "win_rate": None, "profit_factor": None, "avg_holding_days": None,
+            "dividends_twd": 0.0,
+            "fully_closed": False,
+            "unrealized_pnl_twd": upnl,
+            "unrealized_pct": cur.get("unrealized_pct", 0),
+            "total_pnl_twd": upnl,
+        })
     enriched.sort(key=lambda r: r["total_pnl_twd"], reverse=True)
 
     realized_total = sum(r["realized_pnl_twd"] for r in enriched)
     div_total = sum(r.get("dividends_twd", 0) for r in enriched)
     fees_total = sum((s.by_ticker.get(r["code"], {}) or {}).get("fees_twd", 0) for r in enriched)
     tax_total = sum((s.by_ticker.get(r["code"], {}) or {}).get("tax_twd", 0) for r in enriched)
-    unrealized_total = sum(r["unrealized_pnl_twd"] for r in enriched)
+    # Sum directly from `current` (not `enriched`) so the total agrees
+    # with /api/summary and /api/holdings/current and isn't affected by
+    # codes appearing twice or holdings without trade history.
+    unrealized_total = sum(h.get("unrealized_pnl_twd", 0) or 0 for h in current)
 
-    # Broker rebates offset trading friction. Surface them at the totals
-    # level so the headline cost reflects what was actually paid.
     rebate_total = 0.0
     for m in s.months:
         for r in (m.get("tw") or {}).get("rebates", []) or []:

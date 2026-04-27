@@ -24,7 +24,7 @@
       <h3 class="card-title">Concentration (HHI)<span tabindex="0" class="info-icon" data-info="Donut shows position weights. HHI (Herfindahl index) = sum of squared weights. 0 = perfectly diversified, 1 = single stock. Below 0.15 is well-diversified; above 0.25 is concentrated. Your displayed HHI tells you which side of the line you're on."></span></h3>
       <span class="card-sub" id="hhi-label">—</span>
     </div>
-    <div class="chart-box h-260"><canvas id="chart-weights"></canvas></div>
+    <div class="chart-box h-320"><canvas id="chart-weights"></canvas></div>
   </div>
 </div>
 
@@ -50,15 +50,6 @@
   </div>
 </div>
 
-<div class="section">
-  <div class="card">
-    <div class="card-header">
-      <h3 class="card-title">Position weights<span tabindex="0" class="info-icon" data-info="Each holding sized by % of your portfolio value. Long bars = big positions you're heavily exposed to. Use this to decide what to trim or what to add to."></span></h3>
-      <span class="card-sub">% of portfolio market value</span>
-    </div>
-    <div id="weights-list" class="flex-col gap-2"></div>
-  </div>
-</div>
 {% endblock %}
 
 {% block scripts %}

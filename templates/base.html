@@ -67,6 +67,7 @@
 
   <main class="content">
     {% include "_reconcile_banner.html" %}
+    {% include "_dlq_banner.html" %}
     <header class="page-header">
       <div>
         <h1>{% block heading %}Dashboard{% endblock %}</h1>
@@ -83,6 +84,7 @@
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   <script src="{{ url_for('static', filename='js/help.js') }}"></script>
   <script src="{{ url_for('static', filename='js/pagination.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/data-table.js') }}"></script>
   <script src="{{ url_for('static', filename='js/freshness.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>

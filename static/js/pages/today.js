@@ -23,6 +23,22 @@
     return `${sign}${n.toFixed(2)}%`;
   }
 
+  // Chart.js refuses to bind a second instance to a <canvas> that an
+  // existing chart already owns. The Refresh button re-runs every paint
+  // function, so each painter must destroy its prior instance first.
+  // The helper owns construction so the destroy happens before the new
+  // Chart constructor runs — passing `new Chart(...)` as an argument
+  // would evaluate it (and throw) before the helper body executes.
+  const chartInstances = new Map();
+  function bindChart(canvasId, config) {
+    const prior = chartInstances.get(canvasId);
+    if (prior) prior.destroy();
+    const canvas = document.getElementById(canvasId);
+    const instance = new window.Chart(canvas.getContext("2d"), config);
+    chartInstances.set(canvasId, instance);
+    return instance;
+  }
+
   function paintHero(data) {
     if (!data || data.empty) {
       document.getElementById("data-date-heading").textContent =
@@ -147,7 +163,7 @@
         `(peak ${data.max_dd_peak_date}). Current peak ${data.current_peak_date}.`;
     }
 
-    new window.Chart(canvas.getContext("2d"), {
+    bindChart("dd-chart", {
       type: "line",
       data: {
         labels: points.map((p) => p.date),
@@ -250,20 +266,23 @@
       return;
     }
 
-    // Bucket cells by (year, month)
-    const buckets = new Map();
-    for (const c of data.cells) {
-      const key = `${c.year}-${c.month}`;
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(c);
-    }
+    // Index cells by ISO date so we can walk every calendar day below.
+    // The previous algorithm padded by *weekday delta*, which collapses any
+    // gap > 6 calendar days into ≤ 6 cells (e.g. an 8-day gap rendered 2
+    // cells instead of 7). Walking dom 1..last-day handles arbitrary gaps,
+    // months with zero trading days, and trailing days past the last trade.
+    const byDate = new Map();
+    for (const c of data.cells) byDate.set(c.date, c);
 
     // Cap the diverging scale at the 95th percentile of |returns| (or 2%, whichever is bigger)
     const mags = data.cells.map((c) => Math.abs(c.return_pct)).sort((a, b) => a - b);
     const p95 = mags[Math.floor(mags.length * 0.95)] || 2.0;
     const cap = Math.max(2.0, p95);
 
-    const WD = ["M", "T", "W", "T", "F", "S", "S"];
+    // Sunday-first weekday header. Index 0 = Sunday, index 6 = Saturday —
+    // matches JS `Date.getDay()` directly so no offset is needed below.
+    const WD = ["S", "M", "T", "W", "T", "F", "S"];
+    const pad2 = (n) => String(n).padStart(2, "0");
 
     for (const m of data.months) {
       const card = document.createElement("div");
@@ -276,7 +295,6 @@
 
       const grid = document.createElement("div");
       grid.className = "cal-month__grid";
-      // Weekday header
       for (const w of WD) {
         const h = document.createElement("span");
         h.className = "cal-month__weekday";
@@ -284,37 +302,35 @@
         grid.appendChild(h);
       }
 
-      // Pad leading blanks to align day-of-week (Monday = column 0)
-      const cells = buckets.get(`${m.year}-${m.month}`) || [];
-      // Find first day-of-month — pad up to its weekday from grid start
-      const firstCell = cells[0];
-      const firstWeekday = firstCell ? firstCell.weekday : 0;
-      // Pad: first day might not be the 1st; we still align by its actual weekday
-      // To keep the calendar visually clean, pad with empty cells from Monday → firstWeekday
+      // Day 1 of this month, then walk to the last day. JS Date months are
+      // 0-indexed; passing day=0 of next month gives last day of this month.
+      const first = new Date(m.year, m.month - 1, 1);
+      const lastDom = new Date(m.year, m.month, 0).getDate();
+      // Sunday-first grid — `getDay()` already returns Sun=0..Sat=6.
+      const firstWeekday = first.getDay();
+
       for (let i = 0; i < firstWeekday; i++) {
         const e = document.createElement("span");
         e.className = "cal-cell cal-cell--empty";
         grid.appendChild(e);
       }
 
-      let prevWeekday = firstWeekday - 1;
-      for (const c of cells) {
-        // Insert empty cells for skipped weekdays (gap-fill within month)
-        let gap = c.weekday - prevWeekday - 1;
-        if (gap < 0) gap += 7;
-        for (let i = 0; i < gap; i++) {
-          const e = document.createElement("span");
-          e.className = "cal-cell cal-cell--empty";
-          grid.appendChild(e);
-        }
+      for (let dom = 1; dom <= lastDom; dom++) {
+        const iso = `${m.year}-${pad2(m.month)}-${pad2(dom)}`;
+        const c = byDate.get(iso);
         const cell = document.createElement("span");
-        cell.className = "cal-cell";
-        cell.style.backgroundColor = colorForReturn(c.return_pct, cap);
-        cell.textContent = String(c.dom);
-        const sign = c.return_pct > 0 ? "+" : "";
-        cell.title = `${c.date}: ${sign}${c.return_pct.toFixed(2)}%`;
+        if (c) {
+          cell.className = "cal-cell";
+          cell.style.backgroundColor = colorForReturn(c.return_pct, cap);
+          cell.textContent = String(dom);
+          const sign = c.return_pct > 0 ? "+" : "";
+          cell.title = `${iso}: ${sign}${c.return_pct.toFixed(2)}%`;
+        } else {
+          cell.className = "cal-cell cal-cell--no-data";
+          cell.textContent = String(dom);
+          cell.title = `${iso}: no data`;
+        }
         grid.appendChild(cell);
-        prevWeekday = c.weekday;
       }
 
       card.appendChild(grid);
@@ -327,15 +343,17 @@
     if (!canvas || !window.Chart) return;
     const points = (data && data.points) || [];
     if (points.length === 0) return;
-    new window.Chart(canvas.getContext("2d"), {
+    bindChart("equity-sparkline", {
       type: "line",
       data: {
         labels: points.map((p) => p.date),
         datasets: [{
+          label: "Equity (TWD)",
           data: points.map((p) => p.equity_twd),
           borderColor: charts.cssVar("--accent"),
           borderWidth: 1.5,
           pointRadius: 0,
+          pointHoverRadius: 4,
           fill: true,
           backgroundColor: (c) =>
             c.chart.chartArea
@@ -345,14 +363,37 @@
         }],
       },
       options: {
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { display: false },
-          y: { display: false },
-        },
         animation: false,
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => items[0].label,
+              label: (c) => `Equity: ${fmtTWD(c.parsed.y)}`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              maxTicksLimit: 6,
+              color: charts.cssVar("--text-faint"),
+            },
+            grid: { display: false },
+          },
+          y: {
+            ticks: {
+              callback: (v) => (window.format && window.format.twdCompact)
+                ? window.format.twdCompact(v)
+                : v.toLocaleString(),
+              color: charts.cssVar("--text-faint"),
+            },
+            grid: { color: charts.cssVar("--line") },
+          },
+        },
       },
     });
   }

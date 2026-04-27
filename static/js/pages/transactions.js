@@ -3,7 +3,7 @@
  */
 (function () {
   let allTx = [];
-  let pager = null;
+  let table = null;
 
   document.addEventListener("DOMContentLoaded", () => init().catch(showError));
 
@@ -18,15 +18,48 @@
     renderKPIs(agg.totals);
     renderVolumeChart(agg);
     renderFeeChart(agg);
-    populateMonthFilter(allTx);
-    bindFilters();
-    pager = window.createPager({
-      containerId: "tx-pager",
-      pageSize: 50,
-      onChange: renderRows,
-    });
-    rerender();
+    table = buildTable();
     document.getElementById("export-tx").addEventListener("click", exportCsv);
+  }
+
+  function buildTable() {
+    const months = [...new Set(allTx.map((t) => t.month).filter(Boolean))].sort();
+    return window.dataTable({
+      tableId: "tx-table",
+      rows: allTx,
+      searchKeys: ["code", "name"],
+      searchPlaceholder: "Search code or name…",
+      filters: [
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+        {
+          id: "side", key: "side", label: "All sides",
+          options: [{ value: "buy", label: "Buys only" }, { value: "sell", label: "Sells only" }],
+          predicate: (r, v) => v === "buy" ? /買/.test(r.side || "") : /賣/.test(r.side || ""),
+        },
+        {
+          id: "month", key: "month", label: "All months",
+          options: months.map((m) => ({ value: m, label: fmt.month(m) })),
+        },
+      ],
+      defaultSort: { key: "date", dir: "desc" },
+      colspan: 12,
+      pageSize: 50,
+      emptyText: "No matching trades",
+      row: (t) => [
+        td(fmt.date(t.date), "text-mute"),
+        tdPill(t.venue),
+        td(t.side || ""),
+        tdLink(t.code || "", `/ticker/${encodeURIComponent(t.code || "")}`, "code"),
+        td(t.name || ""),
+        td(fmt.int(t.qty), "num"),
+        td(fmt.num(t.price, 2), "num"),
+        td(t.ccy || "", "text-mute"),
+        td(fmt.twd(t.gross_twd), "num"),
+        td(fmt.twd(t.fee_twd), "num text-mute"),
+        td(fmt.twd(t.tax_twd), "num text-mute"),
+        td(fmt.twd(t.net_twd), `num ${fmt.tone(t.net_twd)}`),
+      ],
+    });
   }
 
   function renderKPIs(t) {
@@ -123,86 +156,6 @@
     });
   }
 
-  function populateMonthFilter(rows) {
-    const months = [...new Set(rows.map((t) => t.month))].sort();
-    const sel = document.getElementById("month");
-    for (const m of months) {
-      const opt = document.createElement("option");
-      opt.value = m;
-      opt.textContent = fmt.month(m);
-      sel.appendChild(opt);
-    }
-  }
-
-  function bindFilters() {
-    ["q", "venue", "side", "month"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener("input", rerender);
-      el.addEventListener("change", rerender);
-    });
-  }
-
-  // Side classification: TW uses 普買/普賣/融買/融賣; Foreign uses 買進/賣出.
-  function isBuy(side)  { return /買/.test(side || ""); }
-  function isSell(side) { return /賣/.test(side || ""); }
-
-  function filtered() {
-    const q = (document.getElementById("q").value || "").toLowerCase();
-    const v = document.getElementById("venue").value;
-    const s = document.getElementById("side").value;
-    const m = document.getElementById("month").value;
-    return allTx.filter((t) => {
-      if (v && t.venue !== v) return false;
-      if (m && t.month !== m) return false;
-      if (s === "buy" && !isBuy(t.side)) return false;
-      if (s === "sell" && !isSell(t.side)) return false;
-      if (!q) return true;
-      const code = String(t.code || "").toLowerCase();
-      const name = String(t.name || "").toLowerCase();
-      return code.includes(q) || name.includes(q);
-    });
-  }
-
-  function rerender() {
-    const rows = filtered();
-    pager.update(rows.length);
-    renderRows();
-  }
-
-  function renderRows() {
-    const rows = filtered();
-    const pageRows = pager.slice(rows);
-    const tbody = document.querySelector("#tx-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!pageRows.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 12;
-      td.className = "table-empty";
-      td.textContent = "No matching trades";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-      return;
-    }
-    for (const t of pageRows) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.date(t.date), "text-mute"));
-      tr.appendChild(tdPill(t.venue));
-      tr.appendChild(td(t.side || ""));
-      tr.appendChild(tdLink(t.code || "", `/ticker/${encodeURIComponent(t.code || "")}`, "code"));
-      tr.appendChild(td(t.name || ""));
-      tr.appendChild(td(fmt.int(t.qty), "num"));
-      tr.appendChild(td(fmt.num(t.price, 2), "num"));
-      tr.appendChild(td(t.ccy || "", "text-mute"));
-      tr.appendChild(td(fmt.twd(t.gross_twd), "num"));
-      tr.appendChild(td(fmt.twd(t.fee_twd), "num text-mute"));
-      tr.appendChild(td(fmt.twd(t.tax_twd), "num text-mute"));
-      tr.appendChild(td(fmt.twd(t.net_twd), `num ${fmt.tone(t.net_twd)}`));
-      tbody.appendChild(tr);
-    }
-  }
-
   function td(text, cls) {
     const el = document.createElement("td");
     if (cls) el.className = cls;
@@ -229,7 +182,7 @@
   function setText(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; }
 
   function exportCsv() {
-    const rows = filtered();
+    const rows = table ? table.filtered() : allTx;
     const headers = ["month", "date", "venue", "side", "code", "name", "qty", "price", "ccy", "gross_twd", "fee_twd", "tax_twd", "net_twd"];
     const lines = [headers.join(",")];
     for (const r of rows) {

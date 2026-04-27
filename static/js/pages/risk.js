@@ -12,7 +12,6 @@
     renderWeightsChart(r.weight_distribution);
     renderLeverageTimeline(r.leverage_timeline || []);
     renderRatios(r);
-    renderWeightsList(r.weight_distribution);
   }
 
   function renderKPIs(r) {
@@ -63,10 +62,12 @@
 
   function renderWeightsChart(weights) {
     const ctx = document.getElementById("chart-weights").getContext("2d");
-    const top = weights.slice(0, 12);
+    // Cap the legend so a long tail doesn't overflow the chart card.
+    // Top 10 named slices + an "Others" bucket for the rest.
+    const top = weights.slice(0, 10);
     const data = top.map((w) => w.weight * 100);
-    const others = weights.slice(12).reduce((s, w) => s + w.weight, 0) * 100;
     const labels = top.map((w) => w.code || "—");
+    const others = weights.slice(10).reduce((s, w) => s + w.weight, 0) * 100;
     if (others > 0) {
       data.push(others);
       labels.push("Others");
@@ -87,42 +88,22 @@
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        cutout: "55%",
+        cutout: "60%",
+        layout: { padding: 4 },
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: (c) => `${c.label}: ${c.parsed.toFixed(1)}%` } },
+          legend: {
+            display: true,
+            position: "right",
+            align: "center",
+            labels: charts.pieLegendLabels(
+              (label, v) => `${label} — ${v.toFixed(1)}%`,
+            ),
+          },
+          tooltip: { callbacks: { label: (c) => `${c.label}: ${c.parsed.toFixed(2)}%` } },
         },
       },
     });
     setText("hhi-label", `HHI ${(weights.reduce((s, w) => s + w.weight ** 2, 0)).toFixed(3)}`);
-  }
-
-  function renderWeightsList(weights) {
-    const el = document.getElementById("weights-list");
-    while (el.firstChild) el.removeChild(el.firstChild);
-    for (const w of weights) {
-      const row = document.createElement("div");
-      row.className = "bar-row";
-      const lab = document.createElement("span");
-      lab.className = "text-sm";
-      lab.style.cssText = "display:flex;gap:8px;align-items:center;";
-      const code = document.createElement("strong");
-      code.textContent = w.code || "—";
-      const name = document.createElement("span");
-      name.className = "text-mute text-tiny";
-      name.textContent = w.name || "";
-      lab.append(code, name);
-      const bar = document.createElement("span");
-      bar.className = "bar accent";
-      const fill = document.createElement("span");
-      fill.style.width = `${(w.weight * 100).toFixed(2)}%`;
-      bar.appendChild(fill);
-      const val = document.createElement("span");
-      val.className = "num text-sm";
-      val.textContent = `${(w.weight * 100).toFixed(2)}%`;
-      row.append(lab, bar, val);
-      el.appendChild(row);
-    }
   }
 
   function renderLeverageTimeline(timeline) {

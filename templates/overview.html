@@ -43,8 +43,7 @@
       <h3 class="card-title">Allocation<span tabindex="0" class="info-icon" data-info="How your equity is divided across positions today. Big slices = concentration risk (one stock tanks → big hit). Many small slices = diversification (smoother but harder to outperform)."></span></h3>
       <span class="card-sub" id="alloc-total">—</span>
     </div>
-    <div class="chart-box h-260"><canvas id="chart-alloc"></canvas></div>
-    <div id="alloc-legend" class="flex-col gap-2"></div>
+    <div class="chart-box h-320"><canvas id="chart-alloc"></canvas></div>
   </div>
 </div>
 
@@ -75,14 +74,14 @@
       <table class="data" id="activity-table">
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Venue</th>
-            <th>Side</th>
-            <th>Code</th>
-            <th>Name</th>
-            <th class="num">Qty</th>
-            <th class="num">Price</th>
-            <th class="num">Net (TWD)</th>
+            <th class="sortable" data-key="date">Date</th>
+            <th class="sortable" data-key="venue">Venue</th>
+            <th class="sortable" data-key="side">Side</th>
+            <th class="sortable" data-key="code">Code</th>
+            <th class="sortable" data-key="name">Name</th>
+            <th class="num sortable" data-key="qty">Qty</th>
+            <th class="num sortable" data-key="price">Price</th>
+            <th class="num sortable" data-key="net_twd">Net (TWD)</th>
           </tr>
         </thead>
         <tbody></tbody>

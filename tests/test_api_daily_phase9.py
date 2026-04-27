@@ -66,13 +66,13 @@ def test_daily_equity_returns_202_when_initializing(client):
 
 
 def test_daily_equity_returns_503_when_failed(client):
-    backfill_state.get().mark_failed("twse 503 fire drill")
+    backfill_state.get().mark_failed("yfinance 503 fire drill")
 
     resp = client.get("/api/daily/equity")
     assert resp.status_code == 503
     body = resp.get_json()
     assert body["ok"] is False
-    assert "twse 503 fire drill" in body["error"]
+    assert "yfinance 503 fire drill" in body["error"]
 
 
 def test_daily_equity_serves_normally_when_ready(client, app):

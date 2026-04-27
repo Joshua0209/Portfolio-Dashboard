@@ -650,6 +650,21 @@ table.data td a:hover { color: var(--accent); }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 /* ─────────────────────────────────────────────────────────────────
+   Unified data-table (search + filters + pager)
+   ───────────────────────────────────────────────────────────────── */
+.dt-toolbar {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-3);
+}
+.dt-toolbar .input.dt-search { width: 240px; max-width: 100%; }
+.dt-toolbar .select.dt-filter { padding: 6px 10px; font-size: 13px; }
+.dt-toolbar .dt-counter { white-space: nowrap; }
+.dt-pager { padding-top: var(--sp-2); }
+
+/* ─────────────────────────────────────────────────────────────────
    Table pagination
    ───────────────────────────────────────────────────────────────── */
 .pager {

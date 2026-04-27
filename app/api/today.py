@@ -19,20 +19,40 @@ the endpoints without renaming.
 from __future__ import annotations
 
 import json
+import math
 import re
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint, request
 
-from .. import backfill_runner
-from ._helpers import envelope, store as portfolio_store
+from .. import analytics, backfill_runner
+from ._helpers import daily_store as _store, envelope, store as portfolio_store
 
 bp = Blueprint("today", __name__)
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
-def _store():
-    return current_app.extensions["daily_store"]
+def _flow_adjusted_twr_rows():
+    """Stocks-only V (broker cash subtracted) paired with broker-side F
+    (daily_investment_flows), chained via Modified Dietz.
+
+    Returns the daily_twr() row list, or None if there's not enough data
+    to compute (< 2 priced days). Empty months → empty flow series →
+    daily_twr degenerates to raw ratios, which is correct for flow-free
+    synthetic data (e.g. unit tests).
+
+    See performance.py:120 for the same V/F pairing on the monthly path.
+    """
+    equity_series = _store().get_equity_curve()
+    if not equity_series or len(equity_series) < 2:
+        return None
+    positions_only = [
+        {**r, "equity_twd": float(r["equity_twd"]) - float(r.get("cash_twd") or 0)}
+        for r in equity_series
+    ]
+    months = portfolio_store().months
+    flow_series = analytics.daily_investment_flows(months) if months else []
+    return analytics.daily_twr(positions_only, flow_series)
 
 
 # --- DLQ read endpoint ---------------------------------------------------
@@ -354,64 +374,53 @@ def today_drawdown():
 @bp.get("/api/today/risk-metrics")
 def today_risk_metrics():
     """Daily-resolution risk metrics: rolling 30d annualized vol,
-    Sharpe (rf=0), Sortino, hit rate, max DD. All derived from
-    portfolio_daily; no external calls.
-
-    Returns nulls when there are too few rows for a metric (need ≥21
-    daily-return observations for the rolling window).
+    Sharpe (rf=0), Sortino, hit rate, max DD. Daily returns are
+    flow-adjusted via Modified Dietz (`_flow_adjusted_twr_rows`);
+    raw equity ratios would treat deposits as returns and compound
+    to +1e30% annualized on early small-equity days.
     """
-    import math
-
-    ds = _store()
-    with ds.connect_ro() as conn:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT date, equity_twd FROM portfolio_daily "
-            "WHERE equity_twd > 0 ORDER BY date ASC"
-        ).fetchall()]
-    if len(rows) < 2:
+    twr_rows = _flow_adjusted_twr_rows()
+    if twr_rows is None:
         return envelope({"empty": True})
 
-    rets: list[float] = []
-    for prev, cur in zip(rows, rows[1:]):
-        if prev["equity_twd"] > 0:
-            rets.append(cur["equity_twd"] / prev["equity_twd"] - 1.0)
-
+    # Skip day-1 (period_return forced to 0; no prior equity to compare).
+    rets = [r["period_return"] for r in twr_rows[1:]]
     n = len(rets)
     if n == 0:
         return envelope({"empty": True})
 
     mean = sum(rets) / n
-    var = sum((r - mean) ** 2 for r in rets) / n if n else 0.0
+    var = sum((r - mean) ** 2 for r in rets) / n
     std = math.sqrt(var)
     downside = [r for r in rets if r < 0]
-    dvar = sum((r - 0) ** 2 for r in downside) / len(downside) if downside else 0.0
+    dvar = sum(r * r for r in downside) / len(downside) if downside else 0.0
     dstd = math.sqrt(dvar)
 
     ann_factor = math.sqrt(252)
-    ann_return = (1 + mean) ** 252 - 1 if mean is not None else None
+    # CAGR matches the chained wealth_index daily_twr already produced.
+    cum_growth = twr_rows[-1]["wealth_index"]
+    ann_return = (cum_growth ** (252.0 / n)) - 1.0 if cum_growth > 0 else None
     ann_vol = std * ann_factor
-    sharpe = (ann_return / ann_vol) if ann_vol > 0 else None
-    sortino = ((ann_return) / (dstd * ann_factor)) if dstd > 0 else None
+    sharpe = (ann_return / ann_vol) if (ann_return is not None and ann_vol > 0) else None
+    sortino = (ann_return / (dstd * ann_factor)) if (ann_return is not None and dstd > 0) else None
 
-    hit_rate = sum(1 for r in rets if r > 0) / n if n else None
-    best = max(rets) * 100.0 if rets else None
-    worst = min(rets) * 100.0 if rets else None
+    hit_rate = sum(1 for r in rets if r > 0) / n
+    best = max(rets) * 100.0
+    worst = min(rets) * 100.0
 
-    # 30-day rolling window stats (last 30 returns; fewer if not enough)
-    window = rets[-30:] if len(rets) >= 30 else rets
-    w_mean = sum(window) / len(window) if window else 0.0
-    w_var = sum((r - w_mean) ** 2 for r in window) / len(window) if window else 0.0
-    w_std = math.sqrt(w_var)
-    rolling_vol = w_std * ann_factor
+    window = rets[-30:] if n >= 30 else rets
+    w_mean = sum(window) / len(window)
+    w_var = sum((r - w_mean) ** 2 for r in window) / len(window)
+    rolling_vol = math.sqrt(w_var) * ann_factor
 
-    # Max drawdown from the same series we already used in /drawdown
+    # Max drawdown of the chained TWR wealth curve.
     peak = 0.0
     max_dd = 0.0
-    for r in rows:
-        eq = r["equity_twd"]
-        if eq > peak:
-            peak = eq
-        dd = (eq / peak - 1.0) * 100.0 if peak else 0.0
+    for r in twr_rows:
+        w = r["wealth_index"]
+        if w > peak:
+            peak = w
+        dd = (w / peak - 1.0) * 100.0 if peak > 0 else 0.0
         if dd < max_dd:
             max_dd = dd
 
@@ -423,7 +432,7 @@ def today_risk_metrics():
         "rolling_30d_vol_pct": rolling_vol * 100.0,
         "sharpe": sharpe,
         "sortino": sortino,
-        "hit_rate_pct": hit_rate * 100.0 if hit_rate is not None else None,
+        "hit_rate_pct": hit_rate * 100.0,
         "best_day_pct": best,
         "worst_day_pct": worst,
         "max_drawdown_pct": max_dd,
@@ -432,43 +441,49 @@ def today_risk_metrics():
 
 @bp.get("/api/today/calendar")
 def today_calendar():
-    """Per-trading-day return (% delta of equity_twd vs prior priced day),
-    with calendar metadata for heatmap rendering.
-
-    Returns: {cells: [{date, year, month, dom, weekday, return_pct}],
-              months: [{year, month, label}]}
-    where months is the ordered de-duplicated list of (year, month) pairs
-    appearing in cells.
+    """Per-trading-day return (% from flow-adjusted daily TWR), with
+    calendar metadata for heatmap rendering. Returns:
+        {cells: [{date, year, month, dom, weekday, return_pct}],
+         months: [{year, month, label}]}
+    where months covers every (year, month) from the first to the last
+    cell — including months with zero trading days, so the calendar grid
+    doesn't visually collapse a long gap.
     """
     from datetime import date as _date
 
-    ds = _store()
-    with ds.connect_ro() as conn:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT date, equity_twd FROM portfolio_daily "
-            "WHERE equity_twd > 0 ORDER BY date ASC"
-        ).fetchall()]
-    if len(rows) < 2:
+    twr_rows = _flow_adjusted_twr_rows()
+    if twr_rows is None:
         return envelope({"empty": True, "cells": [], "months": []})
 
     cells = []
-    seen_months: list[tuple[int, int]] = []
-    for prev, cur in zip(rows, rows[1:]):
-        ret = (cur["equity_twd"] / prev["equity_twd"] - 1.0) * 100.0
-        y, m, d = (int(p) for p in cur["date"].split("-"))
-        weekday = _date(y, m, d).weekday()  # 0=Mon
+    # Skip day-1 (period_return forced to 0 — no prior comparison).
+    for r in twr_rows[1:]:
+        y, m, d = (int(p) for p in r["date"].split("-"))
         cells.append({
-            "date": cur["date"], "year": y, "month": m, "dom": d,
-            "weekday": weekday, "return_pct": ret,
+            "date": r["date"], "year": y, "month": m, "dom": d,
+            "weekday": _date(y, m, d).weekday(),
+            "return_pct": r["period_return"] * 100.0,
         })
-        if (y, m) not in seen_months:
-            seen_months.append((y, m))
 
-    month_labels = [
-        {"year": y, "month": m,
-         "label": _date(y, m, 1).strftime("%b %Y")}
-        for (y, m) in seen_months
-    ]
+    if not cells:
+        return envelope({"empty": True, "cells": [], "months": []})
+
+    # Walk every month from first to last cell — fills holes when the
+    # series spans a gap (e.g. portfolio paused for a quarter).
+    first_y, first_m = cells[0]["year"], cells[0]["month"]
+    last_y, last_m = cells[-1]["year"], cells[-1]["month"]
+    month_labels = []
+    y, m = first_y, first_m
+    while (y, m) <= (last_y, last_m):
+        month_labels.append({
+            "year": y, "month": m,
+            "label": _date(y, m, 1).strftime("%b %Y"),
+        })
+        m += 1
+        if m == 13:
+            m = 1
+            y += 1
+
     return envelope({"empty": False, "cells": cells, "months": month_labels})
 
 

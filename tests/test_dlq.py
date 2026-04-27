@@ -49,7 +49,7 @@ def test_fetch_with_dlq_writes_row_on_exception(store):
     from app.backfill_runner import fetch_with_dlq
 
     def boom():
-        raise RuntimeError("twse 503")
+        raise RuntimeError("yfinance 503")
 
     out = fetch_with_dlq(store, "tw_prices", "2330", boom)
     assert out is None
@@ -57,7 +57,7 @@ def test_fetch_with_dlq_writes_row_on_exception(store):
     assert len(rows) == 1
     assert rows[0]["task_type"] == "tw_prices"
     assert rows[0]["target"] == "2330"
-    assert "twse 503" in rows[0]["error_message"]
+    assert "yfinance 503" in rows[0]["error_message"]
     assert rows[0]["attempts"] == 1
     assert rows[0]["first_seen_at"] == rows[0]["last_attempt_at"]
     assert rows[0]["resolved_at"] is None
@@ -69,7 +69,7 @@ def test_fetch_with_dlq_dedupes_by_task_target(store):
     from app.backfill_runner import fetch_with_dlq
 
     def boom():
-        raise RuntimeError("twse 503")
+        raise RuntimeError("yfinance 503")
 
     fetch_with_dlq(store, "tw_prices", "2330", boom)
     fetch_with_dlq(store, "tw_prices", "2330", boom)

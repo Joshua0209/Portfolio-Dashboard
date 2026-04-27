@@ -31,10 +31,11 @@
     charts_registry = [];
 
     const q = `?method=${encodeURIComponent(method)}`;
-    const [ts, rolling, attr] = await Promise.all([
+    const [ts, rolling, attr, tax] = await Promise.all([
       window.api.get(`/api/performance/timeseries${q}`),
       window.api.get(`/api/performance/rolling${q}`),
       window.api.get(`/api/performance/attribution`),
+      window.api.get(`/api/tax`),
     ]);
 
     renderKPIs(ts);
@@ -45,6 +46,7 @@
     renderAttribution(attr);
     renderAttributionTotals(attr);
     renderDDEpisodes(ts.drawdown_episodes || []);
+    renderTickerContribution(tax);
     renderTable(ts);
   }
 
@@ -315,34 +317,102 @@
   }
 
   function renderAttributionTotals(attr) {
+    const canvas = document.getElementById("chart-attr-totals");
+    if (!canvas) return;
     const t = attr.totals || {};
-    const el = document.getElementById("attr-totals");
-    if (!el) return;
-    while (el.firstChild) el.removeChild(el.firstChild);
-    const items = [
-      ["TW equities", t.tw_pnl_twd],
-      ["Foreign equities (price)", t.foreign_price_pnl_twd],
-      ["FX (USD/TWD)", t.fx_pnl_twd],
-      ["Total P&L", t.total_pnl_twd],
+    const tw = t.tw_pnl_twd || 0;
+    const fp = t.foreign_price_pnl_twd || 0;
+    const fx = t.fx_pnl_twd || 0;
+    const total = t.total_pnl_twd ?? (tw + fp + fx);
+
+    // One bar = one cumulative-attribution column. Each component stacks
+    // (positive above zero, negative below) so the visible bar height adds
+    // up to the signed contribution of that component.
+    const colors = {
+      tw: charts.cssVar("--c1"),
+      foreign: charts.cssVar("--c2"),
+      fx: charts.cssVar("--c4"),
+    };
+    const datasets = [
+      { label: "TW equities",            data: [tw], backgroundColor: colors.tw,      stack: "s", borderRadius: 4, borderSkipped: false },
+      { label: "Foreign equities (price)", data: [fp], backgroundColor: colors.foreign, stack: "s", borderRadius: 4, borderSkipped: false },
+      { label: "FX (USD/TWD)",           data: [fx], backgroundColor: colors.fx,      stack: "s", borderRadius: 4, borderSkipped: false },
     ];
-    const max = Math.max(1, ...items.map(([_, v]) => Math.abs(v || 0)));
-    for (const [label, v] of items) {
-      const row = document.createElement("div");
-      row.className = "bar-row";
-      const lab = document.createElement("span");
-      lab.className = "text-sm";
-      lab.textContent = label;
-      const bar = document.createElement("span");
-      bar.className = "bar " + ((v || 0) >= 0 ? "pos" : "neg");
-      const fill = document.createElement("span");
-      fill.style.width = `${(Math.abs(v || 0) / max * 100).toFixed(2)}%`;
-      bar.appendChild(fill);
-      const val = document.createElement("span");
-      val.className = "num text-sm " + ((v || 0) >= 0 ? "value-pos" : "value-neg");
-      val.textContent = fmt.twd(v || 0);
-      row.append(lab, bar, val);
-      el.appendChild(row);
-    }
+
+    // Per-segment value labels + total beside the bar. Inline Chart.js
+    // plugin — runs after the bars are drawn, reads each meta.data element's
+    // pixel box, and centers a label inside it (skipping segments that are
+    // too thin to fit a number). Indexes are flipped vs. the vertical layout:
+    // for horizontal bars, segment width = |x - base|.
+    const valueLabelsPlugin = {
+      id: "attrTotalsValueLabels",
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        ctx.save();
+        ctx.font = "600 11px " + charts.cssVar("--font-mono");
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        // Per-segment labels (centered inside each horizontal segment).
+        chart.data.datasets.forEach((ds, dsi) => {
+          const meta = chart.getDatasetMeta(dsi);
+          meta.data.forEach((bar, idx) => {
+            const v = ds.data[idx];
+            if (!v) return;
+            const { x, y, base } = bar.getProps(["x", "y", "base"], true);
+            const w = Math.abs(x - base);
+            if (w < 44) return; // too narrow to fit a TWD label
+            ctx.fillStyle = "#fff";
+            ctx.fillText(fmt.twdCompact(v), (x + base) / 2, y);
+          });
+        });
+
+        // Total label at the end of the bar.
+        const meta0 = chart.getDatasetMeta(0);
+        const bar0 = meta0.data[0];
+        if (bar0) {
+          const { y } = bar0.getProps(["y"], true);
+          const xEnd = chart.scales.x.getPixelForValue(total);
+          const xPos = total >= 0
+            ? Math.min(xEnd + 8, chart.chartArea.right - 4)
+            : Math.max(xEnd - 8, chart.chartArea.left + 4);
+          ctx.font = "700 13px " + charts.cssVar("--font-display");
+          ctx.fillStyle = total >= 0 ? charts.cssVar("--pos") : charts.cssVar("--neg");
+          ctx.textAlign = total >= 0 ? "left" : "right";
+          ctx.textBaseline = "middle";
+          ctx.fillText(`Total: ${fmt.twd(total)}`, xPos, y);
+        }
+        ctx.restore();
+      },
+    };
+
+    charts_registry.push(new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: { labels: ["Cumulative P&L"], datasets },
+      options: {
+        indexAxis: "y", // horizontal bars
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { right: 96 } }, // room for the total label past the bar end
+        plugins: {
+          legend: { position: "top", align: "end" },
+          tooltip: {
+            callbacks: {
+              label: (c) => `${c.dataset.label}: ${fmt.twd(c.parsed.x)}`,
+              afterBody: () => [`Total: ${fmt.twd(total)}`],
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { callback: (v) => fmt.twdCompact(v) },
+          },
+          y: { stacked: true, grid: { display: false } },
+        },
+      },
+      plugins: [valueLabelsPlugin],
+    }));
   }
 
   function renderDDEpisodes(eps) {
@@ -367,21 +437,265 @@
     }
   }
 
-  function renderTable(ts) {
-    const tbody = document.querySelector("#months-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    for (const m of ts.monthly) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.label(m)));
-      tr.appendChild(td(fmt.twd(m.v_start ?? m.equity_twd), "num"));
-      tr.appendChild(td(fmt.twd(m.external_flow ?? m.flow_twd ?? 0), `num ${fmt.tone(m.external_flow ?? m.flow_twd ?? 0)}`));
-      tr.appendChild(td(fmt.twd(m.weighted_flow ?? 0), "num text-mute"));
-      tr.appendChild(td(fmt.twd(m.equity_twd), "num"));
-      tr.appendChild(td(fmt.pct(m.period_return), `num ${fmt.tone(m.period_return)}`));
-      tr.appendChild(td(fmt.pct(m.cum_twr), `num ${fmt.tone(m.cum_twr)}`));
-      tr.appendChild(td(fmt.pct(m.drawdown), `num ${fmt.tone(m.drawdown)}`));
-      tbody.appendChild(tr);
+  let contribTreemap = null;
+  let contribTable = null;
+
+  function renderTickerContribution(tax) {
+    const rows = (tax?.by_ticker || []).map((r) => ({
+      ...r,
+      total_pnl_twd: (r.realized_pnl_twd || 0) + (r.dividends_twd || 0) + (r.unrealized_pnl_twd || 0),
+    }));
+    // Total absolute contribution sets the 100% baseline; using sum of |total|
+    // (rather than signed sum) means winners and losers are weighted by their
+    // magnitude, which is what the user actually wants to see.
+    const grossPnl = rows.reduce((s, r) => s + Math.abs(r.total_pnl_twd || 0), 0) || 1;
+    rows.forEach((r) => {
+      r.contribution_share = (r.total_pnl_twd || 0) / grossPnl;
+    });
+
+    renderContribTreemap(rows);
+    renderContribStats(rows);
+    renderContribTable(rows);
+
+    setText("contrib-sub",
+      `${rows.length} tickers · gross |P&L| ${fmt.twd(grossPnl)}`);
+  }
+
+  function renderContribTreemap(rows) {
+    const canvas = document.getElementById("contrib-treemap");
+    if (!canvas) return;
+
+    const tree = rows
+      .filter((r) => Math.abs(r.total_pnl_twd || 0) > 0)
+      .map((r) => ({
+        code: r.code || "",
+        name: r.name || "",
+        venue: r.venue || "",
+        total: r.total_pnl_twd || 0,
+        realized: r.realized_pnl_twd || 0,
+        dividends: r.dividends_twd || 0,
+        unrealized: r.unrealized_pnl_twd || 0,
+        share: r.contribution_share,
+        _value: Math.abs(r.total_pnl_twd || 0),
+      }));
+
+    if (!tree.length) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = charts.cssVar("--text-faint");
+      ctx.font = "13px " + charts.cssVar("--font-sans");
+      ctx.textAlign = "center";
+      ctx.fillText("No P&L attribution yet", canvas.width / 2, 40);
+      return;
     }
+
+    // Color: green for net contributors, red for net detractors. Intensity
+    // scales with share of gross P&L, capped to 25% so a single dominant
+    // name doesn't wash everyone else into a single shade.
+    const posBase = charts.cssVar("--pos");
+    const negBase = charts.cssVar("--neg");
+    function colorFor(ctx) {
+      const item = ctx?.raw?._data;
+      if (!item) return charts.cssVar("--bg-elev-2");
+      const intensity = Math.min(1, Math.abs(item.share || 0) / 0.25);
+      const alpha = 0.30 + 0.55 * intensity;
+      const base = (item.total || 0) >= 0 ? posBase : negBase;
+      return charts.hexWithAlpha(base, alpha);
+    }
+
+    const config = {
+      type: "treemap",
+      data: {
+        datasets: [{
+          tree,
+          key: "_value",
+          borderWidth: 1,
+          borderColor: charts.cssVar("--bg"),
+          spacing: 1,
+          backgroundColor: colorFor,
+          labels: {
+            display: true,
+            align: "left",
+            position: "top",
+            color: charts.cssVar("--text"),
+            font: { size: 11, weight: "600", family: charts.cssVar("--font-mono") || "monospace" },
+            padding: 4,
+            formatter: (ctx) => {
+              const d = ctx?.raw?._data;
+              if (!d) return "";
+              const sharePct = (d.share * 100).toFixed(1);
+              return [d.code, `${sharePct}% · ${fmt.twdCompact(d.total)}`];
+            },
+          },
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => {
+                const d = items?.[0]?.raw?._data;
+                return d ? `${d.code} · ${d.name}` : "";
+              },
+              label: (ctx) => {
+                const d = ctx?.raw?._data;
+                if (!d) return "";
+                return [
+                  `Realized:   ${fmt.twd(d.realized)}`,
+                  `Dividends:  ${fmt.twd(d.dividends)}`,
+                  `Unrealized: ${fmt.twd(d.unrealized)}`,
+                  `Total:      ${fmt.twd(d.total)}`,
+                  `Share:      ${(d.share * 100).toFixed(2)}% of gross`,
+                ];
+              },
+            },
+          },
+        },
+      },
+    };
+
+    if (contribTreemap) contribTreemap.destroy();
+    contribTreemap = new Chart(canvas.getContext("2d"), config);
+    charts_registry.push(contribTreemap);
+
+    canvas.onclick = (evt) => {
+      const points = contribTreemap.getElementsAtEventForMode(evt, "nearest", { intersect: true }, false);
+      if (!points.length) return;
+      const data = points[0]?.element?.$context?.raw?._data;
+      if (data?.code) window.location.href = `/ticker/${encodeURIComponent(data.code)}`;
+    };
+  }
+
+  function renderContribStats(rows) {
+    const el = document.getElementById("contrib-stats");
+    if (!el) return;
+    while (el.firstChild) el.removeChild(el.firstChild);
+
+    // Net contributors only, sorted by absolute total so big losers count too.
+    const sorted = [...rows].sort((a, b) =>
+      Math.abs(b.total_pnl_twd || 0) - Math.abs(a.total_pnl_twd || 0));
+    const grossPnl = sorted.reduce((s, r) => s + Math.abs(r.total_pnl_twd || 0), 0) || 1;
+    const netPnl = sorted.reduce((s, r) => s + (r.total_pnl_twd || 0), 0);
+
+    const winners = rows.filter((r) => (r.total_pnl_twd || 0) > 0);
+    const losers  = rows.filter((r) => (r.total_pnl_twd || 0) < 0);
+    const winnerSum = winners.reduce((s, r) => s + r.total_pnl_twd, 0);
+    const loserSum  = losers.reduce((s, r) => s + r.total_pnl_twd, 0);
+
+    function topNShare(n) {
+      const top = sorted.slice(0, n).reduce((s, r) => s + Math.abs(r.total_pnl_twd || 0), 0);
+      return top / grossPnl;
+    }
+
+    const items = [
+      { label: "Net P&L",    value: fmt.twd(netPnl),    sub: `${rows.length} tickers contributed`, tone: fmt.tone(netPnl) },
+      { label: "Winners",    value: fmt.twd(winnerSum), sub: `${winners.length} names`,            tone: "value-pos" },
+      { label: "Losers",     value: fmt.twd(loserSum),  sub: `${losers.length} names`,             tone: "value-neg" },
+      { label: "Top-3 share",  value: fmt.pctAbs(topNShare(3),  1), sub: "of gross |P&L|" },
+      { label: "Top-5 share",  value: fmt.pctAbs(topNShare(5),  1), sub: "of gross |P&L|" },
+      { label: "Top-10 share", value: fmt.pctAbs(topNShare(10), 1), sub: "of gross |P&L|" },
+    ];
+
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex; justify-content:space-between; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--line);";
+      const left = document.createElement("div");
+      left.style.cssText = "display:flex; flex-direction:column; gap:2px;";
+      const lab = document.createElement("span");
+      lab.className = "text-tiny text-mute";
+      lab.style.cssText = "letter-spacing:0.1em; text-transform:uppercase;";
+      lab.textContent = it.label;
+      const sub = document.createElement("span");
+      sub.className = "text-tiny text-mute";
+      sub.textContent = it.sub;
+      left.append(lab, sub);
+      const val = document.createElement("span");
+      val.className = `num text-display ${it.tone || ""}`;
+      val.style.cssText = "font-size:18px; font-weight:600;";
+      val.textContent = it.value;
+      row.append(left, val);
+      el.appendChild(row);
+    }
+  }
+
+  function renderContribTable(rows) {
+    if (contribTable) {
+      contribTable.setRows(rows);
+      return;
+    }
+    contribTable = window.dataTable({
+      tableId: "contrib-table",
+      rows,
+      searchKeys: ["code", "name"],
+      searchPlaceholder: "Search code or name…",
+      filters: [
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+      ],
+      defaultSort: { key: "total_pnl_twd", dir: "desc" },
+      colspan: 8,
+      pageSize: 25,
+      emptyText: "No tickers",
+      row: (r) => [
+        tdCodeLink(r.code),
+        td(r.name || ""),
+        td(r.venue || "", "text-mute text-tiny"),
+        td(fmt.twd(r.realized_pnl_twd || 0), `num ${fmt.tone(r.realized_pnl_twd || 0)}`),
+        td(fmt.twd(r.dividends_twd || 0), "num value-pos"),
+        td(fmt.twd(r.unrealized_pnl_twd || 0), `num ${fmt.tone(r.unrealized_pnl_twd || 0)}`),
+        td(fmt.twd(r.total_pnl_twd || 0), `num ${fmt.tone(r.total_pnl_twd || 0)}`),
+        td(`${(r.contribution_share * 100).toFixed(1)}%`, `num ${fmt.tone(r.total_pnl_twd || 0)}`),
+      ],
+    });
+  }
+
+  function tdCodeLink(code) {
+    const el = document.createElement("td");
+    el.className = "code";
+    const a = document.createElement("a");
+    a.href = `/ticker/${encodeURIComponent(code || "")}`;
+    a.textContent = code || "—";
+    el.appendChild(a);
+    return el;
+  }
+
+  let monthsTable = null;
+  function renderTable(ts) {
+    // Decorate each monthly row with a stable `month_label` field so the
+    // unified table's free-text search ("2025-08", "Aug") matches both
+    // ISO and human-formatted labels.
+    const rows = (ts.monthly || []).map((m) => ({
+      ...m,
+      month_label: fmt.label(m),
+      sort_key: m.month || m.date || "",
+    }));
+    if (monthsTable) {
+      monthsTable.setRows(rows);
+      return;
+    }
+    monthsTable = window.dataTable({
+      tableId: "months-table",
+      rows,
+      searchKeys: ["month_label", "sort_key"],
+      searchPlaceholder: "Search month (e.g. 2025-08, Aug)…",
+      defaultSort: { key: "sort_key", dir: "desc" },
+      colspan: 8,
+      pageSize: 25,
+      emptyText: "No matching months",
+      row: (m) => [
+        td(fmt.label(m)),
+        td(fmt.twd(m.v_start ?? m.equity_twd), "num"),
+        td(fmt.twd(m.external_flow ?? m.flow_twd ?? 0), `num ${fmt.tone(m.external_flow ?? m.flow_twd ?? 0)}`),
+        td(fmt.twd(m.weighted_flow ?? 0), "num text-mute"),
+        td(fmt.twd(m.equity_twd), "num"),
+        td(fmt.pct(m.period_return), `num ${fmt.tone(m.period_return)}`),
+        td(fmt.pct(m.cum_twr), `num ${fmt.tone(m.cum_twr)}`),
+        td(fmt.pct(m.drawdown), `num ${fmt.tone(m.drawdown)}`),
+      ],
+    });
   }
 
   function td(text, cls) {

@@ -3,21 +3,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint
 
 from .. import analytics
-from ._helpers import envelope, store
+from ._helpers import daily_store, envelope, store, want_daily
 
 bp = Blueprint("fx", __name__, url_prefix="/api/fx")
 
 
-def _daily_store():
-    return current_app.extensions["daily_store"]
-
-
 @bp.get("")
 def fx():
-    use_daily = (request.args.get("resolution") or "").lower() == "daily"
+    use_daily = want_daily()
     s = store()
     months = s.months
     if not months:
@@ -41,13 +37,14 @@ def fx():
     daily_rate_curve = None
     daily_fx_pnl = None
     if use_daily:
-        fx_series = _daily_store().get_fx_series(ccy="USD")
+        ds = daily_store()
+        fx_series = ds.get_fx_series(ccy="USD")
         if fx_series:
             daily_rate_curve = [
                 {"date": r["date"], "fx_usd_twd": r["rate_to_twd"]}
                 for r in fx_series
             ]
-            usd_exposure = _daily_store().get_usd_exposure_series()
+            usd_exposure = ds.get_usd_exposure_series()
             daily_fx_pnl = analytics.daily_fx_pnl(usd_exposure, fx_series)
 
     rate_curve = (

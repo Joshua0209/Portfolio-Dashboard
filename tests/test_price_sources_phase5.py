@@ -1,12 +1,9 @@
-"""Phase 5 acceptance tests for app/price_sources.py.
+"""symbol_market caching tests.
 
-Phase 5 adds:
-  - TPEX as a TWSE fallback for TW symbols
-  - symbol_market caching: once a symbol is resolved to "twse" or "tpex",
-    re-runs of get_prices() must NOT probe the other exchange
-
-Phase 2 tests (test_price_sources.py) still pass — the router stays
-backwards-compatible when no DailyStore is passed.
+Once a TW symbol is resolved to a market verdict ('twse' or 'tpex'),
+re-runs must NOT re-probe the other suffix. The verdict labels still
+read 'twse' / 'tpex' for the market the symbol is *listed* on, even
+though both fetch via yfinance now.
 """
 from __future__ import annotations
 
@@ -25,59 +22,67 @@ def store(tmp_path: Path) -> DailyStore:
     return s
 
 
-# --- TPEX fallback when TWSE empty ----------------------------------------
+def _yf_factory(rows_by_suffix: dict[str, list[dict]]):
+    """Build a fake yfinance_fetch_prices that responds based on the
+    Yahoo suffix on the queried symbol. The default for any suffix not
+    in the map is `[]` (i.e. "not on this exchange")."""
+    calls: list[str] = []
+
+    def fake_yf(symbol, start, end):
+        calls.append(symbol)
+        for suffix, rows in rows_by_suffix.items():
+            if symbol.endswith(suffix):
+                return list(rows)
+        return []
+
+    return fake_yf, calls
 
 
-def test_tw_falls_back_to_tpex_when_twse_empty(monkeypatch, store: DailyStore) -> None:
-    """If TWSE returns no rows for the symbol, the router probes TPEX."""
-    twse_calls: list[tuple] = []
-    tpex_calls: list[tuple] = []
+# --- .TWO fallback when .TW empty ----------------------------------------
 
-    def fake_twse(stockNo, year, month):
-        twse_calls.append((stockNo, year, month))
-        return []  # not on TWSE
 
-    def fake_tpex(stockNo, year, month):
-        tpex_calls.append((stockNo, year, month))
-        return [{"date": f"{year}-{month:02d}-15", "close": 100.0, "volume": 1}]
-
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", fake_twse)
-    monkeypatch.setattr("app.price_sources.tpex_fetch_month", fake_tpex)
+def test_tw_falls_back_to_otc_when_listed_empty(
+    monkeypatch, store: DailyStore
+) -> None:
+    """If `.TW` returns no rows, the router probes `.TWO`."""
+    fake, calls = _yf_factory({
+        ".TWO": [{"date": "2025-06-15", "close": 100.0, "volume": 1}],
+        # .TW unlisted: implicit empty
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake)
 
     rows = get_prices("5483", "TWD", "2025-06-01", "2025-06-30", store=store)
     assert len(rows) == 1
-    assert rows[0]["source"] == "tpex"
+    assert rows[0]["source"] == "yfinance"
     assert rows[0]["symbol"] == "5483"
-    # TWSE was probed once before falling back
-    assert len(twse_calls) >= 1
-    assert len(tpex_calls) >= 1
+    # Both suffixes were probed in order
+    assert calls == ["5483.TW", "5483.TWO"]
 
 
-def test_tw_uses_twse_when_data_present(monkeypatch, store: DailyStore) -> None:
-    """If TWSE returns rows, the router does NOT probe TPEX (cost-saver)."""
-    tpex_calls: list[tuple] = []
-
-    monkeypatch.setattr(
-        "app.price_sources.twse_fetch_month",
-        lambda s, y, m: [{"date": f"{y}-{m:02d}-15", "close": 200.0, "volume": 9}],
-    )
-    monkeypatch.setattr(
-        "app.price_sources.tpex_fetch_month",
-        lambda *args, **kwargs: tpex_calls.append(args) or [],
-    )
+def test_tw_uses_listed_when_data_present(monkeypatch, store: DailyStore) -> None:
+    """If `.TW` returns rows, the router does NOT probe `.TWO` (cost-saver)."""
+    fake, calls = _yf_factory({
+        ".TW": [{"date": "2025-06-15", "close": 200.0, "volume": 9}],
+        ".TWO": [{"date": "2025-06-15", "close": 999.0, "volume": 9}],
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake)
 
     rows = get_prices("2330", "TWD", "2025-06-01", "2025-06-30", store=store)
-    assert all(r["source"] == "twse" for r in rows)
-    assert tpex_calls == []  # never reached
+    assert all(r["source"] == "yfinance" for r in rows)
+    assert calls == ["2330.TW"]  # .TWO never probed
 
 
-def test_market_verdict_persisted_to_symbol_market(monkeypatch, store: DailyStore) -> None:
-    """After a successful TPEX fetch, symbol_market has market='tpex'."""
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", lambda *_: [])
-    monkeypatch.setattr(
-        "app.price_sources.tpex_fetch_month",
-        lambda s, y, m: [{"date": f"{y}-{m:02d}-15", "close": 80.0, "volume": 1}],
-    )
+# --- Verdict persistence -------------------------------------------------
+
+
+def test_market_verdict_persisted_for_tpex_symbol(
+    monkeypatch, store: DailyStore
+) -> None:
+    """After a successful `.TWO` fetch, symbol_market has market='tpex'."""
+    fake, _ = _yf_factory({
+        ".TWO": [{"date": "2025-06-15", "close": 80.0, "volume": 1}],
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake)
     get_prices("5483", "TWD", "2025-06-01", "2025-06-30", store=store)
 
     with store.connect_ro() as conn:
@@ -88,12 +93,13 @@ def test_market_verdict_persisted_to_symbol_market(monkeypatch, store: DailyStor
         assert row["market"] == "tpex"
 
 
-def test_market_verdict_persisted_for_twse(monkeypatch, store: DailyStore) -> None:
-    monkeypatch.setattr(
-        "app.price_sources.twse_fetch_month",
-        lambda s, y, m: [{"date": f"{y}-{m:02d}-15", "close": 200.0, "volume": 9}],
-    )
-    monkeypatch.setattr("app.price_sources.tpex_fetch_month", lambda *_: [])
+def test_market_verdict_persisted_for_twse_symbol(
+    monkeypatch, store: DailyStore
+) -> None:
+    fake, _ = _yf_factory({
+        ".TW": [{"date": "2025-06-15", "close": 200.0, "volume": 9}],
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake)
     get_prices("2330", "TWD", "2025-06-01", "2025-06-30", store=store)
 
     with store.connect_ro() as conn:
@@ -107,10 +113,9 @@ def test_market_verdict_persisted_for_twse(monkeypatch, store: DailyStore) -> No
 def test_market_verdict_unknown_when_neither_responds(
     monkeypatch, store: DailyStore
 ) -> None:
-    """If both TWSE and TPEX return empty, mark as 'unknown' so the next
+    """If both suffixes return empty, mark 'unknown' so the next
     backfill doesn't re-probe."""
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", lambda *_: [])
-    monkeypatch.setattr("app.price_sources.tpex_fetch_month", lambda *_: [])
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", lambda *_: [])
 
     rows = get_prices("9999", "TWD", "2025-06-01", "2025-06-30", store=store)
     assert rows == []
@@ -122,92 +127,93 @@ def test_market_verdict_unknown_when_neither_responds(
         assert row["market"] == "unknown"
 
 
-# --- Cache hit: re-run skips the probe -----------------------------------
+# --- Cache hit: re-run skips the other-suffix probe ----------------------
 
 
-def test_cached_symbol_skips_probe_of_other_exchange(
+def test_cached_twse_symbol_skips_tpex_suffix_on_rerun(
     monkeypatch, store: DailyStore
 ) -> None:
-    """Once symbol is resolved to TWSE, a re-run for the same symbol must
-    not probe TPEX even if TWSE returns empty (e.g., delisted month).
-
-    This is the spec acceptance criterion: 're-running backfill_daily.py
-    does not re-probe cached symbols'.
+    """Once cached as 'twse', a re-run for the same symbol must not probe
+    `.TWO` even if `.TW` happens to return empty (e.g. a holiday-only
+    month).
     """
-    # First run: resolve as twse via populated month
-    monkeypatch.setattr(
-        "app.price_sources.twse_fetch_month",
-        lambda s, y, m: [{"date": f"{y}-{m:02d}-15", "close": 200.0, "volume": 9}],
-    )
-    tpex_calls: list[tuple] = []
-    monkeypatch.setattr(
-        "app.price_sources.tpex_fetch_month",
-        lambda *args: (tpex_calls.append(args), [])[1],
-    )
+    # First run: .TW returns rows → cache as 'twse'
+    fake1, _ = _yf_factory({
+        ".TW": [{"date": "2025-06-15", "close": 200.0, "volume": 9}],
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake1)
     get_prices("2330", "TWD", "2025-06-01", "2025-06-30", store=store)
-    assert tpex_calls == []
 
-    # Second run: TWSE returns empty (e.g., a holiday-only month). TPEX
-    # must still NOT be probed — the symbol is cached as twse.
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", lambda *_: [])
+    # Second run: .TW returns empty (e.g. a holiday-only month). .TWO
+    # must still NOT be probed — cached as 'twse'.
+    queried_second: list[str] = []
+
+    def fake2(symbol, start, end):
+        queried_second.append(symbol)
+        return []  # nothing this month
+
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake2)
     rows = get_prices("2330", "TWD", "2025-07-01", "2025-07-31", store=store)
-    assert tpex_calls == []  # still no TPEX probes
+    # Only `.TW` was queried — the cache verdict pinned the suffix.
+    assert all(s.endswith(".TW") for s in queried_second), queried_second
+    assert not any(s.endswith(".TWO") for s in queried_second)
     assert rows == []
 
 
-def test_cached_tpex_symbol_skips_twse_on_rerun(
+def test_cached_tpex_symbol_skips_listed_suffix_on_rerun(
     monkeypatch, store: DailyStore
 ) -> None:
-    """The mirror case: cached as tpex → skip TWSE probe on re-run."""
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", lambda *_: [])
-    monkeypatch.setattr(
-        "app.price_sources.tpex_fetch_month",
-        lambda s, y, m: [{"date": f"{y}-{m:02d}-15", "close": 80.0, "volume": 1}],
-    )
+    """Mirror case: cached as 'tpex' → never probe `.TW` again."""
+    fake1, _ = _yf_factory({
+        ".TWO": [{"date": "2025-06-15", "close": 80.0, "volume": 1}],
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake1)
     get_prices("5483", "TWD", "2025-06-01", "2025-06-30", store=store)
 
-    twse_calls: list[tuple] = []
-    monkeypatch.setattr(
-        "app.price_sources.twse_fetch_month",
-        lambda *args: (twse_calls.append(args), [])[1],
-    )
+    queried_second: list[str] = []
+    fake2, _ = _yf_factory({
+        ".TWO": [{"date": "2025-07-15", "close": 81.0, "volume": 1}],
+    })
+
+    def wrapped(symbol, start, end):
+        queried_second.append(symbol)
+        return fake2(symbol, start, end)
+
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", wrapped)
     rows = get_prices("5483", "TWD", "2025-07-01", "2025-07-31", store=store)
-    assert twse_calls == []  # never re-probed TWSE
-    assert all(r["source"] == "tpex" for r in rows)
+    # `.TW` never re-probed
+    assert not any(s.endswith(".TW") and not s.endswith(".TWO") for s in queried_second)
+    assert all(r["source"] == "yfinance" for r in rows)
 
 
 def test_cached_unknown_symbol_skips_both_on_rerun(
     monkeypatch, store: DailyStore
 ) -> None:
     """Cached as 'unknown' → skip both probes (until manual re-resolution)."""
-    monkeypatch.setattr("app.price_sources.twse_fetch_month", lambda *_: [])
-    monkeypatch.setattr("app.price_sources.tpex_fetch_month", lambda *_: [])
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", lambda *_: [])
     get_prices("9999", "TWD", "2025-06-01", "2025-06-30", store=store)
 
-    twse_calls: list[tuple] = []
-    tpex_calls: list[tuple] = []
-    monkeypatch.setattr(
-        "app.price_sources.twse_fetch_month",
-        lambda *args: (twse_calls.append(args), [])[1],
-    )
-    monkeypatch.setattr(
-        "app.price_sources.tpex_fetch_month",
-        lambda *args: (tpex_calls.append(args), [])[1],
-    )
+    queried: list[str] = []
+
+    def fake(symbol, start, end):
+        queried.append(symbol)
+        return []
+
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake)
     rows = get_prices("9999", "TWD", "2025-07-01", "2025-07-31", store=store)
-    assert twse_calls == []
-    assert tpex_calls == []
+    assert queried == []  # neither .TW nor .TWO probed
     assert rows == []
 
 
 # --- Backwards compatibility ---------------------------------------------
 
 
-def test_phase2_call_without_store_still_works(monkeypatch) -> None:
+def test_call_without_store_still_works(monkeypatch) -> None:
     """get_prices() without `store=` still works — backwards-compatible."""
-    monkeypatch.setattr(
-        "app.price_sources.twse_fetch_month",
-        lambda s, y, m: [{"date": f"{y}-{m:02d}-15", "close": 200.0, "volume": 9}],
-    )
+    fake, _ = _yf_factory({
+        ".TW": [{"date": "2025-06-15", "close": 200.0, "volume": 9}],
+    })
+    monkeypatch.setattr("app.price_sources.yfinance_fetch_prices", fake)
     rows = get_prices("2330", "TWD", "2025-06-01", "2025-06-30")
-    assert all(r["source"] == "twse" for r in rows)
+    assert all(r["source"] == "yfinance" for r in rows)
+    assert all(r["symbol"] == "2330" for r in rows)

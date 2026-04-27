@@ -64,7 +64,7 @@ def _seed_prices(store: DailyStore, symbol: str, rows: list[tuple]) -> None:
         for d, close in rows:
             conn.execute(
                 "INSERT INTO prices VALUES (?, ?, ?, ?, ?, ?)",
-                (d, symbol, close, "TWD", "twse", now),
+                (d, symbol, close, "TWD", "yfinance", now),
             )
 
 

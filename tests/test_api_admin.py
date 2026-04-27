@@ -63,8 +63,8 @@ def test_failed_tasks_returns_empty_list_on_clean_db(client):
 
 
 def test_failed_tasks_returns_open_rows(client, app):
-    _seed_failure(app, target="2330", error="twse 503")
-    _seed_failure(app, target="2454", error="twse timeout")
+    _seed_failure(app, target="2330", error="yfinance 503")
+    _seed_failure(app, target="2454", error="yfinance timeout")
 
     r = client.get("/api/admin/failed-tasks")
     assert r.status_code == 200
@@ -97,7 +97,7 @@ def test_retry_failed_marks_rows_resolved(client, app, monkeypatch):
     def fake_get_prices(symbol, currency, start, end, store=None):
         return [{
             "date": "2026-04-25", "close": 600.0,
-            "symbol": symbol, "currency": currency, "source": "twse",
+            "symbol": symbol, "currency": currency, "source": "yfinance",
         }]
 
     monkeypatch.setattr(price_sources, "get_prices", fake_get_prices)
@@ -117,7 +117,7 @@ def test_retry_failed_increments_attempts_when_still_failing(
     from app import price_sources
 
     def boom(*a, **kw):
-        raise RuntimeError("twse still 503")
+        raise RuntimeError("yfinance still 503")
 
     monkeypatch.setattr(price_sources, "get_prices", boom)
 

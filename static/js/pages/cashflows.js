@@ -11,52 +11,12 @@
       window.api.get("/api/cashflows/monthly"),
       window.api.get("/api/cashflows/bank"),
     ]);
-    // Daily-resolution branch wraps the body in { resolution, monthly, daily }.
-    // Default response is a flat list — unwrap defensively to support both.
-    const monthlyList = Array.isArray(monthly) ? monthly : (monthly.monthly || []);
-    const dailyList = Array.isArray(monthly) ? null : (monthly.daily || null);
 
     renderKPIs(cf);
     renderRealVsCounterfactual(cf);
-    renderMonthlyFlows(monthlyList);
+    renderMonthlyFlows(monthly);
     renderBreakdown(cf.cumulative_flows);
     renderBank(bank);
-    if (dailyList && dailyList.length > 0) {
-      renderDailyFlows(dailyList);
-    }
-  }
-
-  function renderDailyFlows(daily) {
-    const section = document.getElementById("daily-flows-section");
-    if (!section) return;
-    section.hidden = false;
-    const ctx = document.getElementById("chart-daily-flows").getContext("2d");
-    const labels = daily.map((p) => fmt.label(p));
-    const flows = daily.map((p) => p.flow_twd || 0);
-    const cum = daily.map((p) => p.cumulative_twd || 0);
-    const colors = flows.map((v) => v >= 0 ? charts.cssVar("--pos") : charts.cssVar("--neg"));
-    new Chart(ctx, {
-      data: {
-        labels,
-        datasets: [
-          { type: "bar", label: "Daily flow", data: flows, backgroundColor: colors, borderRadius: 2, yAxisID: "y" },
-          { type: "line", label: "Cumulative", data: cum, borderColor: charts.cssVar("--accent"), borderWidth: 1.5, pointRadius: 0, tension: 0.25, yAxisID: "y1" },
-        ],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { position: "top", align: "end" },
-          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(c.parsed.y)}` } },
-          decimation: { enabled: true, algorithm: "lttb", samples: 200 },
-        },
-        scales: {
-          y: { position: "left", ticks: { callback: (v) => fmt.twdCompact(v) } },
-          y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: (v) => fmt.twdCompact(v) } },
-        },
-      },
-    });
   }
 
   function renderKPIs(cf) {
@@ -72,21 +32,32 @@
 
   function renderRealVsCounterfactual(cf) {
     const ctx = document.getElementById("chart-cf").getContext("2d");
-    const labels = cf.real_curve.map((p) => fmt.month(p.month));
-    const real = cf.real_curve.map((p) => p.value);
-    const counter = cf.counterfactual_curve.map((p) => p.value);
+    // Daily branch: when the API returns *_daily curves, render the chart
+    // at daily precision on a time x-axis. Falls back to monthly month-end
+    // anchors when the daily store is empty.
+    const realDaily = cf.real_curve_daily;
+    const cfDaily = cf.counterfactual_curve_daily;
+    const isDaily = Array.isArray(realDaily) && realDaily.length > 0;
+
+    const realPoints = isDaily
+      ? realDaily.map((p) => ({ x: p.date, y: p.value }))
+      : cf.real_curve.map((p) => ({ x: p.month, y: p.value }));
+    const counterPoints = isDaily
+      ? cfDaily.map((p) => ({ x: p.date, y: p.value }))
+      : cf.counterfactual_curve.map((p) => ({ x: p.month, y: p.value }));
+
+    const xScale = isDaily ? charts.dailyTimeAxis() : {};
 
     new Chart(ctx, {
       type: "line",
       data: {
-        labels,
         datasets: [
           {
             label: "Real equity",
-            data: real,
+            data: realPoints,
             borderColor: charts.cssVar("--accent"),
             borderWidth: 2,
-            tension: 0.3,
+            tension: isDaily ? 0 : 0.3,
             pointRadius: 0,
             fill: true,
             backgroundColor: (c) => c.chart.chartArea
@@ -95,11 +66,11 @@
           },
           {
             label: "Counterfactual (cumulative deposits)",
-            data: counter,
+            data: counterPoints,
             borderColor: charts.cssVar("--c2"),
             borderWidth: 1.5,
             borderDash: [4, 4],
-            tension: 0.3,
+            tension: isDaily ? 0 : 0.3,
             pointRadius: 0,
           },
         ],
@@ -111,7 +82,10 @@
           legend: { position: "top", align: "end" },
           tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.twd(c.parsed.y)}` } },
         },
-        scales: { y: { ticks: { callback: (v) => fmt.twdCompact(v) } } },
+        scales: {
+          x: xScale,
+          y: { ticks: { callback: (v) => fmt.twdCompact(v) } },
+        },
       },
     });
   }
@@ -236,94 +210,46 @@
 
   function renderBank(allRows) {
     allRows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    const PAGE_SIZE = 50;
-    let page = 0;
-
-    const tbody = document.querySelector("#bank-table tbody");
-    const qEl = document.getElementById("bank-q");
-    const accEl = document.getElementById("bank-account");
-    const catEl = document.getElementById("bank-category");
-    const monthEl = document.getElementById("bank-month");
-    const countEl = document.getElementById("bank-count");
-    const pageEl = document.getElementById("bank-page");
-
+    // Pre-compute a lowercased haystack (memo + summary + category) so the
+    // unified table's search predicate can use a single key. The data is
+    // already in memory; this is cheap and avoids a custom predicate.
+    for (const r of allRows) {
+      r._haystack = `${r.memo || ""} ${r.summary || ""} ${r.category || ""}`.toLowerCase();
+    }
     const cats = [...new Set(allRows.map((r) => r.category).filter(Boolean))].sort();
-    for (const c of cats) {
-      const o = document.createElement("option");
-      o.value = c; o.textContent = c;
-      catEl.appendChild(o);
-    }
-    const months = [...new Set(allRows.map((r) => r.month))].sort().reverse();
-    for (const m of months) {
-      const o = document.createElement("option");
-      o.value = m; o.textContent = fmt.month(m);
-      monthEl.appendChild(o);
-    }
+    const months = [...new Set(allRows.map((r) => r.month).filter(Boolean))].sort().reverse();
+    const monthOpts = months.map((m) => ({ value: m, label: fmt.month(m) }));
 
-    function filtered() {
-      const q = (qEl.value || "").toLowerCase();
-      const acc = accEl.value;
-      const cat = catEl.value;
-      const mo = monthEl.value;
-      return allRows.filter((r) => {
-        if (acc && r.account !== acc) return false;
-        if (cat && r.category !== cat) return false;
-        if (mo && r.month !== mo) return false;
-        if (q) {
-          const memo = String(r.memo || r.summary || "").toLowerCase();
-          const c = String(r.category || "").toLowerCase();
-          if (!memo.includes(q) && !c.includes(q)) return false;
-        }
-        return true;
-      });
-    }
-
-    function rerender() {
-      while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-      const rows = filtered();
-      const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-      if (page >= totalPages) page = totalPages - 1;
-      if (page < 0) page = 0;
-      countEl.textContent = `${rows.length} of ${allRows.length} transactions`;
-      pageEl.textContent = `${page + 1} / ${totalPages}`;
-
-      if (!rows.length) {
-        const tr = document.createElement("tr");
-        const tdEl = document.createElement("td");
-        tdEl.colSpan = 9;
-        tdEl.className = "table-empty";
-        tdEl.textContent = "No matching transactions";
-        tr.appendChild(tdEl);
-        tbody.appendChild(tr);
-        return;
-      }
-
-      const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-      for (const t of slice) {
-        const tr = document.createElement("tr");
-        tr.appendChild(td(fmt.month(t.month)));
-        tr.appendChild(td(fmt.date(t.date), "text-mute"));
-        tr.appendChild(tdPill(t.account || "TWD"));
-        tr.appendChild(td(t.category || ""));
-        tr.appendChild(td(t.memo || t.summary || "", "text-mute"));
-        tr.appendChild(td(t.ccy || "TWD", "text-mute"));
+    window.dataTable({
+      tableId: "bank-table",
+      rows: allRows,
+      searchKeys: ["_haystack"],
+      searchPlaceholder: "Search memo or category…",
+      filters: [
+        { id: "account",  key: "account",  label: "All accounts",   options: ["TWD", "FOREIGN"] },
+        { id: "category", key: "category", label: "All categories", options: cats },
+        { id: "month",    key: "month",    label: "All months",     options: monthOpts },
+      ],
+      defaultSort: { key: "date", dir: "desc" },
+      colspan: 9,
+      pageSize: 50,
+      emptyText: "No matching transactions",
+      row: (t) => {
         const local = t.signed_amount ?? t.amount ?? 0;
-        tr.appendChild(td(fmt.num(local, 2), `num ${fmt.tone(local)}`));
         const twd = t.amount_twd ?? local;
-        tr.appendChild(td(fmt.twd(twd), `num ${fmt.tone(twd)}`));
-        tr.appendChild(td(fmt.num(t.balance, 2), "num text-mute"));
-        tbody.appendChild(tr);
-      }
-    }
-
-    [qEl, accEl, catEl, monthEl].forEach((el) => {
-      el.addEventListener("input", () => { page = 0; rerender(); });
-      el.addEventListener("change", () => { page = 0; rerender(); });
+        return [
+          td(fmt.month(t.month)),
+          td(fmt.date(t.date), "text-mute"),
+          tdPill(t.account || "TWD"),
+          td(t.category || ""),
+          td(t.memo || t.summary || "", "text-mute"),
+          td(t.ccy || "TWD", "text-mute"),
+          td(fmt.num(local, 2), `num ${fmt.tone(local)}`),
+          td(fmt.twd(twd), `num ${fmt.tone(twd)}`),
+          td(fmt.num(t.balance, 2), "num text-mute"),
+        ];
+      },
     });
-    document.getElementById("bank-prev").addEventListener("click", () => { page--; rerender(); });
-    document.getElementById("bank-next").addEventListener("click", () => { page++; rerender(); });
-
-    rerender();
   }
 
   function tdPill(text) {

@@ -64,11 +64,11 @@ def store(tmp_path: Path) -> DailyStore:
     with s.connect_rw() as conn:
         conn.execute(
             "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
-            " VALUES ('2026-04-22', '2330', 920.0, 'TWD', 'twse', '2026-04-22T00:00:00Z')"
+            " VALUES ('2026-04-22', '2330', 920.0, 'TWD', 'yfinance', '2026-04-22T00:00:00Z')"
         )
         conn.execute(
             "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
-            " VALUES ('2026-04-23', '2330', 925.0, 'TWD', 'twse', '2026-04-23T00:00:00Z')"
+            " VALUES ('2026-04-23', '2330', 925.0, 'TWD', 'yfinance', '2026-04-23T00:00:00Z')"
         )
     return s
 

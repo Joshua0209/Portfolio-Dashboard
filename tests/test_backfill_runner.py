@@ -4,8 +4,8 @@ The runner pulls TW symbols from portfolio.json, computes per-symbol
 windows via compute_fetch_window(), calls price_sources.get_prices, and
 UPSERTs into prices + derives basic positions_daily / portfolio_daily.
 
-These tests stub out the network (via app.price_sources.twse_fetch_month)
-and exercise the runner against a tiny synthetic portfolio fixture.
+These tests stub out the network (via app.backfill_runner.get_prices) and
+exercise the runner against a tiny synthetic portfolio fixture.
 """
 from __future__ import annotations
 
@@ -163,12 +163,12 @@ def test_run_tw_backfill_skips_symbols_outside_floor(
     no symbol_market row."""
     fetched: list[tuple] = []
 
-    def fake_get_prices(symbol, currency, start, end, store=None):
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
         fetched.append((symbol, currency, start, end))
         # Synthesize one row per requested month so positions_daily has data.
         return [
             {"date": start, "close": 1000.0, "volume": 1,
-             "symbol": symbol, "currency": currency, "source": "twse"},
+             "symbol": symbol, "currency": currency, "source": "yfinance"},
         ]
 
     monkeypatch.setattr("app.backfill_runner.get_prices", fake_get_prices)
@@ -187,12 +187,12 @@ def test_run_tw_backfill_writes_prices(
 ) -> None:
     rows = [
         {"date": "2025-09-01", "close": 850.0, "volume": 100,
-         "symbol": "2330", "currency": "TWD", "source": "twse"},
+         "symbol": "2330", "currency": "TWD", "source": "yfinance"},
         {"date": "2025-09-02", "close": 855.0, "volume": 120,
-         "symbol": "2330", "currency": "TWD", "source": "twse"},
+         "symbol": "2330", "currency": "TWD", "source": "yfinance"},
     ]
 
-    def fake_get_prices(symbol, currency, start, end, store=None):
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
         return rows if symbol == "2330" else []
 
     monkeypatch.setattr("app.backfill_runner.get_prices", fake_get_prices)
@@ -209,12 +209,12 @@ def test_run_tw_backfill_is_idempotent_via_upsert(
     portfolio_path: Path, store: DailyStore, monkeypatch
 ) -> None:
     rows1 = [{"date": "2025-09-01", "close": 850.0, "volume": 100,
-              "symbol": "2330", "currency": "TWD", "source": "twse"}]
+              "symbol": "2330", "currency": "TWD", "source": "yfinance"}]
     rows2 = [{"date": "2025-09-01", "close": 999.0, "volume": 100,
-              "symbol": "2330", "currency": "TWD", "source": "twse"}]
+              "symbol": "2330", "currency": "TWD", "source": "yfinance"}]
     state = {"calls": 0}
 
-    def fake_get_prices(symbol, currency, start, end, store=None):
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
         if symbol != "2330":
             return []
         state["calls"] += 1
@@ -239,12 +239,12 @@ def test_run_tw_backfill_populates_portfolio_daily(
     a price, and equity_twd should reflect held qty * close."""
     rows = [
         {"date": "2025-08-15", "close": 850.0, "volume": 100,
-         "symbol": "2330", "currency": "TWD", "source": "twse"},
+         "symbol": "2330", "currency": "TWD", "source": "yfinance"},
         {"date": "2026-03-31", "close": 1000.0, "volume": 100,
-         "symbol": "2330", "currency": "TWD", "source": "twse"},
+         "symbol": "2330", "currency": "TWD", "source": "yfinance"},
     ]
 
-    def fake_get_prices(symbol, currency, start, end, store=None):
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
         return rows if symbol == "2330" else []
 
     monkeypatch.setattr("app.backfill_runner.get_prices", fake_get_prices)
@@ -254,11 +254,17 @@ def test_run_tw_backfill_populates_portfolio_daily(
 
     curve = store.get_equity_curve()
     by_date = {r["date"]: r for r in curve}
-    # On 2025-08-15: 100 shares of 2330 @ 850 = 85,000 TWD
+    # equity_twd folds positions MV with the synthesized broker-cash schedule
+    # (Σ trade.net_twd through d). The fixture's chronological trade ledger
+    # accumulates as: 2024-06-15 buy 9999 (-50_075), 2024-12-10 sell 9999
+    # (+59_730), 2025-01-10 buy 2330 (-80_100), 2025-09-05 buy 2454 (-75_100),
+    # 2025-12-20 sell 2454 (+79_660). Cumulative cash on each priced day:
+    # • 2025-08-15 → -50_075 + 59_730 - 80_100 = -70_445
+    # • 2026-03-31 → -70_445 - 75_100 + 79_660 = -65_885
     assert "2025-08-15" in by_date
-    assert by_date["2025-08-15"]["equity_twd"] == pytest.approx(85_000.0)
-    # On 2026-03-31: 100 shares of 2330 @ 1000 = 100,000 TWD
-    assert by_date["2026-03-31"]["equity_twd"] == pytest.approx(100_000.0)
+    assert by_date["2025-08-15"]["equity_twd"] == pytest.approx(85_000.0 - 70_445.0)
+    # On 2026-03-31: 100 shares of 2330 @ 1000 = 100,000 TWD positions MV
+    assert by_date["2026-03-31"]["equity_twd"] == pytest.approx(100_000.0 - 65_885.0)
 
 
 def test_month_end_iso_handles_month_lengths() -> None:

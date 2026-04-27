@@ -97,32 +97,31 @@
   }
 
   function renderTotalReturn(rows) {
-    const tbody = document.querySelector("#tr-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!rows || !rows.length) {
-      const tr = document.createElement("tr");
-      const td_ = document.createElement("td");
-      td_.colSpan = 8; td_.className = "table-empty"; td_.textContent = "No holdings";
-      tr.appendChild(td_); tbody.appendChild(tr);
-      return;
-    }
-    const sorted = [...rows].sort((a, b) =>
-      (b.unrealized_pnl_with_div_twd || 0) - (a.unrealized_pnl_with_div_twd || 0),
-    );
-    for (const r of sorted) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(r.venue, "text-mute text-tiny"));
-      tr.appendChild(tdLink(r.code || "", r.code ? `/ticker/${encodeURIComponent(r.code)}` : null, "code"));
-      tr.appendChild(td(r.name || ""));
-      tr.appendChild(td(fmt.twd(r.cost_twd), "num"));
-      tr.appendChild(td(fmt.twd(r.mkt_value_twd), "num"));
-      tr.appendChild(td(fmt.twd(r.cum_dividend_twd), "num"));
-      tr.appendChild(td(fmt.twd(r.unrealized_pnl_with_div_twd),
-        "num " + (r.unrealized_pnl_with_div_twd >= 0 ? "value-pos" : "value-neg")));
-      tr.appendChild(td(r.total_return_pct != null ? `${(r.total_return_pct * 100).toFixed(2)}%` : "—",
-        "num " + ((r.total_return_pct || 0) >= 0 ? "value-pos" : "value-neg")));
-      tbody.appendChild(tr);
-    }
+    window.dataTable({
+      tableId: "tr-table",
+      rows: rows || [],
+      searchKeys: ["code", "name", "venue"],
+      searchPlaceholder: "Search code, name, venue…",
+      filters: [
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+      ],
+      defaultSort: { key: "unrealized_pnl_with_div_twd", dir: "desc" },
+      colspan: 8,
+      pageSize: 15,
+      emptyText: "No holdings",
+      row: (r) => [
+        td(r.venue, "text-mute text-tiny"),
+        tdLink(r.code || "", r.code ? `/ticker/${encodeURIComponent(r.code)}` : null, "code"),
+        td(r.name || ""),
+        td(fmt.twd(r.cost_twd), "num"),
+        td(fmt.twd(r.mkt_value_twd), "num"),
+        td(fmt.twd(r.cum_dividend_twd), "num"),
+        td(fmt.twd(r.unrealized_pnl_with_div_twd),
+          "num " + (r.unrealized_pnl_with_div_twd >= 0 ? "value-pos" : "value-neg")),
+        td(r.total_return_pct != null ? `${(r.total_return_pct * 100).toFixed(2)}%` : "—",
+          "num " + ((r.total_return_pct || 0) >= 0 ? "value-pos" : "value-neg")),
+      ],
+    });
   }
 
   function renderRebates(rebates) {
@@ -145,26 +144,33 @@
   }
 
   function renderTable(rows) {
-    const tbody = document.querySelector("#div-table tbody");
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!rows.length) {
-      const tr = document.createElement("tr");
-      const td_ = document.createElement("td");
-      td_.colSpan = 7; td_.className = "table-empty"; td_.textContent = "No distributions";
-      tr.appendChild(td_); tbody.appendChild(tr);
-      return;
-    }
-    for (const r of rows) {
-      const tr = document.createElement("tr");
-      tr.appendChild(td(fmt.date(r.date), "text-mute"));
-      tr.appendChild(td(r.venue, "text-mute text-tiny"));
-      tr.appendChild(tdLink(r.code || "", r.code ? `/ticker/${encodeURIComponent(r.code)}` : null, "code"));
-      tr.appendChild(td(r.name || ""));
-      tr.appendChild(td(r.ccy || "TWD", "text-mute"));
-      tr.appendChild(td(fmt.num(r.amount_local, 2), "num"));
-      tr.appendChild(td(fmt.twd(r.amount_twd), "num value-pos"));
-      tbody.appendChild(tr);
-    }
+    window.dataTable({
+      tableId: "div-table",
+      rows: rows || [],
+      searchKeys: ["code", "name", "venue", "ccy"],
+      searchPlaceholder: "Search code, name, venue…",
+      filters: [
+        { id: "venue", key: "venue", label: "All venues", options: ["TW", "Foreign"] },
+        { id: "ccy",   key: "ccy",   label: "All ccy",    options: distinct(rows, "ccy") },
+      ],
+      defaultSort: { key: "date", dir: "desc" },
+      colspan: 7,
+      pageSize: 25,
+      emptyText: "No distributions",
+      row: (r) => [
+        td(fmt.date(r.date), "text-mute"),
+        td(r.venue, "text-mute text-tiny"),
+        tdLink(r.code || "", r.code ? `/ticker/${encodeURIComponent(r.code)}` : null, "code"),
+        td(r.name || ""),
+        td(r.ccy || "TWD", "text-mute"),
+        td(fmt.num(r.amount_local, 2), "num"),
+        td(fmt.twd(r.amount_twd), "num value-pos"),
+      ],
+    });
+  }
+
+  function distinct(rows, key) {
+    return [...new Set((rows || []).map((r) => r[key]).filter(Boolean))].sort();
   }
 
   function td(text, cls) {
