@@ -1,12 +1,16 @@
 """Benchmark comparison: portfolio TWR vs strategy TWR side-by-side."""
 from __future__ import annotations
 
-from flask import Blueprint, request
+from flask import Blueprint, current_app, request
 
 from .. import analytics, benchmarks
 from ._helpers import envelope, store
 
 bp = Blueprint("benchmarks", __name__, url_prefix="/api/benchmarks")
+
+
+def _daily_store():
+    return current_app.extensions["daily_store"]
 
 
 @bp.get("/strategies")
@@ -87,7 +91,7 @@ def compare():
         "sortino": analytics.sortino(portfolio_returns),
     }
 
-    return envelope({
+    body = {
         "months": month_list,
         "portfolio": {
             "name": "Your portfolio",
@@ -95,4 +99,20 @@ def compare():
             "stats": portfolio_stats,
         },
         "strategies": strategies_out,
-    })
+    }
+
+    # Daily portfolio overlay — strategy curves stay monthly. Mixing
+    # resolutions on one chart is fine: monthly strategy renders as
+    # step-points; daily portfolio as a continuous line.
+    if (request.args.get("resolution") or "").lower() == "daily":
+        equity_series = _daily_store().get_equity_curve()
+        if equity_series:
+            flow_series = analytics.daily_external_flows(s.months)
+            daily_rows = analytics.daily_twr(equity_series, flow_series)
+            body["portfolio_daily_curve"] = [
+                {"date": r["date"], "cum_return": r["cum_twr"]}
+                for r in daily_rows
+            ]
+            body["resolution"] = "daily"
+
+    return envelope(body)
