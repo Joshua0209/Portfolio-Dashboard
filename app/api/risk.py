@@ -1,7 +1,7 @@
 """Risk metrics: drawdown, volatility, concentration."""
 from __future__ import annotations
 
-from flask import Blueprint
+from flask import Blueprint, current_app, request
 
 from .. import analytics
 from .holdings import _holdings_for_month
@@ -10,8 +10,33 @@ from ._helpers import envelope, store
 bp = Blueprint("risk", __name__, url_prefix="/api/risk")
 
 
+def _daily_store():
+    return current_app.extensions["daily_store"]
+
+
+def _daily_drawdown_curve():
+    """Build drawdown_curve from portfolio_daily — keyed by `date` instead
+    of `month`. Returns ([], current_dd) when daily layer is empty so the
+    caller can fall back to monthly transparently.
+    """
+    rows = _daily_store().get_drawdown_series()
+    if not rows:
+        return None, None
+    curve = [
+        {
+            "date": r["date"],
+            "wealth": (r["equity_twd"] / r["peak_twd"]) if r["peak_twd"] else 1.0,
+            "drawdown": r["drawdown_pct"],
+        }
+        for r in rows
+    ]
+    current_dd = curve[-1]["drawdown"] if curve else 0
+    return curve, current_dd
+
+
 @bp.get("")
 def risk():
+    use_daily = (request.args.get("resolution") or "").lower() == "daily"
     s = store()
     months = s.months
     if not months:
@@ -64,16 +89,42 @@ def risk():
     top_10_share = analytics.top_n_share(weights, 10)
     hhi_value = analytics.hhi(weights)
 
+    # Daily branch: replace drawdown_curve + current_drawdown + max_drawdown
+    # with values sourced from portfolio_daily. Volatility / Sharpe / Sortino
+    # / HHI / leverage stay monthly — those metrics need monthly returns or
+    # snapshot weights and don't get more accurate at daily resolution.
+    daily_dd_curve, daily_current_dd = (None, None)
+    daily_max_dd = None
+    daily_episodes = None
+    if use_daily:
+        daily_dd_curve, daily_current_dd = _daily_drawdown_curve()
+        if daily_dd_curve:
+            daily_max_dd = min((p["drawdown"] for p in daily_dd_curve), default=0)
+            daily_dates = [p["date"] for p in daily_dd_curve]
+            # Build a synthetic cum-return series from drawdown wealth_index
+            # so drawdown_episodes() picks up daily-resolution episodes.
+            cum_daily = [p["wealth"] - 1.0 for p in daily_dd_curve]
+            daily_episodes = analytics.drawdown_episodes(cum_daily, daily_dates)
+
+    drawdown_curve_out = (
+        daily_dd_curve
+        if daily_dd_curve is not None
+        else [{"month": months[i]["month"], **dd_curve[i]} for i in range(len(months))]
+    )
+
     return envelope({
+        "resolution": "daily" if daily_dd_curve is not None else "monthly",
         "monthly_volatility": analytics.stdev(period_returns),
         "annualized_volatility": analytics.stdev(period_returns) * (12 ** 0.5),
         "downside_volatility": analytics.downside_stdev(period_returns) * (12 ** 0.5),
-        "max_drawdown": analytics.max_drawdown(cum),
-        "current_drawdown": dd_curve[-1]["drawdown"] if dd_curve else 0,
-        "drawdown_curve": [
-            {"month": months[i]["month"], **dd_curve[i]} for i in range(len(months))
-        ],
-        "drawdown_episodes": analytics.drawdown_episodes(cum, month_labels),
+        "max_drawdown": daily_max_dd if daily_max_dd is not None else analytics.max_drawdown(cum),
+        "current_drawdown": (
+            daily_current_dd if daily_current_dd is not None
+            else (dd_curve[-1]["drawdown"] if dd_curve else 0)
+        ),
+        "drawdown_curve": drawdown_curve_out,
+        "drawdown_episodes": daily_episodes if daily_episodes is not None
+            else analytics.drawdown_episodes(cum, month_labels),
         "sharpe_annualized": analytics.sharpe(period_returns),
         "sortino_annualized": analytics.sortino(period_returns),
         "calmar": analytics.calmar(period_returns),
