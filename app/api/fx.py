@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from flask import Blueprint
+from flask import Blueprint, current_app, request
 
 from .. import analytics
 from ._helpers import envelope, store
@@ -11,8 +11,13 @@ from ._helpers import envelope, store
 bp = Blueprint("fx", __name__, url_prefix="/api/fx")
 
 
+def _daily_store():
+    return current_app.extensions["daily_store"]
+
+
 @bp.get("")
 def fx():
+    use_daily = (request.args.get("resolution") or "").lower() == "daily"
     s = store()
     months = s.months
     if not months:
@@ -29,10 +34,30 @@ def fx():
 
     fx_pnl = analytics.fx_pnl(months)
 
-    rate_curve = [
-        {"month": m["month"], "fx_usd_twd": m.get("fx_usd_twd")}
-        for m in months
-    ]
+    # Daily branch overlays a denser rate_curve and a daily fx_pnl series.
+    # Monthly fx_pnl stays as the canonical attribution number — the daily
+    # variant is a refinement, not a replacement (foreign equity only;
+    # bank USD cash is monthly).
+    daily_rate_curve = None
+    daily_fx_pnl = None
+    if use_daily:
+        fx_series = _daily_store().get_fx_series(ccy="USD")
+        if fx_series:
+            daily_rate_curve = [
+                {"date": r["date"], "fx_usd_twd": r["rate_to_twd"]}
+                for r in fx_series
+            ]
+            usd_exposure = _daily_store().get_usd_exposure_series()
+            daily_fx_pnl = analytics.daily_fx_pnl(usd_exposure, fx_series)
+
+    rate_curve = (
+        daily_rate_curve
+        if daily_rate_curve is not None
+        else [
+            {"month": m["month"], "fx_usd_twd": m.get("fx_usd_twd")}
+            for m in months
+        ]
+    )
 
     by_ccy_exposure = []
     for m in months:
@@ -54,12 +79,22 @@ def fx():
     bank_usd_in_twd = last.get("bank_usd_in_twd", 0) or 0
     foreign_share = (foreign_mv + bank_usd_in_twd) / last_total if last_total else 0
 
-    return envelope({
+    body = {
+        "resolution": "daily" if daily_rate_curve is not None else "monthly",
         "rate_curve": rate_curve,
-        "current_rate": last.get("fx_usd_twd"),
-        "first_rate": months[0].get("fx_usd_twd"),
+        "current_rate": (
+            daily_rate_curve[-1]["fx_usd_twd"]
+            if daily_rate_curve else last.get("fx_usd_twd")
+        ),
+        "first_rate": (
+            daily_rate_curve[0]["fx_usd_twd"]
+            if daily_rate_curve else months[0].get("fx_usd_twd")
+        ),
         "by_ccy_monthly": by_ccy_exposure,
         "fx_pnl": fx_pnl,
         "foreign_share": foreign_share,
         "foreign_value_twd": foreign_mv + bank_usd_in_twd,
-    })
+    }
+    if daily_fx_pnl is not None:
+        body["fx_pnl_daily"] = daily_fx_pnl
+    return envelope(body)

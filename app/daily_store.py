@@ -348,6 +348,33 @@ class DailyStore:
             })
         return out
 
+    def get_usd_exposure_series(
+        self, start: str | None = None, end: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Daily USD-denominated equity exposure (TWD-converted) for FX P&L.
+
+        Sum of positions_daily.mv_twd for symbols whose symbol_market.market
+        is not 'TW' (i.e. foreign equities, primarily USD). USD bank cash is
+        NOT included — the daily layer doesn't track bank cash; that's a
+        monthly-only field. This is documented in the /api/fx response.
+        """
+        sql = """
+            SELECT pd.date AS date, COALESCE(SUM(pd.mv_twd), 0) AS usd_mv_twd
+            FROM positions_daily pd
+            LEFT JOIN symbol_market sm ON sm.symbol = pd.symbol
+            WHERE pd.qty != 0 AND COALESCE(sm.market, '') != 'TW'
+        """
+        params: list[Any] = []
+        if start:
+            sql += " AND pd.date >= ?"
+            params.append(start)
+        if end:
+            sql += " AND pd.date <= ?"
+            params.append(end)
+        sql += " GROUP BY pd.date ORDER BY pd.date ASC"
+        with self.connect_ro() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
     def get_fx_series(
         self, ccy: str = "USD", start: str | None = None, end: str | None = None
     ) -> list[dict[str, Any]]:

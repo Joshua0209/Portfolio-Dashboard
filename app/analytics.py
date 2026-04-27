@@ -692,6 +692,50 @@ def monthly_flows(months: list[dict], venue_flows: list[dict] | None = None) -> 
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def daily_fx_pnl(
+    usd_exposure_series: list[dict],
+    fx_series: list[dict],
+) -> dict:
+    """Day-over-day FX P&L using daily rates and daily USD exposure.
+
+    For each priced day d (after the first):
+        usd_amount_{d-1} = usd_mv_twd_{d-1} / rate_{d-1}
+        fx_pnl_d         = usd_amount_{d-1} × (rate_d − rate_{d-1})
+
+    USD cash from the bank statement is monthly-only and NOT included
+    here — the daily layer tracks foreign equity exposure only. The
+    /api/fx response calls this out via fx_pnl_resolution: "daily".
+
+    Returns same shape as fx_pnl(): {contribution_twd, daily: [...]}.
+    """
+    if len(usd_exposure_series) < 2 or len(fx_series) < 2:
+        return {"contribution_twd": 0, "daily": []}
+
+    rate_by_date = {r["date"]: float(r["rate_to_twd"]) for r in fx_series}
+    usd_by_date = {r["date"]: float(r["usd_mv_twd"]) for r in usd_exposure_series}
+    dates = sorted(set(rate_by_date) & set(usd_by_date))
+    if len(dates) < 2:
+        return {"contribution_twd": 0, "daily": []}
+
+    cumulative = 0.0
+    daily = []
+    for i in range(1, len(dates)):
+        prev_d, curr_d = dates[i - 1], dates[i]
+        prev_rate, curr_rate = rate_by_date[prev_d], rate_by_date[curr_d]
+        prev_mv_twd = usd_by_date[prev_d]
+        usd_amount = prev_mv_twd / prev_rate if prev_rate else 0.0
+        delta_twd = usd_amount * (curr_rate - prev_rate)
+        cumulative += delta_twd
+        daily.append({
+            "date": curr_d,
+            "fx_usd_twd": curr_rate,
+            "usd_amount": usd_amount,
+            "fx_pnl_twd": delta_twd,
+            "cumulative_fx_pnl_twd": cumulative,
+        })
+    return {"contribution_twd": cumulative, "daily": daily}
+
+
 def fx_pnl(months: list[dict]) -> dict:
     """USD/TWD FX P&L on full USD exposure (bank + foreign equities).
 
