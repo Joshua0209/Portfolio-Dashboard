@@ -1,12 +1,16 @@
 """Holdings: current positions across TW + foreign, with computed unified shape."""
 from __future__ import annotations
 
-from flask import Blueprint, request
+from flask import Blueprint, current_app, request
 
 from .. import analytics
 from ._helpers import envelope, store
 
 bp = Blueprint("holdings", __name__, url_prefix="/api/holdings")
+
+
+def _daily_store():
+    return current_app.extensions["daily_store"]
 
 
 def _normalize_tw(h: dict, fx: float) -> dict:
@@ -88,9 +92,7 @@ def current():
     })
 
 
-@bp.get("/timeline")
-def timeline():
-    """Holdings count + market value per month for trend view."""
+def _monthly_timeline() -> list[dict]:
     s = store()
     out = []
     for m in s.months:
@@ -103,7 +105,36 @@ def timeline():
             "tw_mv_twd": m.get("tw_market_value_twd", 0),
             "foreign_mv_twd": m.get("foreign_market_value_twd", 0),
         })
-    return envelope(out)
+    return out
+
+
+def _daily_timeline() -> list[dict]:
+    """One row per priced day from positions_daily, aggregated by venue."""
+    return [
+        {
+            "date": r["date"],
+            "tw_count": r["n_tw"],
+            "foreign_count": r["n_foreign"],
+            "tw_mv_twd": r["tw_twd"],
+            "foreign_mv_twd": r["foreign_twd"],
+        }
+        for r in _daily_store().get_allocation_timeseries()
+    ]
+
+
+@bp.get("/timeline")
+def timeline():
+    """Holdings count + market value per period for trend view.
+
+    Always returns {rows, resolution}. ?resolution=daily swaps to per-day
+    rows from positions_daily; empty daily store falls back to monthly so
+    the frontend never sees a 404.
+    """
+    if (request.args.get("resolution") or "").lower() == "daily":
+        daily = _daily_timeline()
+        if daily:
+            return envelope({"resolution": "daily", "rows": daily})
+    return envelope({"resolution": "monthly", "rows": _monthly_timeline()})
 
 
 @bp.get("/sectors")
