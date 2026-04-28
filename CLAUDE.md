@@ -62,9 +62,10 @@ investment/
 │       ├── benchmarks.py         # Strategy comparison vs portfolio
 │       ├── daily.py              # /api/daily/equity + /api/daily/prices/<symbol>
 │       └── today.py              # /api/today/* widgets + /api/admin/* (no url_prefix; see below)
-├── templates/                    # Jinja2 page templates (12 pages + 2 partials)
+├── templates/                    # Jinja2 page templates (12 pages + 3 partials)
 │   ├── _developer_tools.html     # DLQ + reconcile accordion, included on /today
-│   ├── _reconcile_banner.html    # Global banner included from base.html
+│   ├── _dlq_banner.html          # Global failed-tasks banner (DOMContentLoaded poll)
+│   ├── _reconcile_banner.html    # Global PDF-vs-overlay banner included from base.html
 └── static/                       # css/, js/ (vanilla; no build step)
     ├── css/{tokens,app}.css      # Design system + components
     └── js/{api,charts,format,help,pagination,app}.js + freshness.js + pages/*.js
@@ -129,6 +130,7 @@ dashboard runs in PDF-only mode when everything is unset.
 | `SINOPAC_PDF_PASSWORDS` | Comma-separated PDF unlock candidates. The decrypter tries each per file; first that opens wins. Different statement types use different passwords (brokerage = National ID, bank = birth date). |
 | `SINOPAC_API_KEY` / `SINOPAC_SECRET_KEY` | Shioaji read-only credentials. When both are set, `app/trade_overlay.py` overlays post-PDF trades onto the daily layer. Without them, the dashboard is fully functional in PDF-only mode and the overlay logs `skipped_reason='shioaji_unconfigured'` once per process lifetime. |
 | `BACKFILL_ON_STARTUP` | Default `false`. When `true`, `create_app()` spawns the cold-start backfill in a daemon thread. The Flask debug-reloader is detected via `WERKZEUG_RUN_MAIN` so the parent process is skipped (otherwise both parent and child would spawn a thread). |
+| `ADMIN_TOKEN` | Default unset (admin POSTs unauthenticated). When set, the `before_request` gate in `app/__init__.py` requires every `POST /api/admin/*` to echo the value via `X-Admin-Token` or returns `401`. Reads stay unauthenticated by design. Opt in only when exposing the dashboard via tunnel/LAN/proxy. |
 | `DAILY_DB_PATH` | Override the default `data/dashboard.db` location. Used in tests to swap in a per-test temporary DB. |
 
 Never commit any of these values.
@@ -249,11 +251,35 @@ GET  /api/benchmarks/strategies
 GET  /api/benchmarks/compare?keys=tw_passive,us_passive
 ```
 
+### `?resolution=daily` query parameter
+
+Most monthly endpoints accept an optional `?resolution=daily` flag,
+gated by `app/api/_helpers.py:want_daily()`. When the daily SQLite
+layer has rows, the body switches to a daily-shape payload (per-day
+rows keyed by `date` instead of monthly rows keyed by `month`) and
+adds `"resolution": "daily"` to the envelope. When the daily layer is
+empty, the parameter is silently ignored and the monthly shape is
+returned — pages that opt in via `static/js/api.js` therefore render
+correctly even before the cold-start backfill finishes.
+
+Honoured by:
+- `/api/summary` (KPIs reprice against today's closes unconditionally;
+  flag swaps the equity-curve series)
+- `/api/holdings/timeline`
+- `/api/performance/timeseries` and `/api/performance/rolling`
+- `/api/risk` (drawdown curve)
+- `/api/fx` (rate curve + `fx_pnl_daily`)
+- `/api/cashflows/monthly` (daily branch returns dict with `monthly`+`daily`)
+- `/api/benchmarks/compare` (adds `portfolio_daily_curve`; strategy
+  curves stay monthly to keep apples-to-apples comparison)
+
 ### Daily-resolution layer
 ```
 GET  /api/daily/equity[?start=YYYY-MM-DD&end=YYYY-MM-DD]
 GET  /api/daily/prices/<symbol>
 ```
+Both endpoints validate the `start`/`end` query params against the
+`YYYY-MM-DD` regex and return `400` on malformed input.
 
 ### `/today` widgets
 ```

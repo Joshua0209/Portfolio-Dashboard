@@ -134,6 +134,7 @@ is unset.
 | `SINOPAC_API_KEY` | optional | Read-only Shioaji credential. When set, the daily layer overlays post-PDF trades. Never used to place orders — `app/shioaji_client.py` does not import any order/CA symbols. |
 | `SINOPAC_SECRET_KEY` | optional | Pair of `SINOPAC_API_KEY`. |
 | `BACKFILL_ON_STARTUP` | optional, default `false` | When `true`, `create_app()` spawns the cold-start backfill in a daemon thread. The Flask debug-reloader is detected and the parent process is skipped to avoid double-spawning. |
+| `ADMIN_TOKEN` | optional, default unset | When set, every `POST /api/admin/*` request must echo the value back via the `X-Admin-Token` header or the server returns `401`. Off by default so the localhost workflow keeps working unauthenticated; opt in only when exposing the dashboard via tunnel / LAN / reverse proxy. |
 | `DAILY_DB_PATH` | optional | Override the default `data/dashboard.db` location (useful for tests). |
 | `FLASK_DEBUG` | optional | Standard Flask flag; required if you want hot-reload on `app.py`. |
 
@@ -228,12 +229,14 @@ investment/
 │   ├── reconcile.py              # CLI mirror of POST /api/admin/reconcile
 │   ├── retry_failed_tasks.py     # CLI mirror of POST /api/admin/retry-failed
 │   └── validate_data.py          # Sanity checks across portfolio.json + dashboard.db
-├── templates/                    # Jinja2 page templates (12 pages + 2 partials)
+├── templates/                    # Jinja2 page templates (12 pages + 3 partials)
 │   ├── _developer_tools.html     # DLQ + reconcile accordion, included on /today
-│   ├── _reconcile_banner.html    # Global banner included from base.html
+│   ├── _dlq_banner.html          # Global "fetches failed" banner from base.html
+│   ├── _reconcile_banner.html    # Global PDF-vs-overlay banner from base.html
 ├── static/                       # css/, js/ (vanilla; no build step)
 │   ├── css/{tokens,app}.css      # Design system tokens + components
-│   └── js/{api,charts,format,help,pagination,app}.js + pages/*.js
+│   └── js/{api,charts,format,help,pagination,app,data-table,
+│       dlq-banner,reconcile-banner,freshness}.js + pages/*.js
 ├── data/                         # gitignored — actual portfolio data
 │   ├── portfolio.json            # Parsed dataset consumed by Flask (canonical)
 │   ├── tw_ticker_map.json        # Manual TW name → ticker overrides
@@ -274,8 +277,19 @@ GET  /api/tax
 GET  /api/tickers
 GET  /api/tickers/<code>
 GET  /api/benchmarks/strategies
-GET  /api/benchmarks/compare?strategies=passive_tw,passive_us,...
+GET  /api/benchmarks/compare?keys=tw_passive,us_passive
 ```
+
+Most monthly endpoints accept an optional `?resolution=daily` query
+parameter. When the daily SQLite layer has rows, the body switches to a
+daily-shape payload (per-day rows keyed by `date` instead of monthly rows
+keyed by `month`) and adds `"resolution": "daily"` to the envelope.
+When the daily layer is empty, the parameter is ignored and the monthly
+shape is returned — pages that opt in via `static/js/api.js` therefore
+render correctly even before the cold-start backfill finishes. Currently
+honoured by `/api/summary`, `/api/holdings/timeline`, `/api/performance/*`,
+`/api/risk`, `/api/fx`, `/api/cashflows/monthly`, and
+`/api/benchmarks/compare` (overlay only — strategy curves stay monthly).
 
 ### Daily-resolution layer (returns 202 + progress while INITIALIZING)
 
@@ -335,8 +349,15 @@ the error string, and the warming banner deep-links to `/today#developer-tools`.
   through to "TW Equity (other)" / "US Equity (other)".
 - **Benchmarks need yfinance.** First run hits the network; subsequent runs
   use the 7-day cache in `data/benchmarks.json`.
-- **No auth.** The server is bound to `127.0.0.1` only. Do not expose it to
-  a public network without an auth proxy in front.
+- **No auth on read endpoints.** The server is bound to `127.0.0.1` by
+  default. The Flask app does set conservative response headers
+  (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and a
+  same-origin-only CSP) via `after_request`, and `POST /api/admin/*`
+  can be gated by setting `ADMIN_TOKEN` (clients must echo
+  `X-Admin-Token`). Read endpoints under `/api/*` remain unauthenticated.
+  Do not expose the dashboard to a public network without an auth
+  proxy in front, regardless of `ADMIN_TOKEN`.
 
 ---
 
