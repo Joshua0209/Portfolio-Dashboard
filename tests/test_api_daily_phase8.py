@@ -59,12 +59,24 @@ def _portfolio_with_2330() -> dict:
 
 
 def _seed_prices(store: DailyStore, symbol: str, rows: list[tuple]) -> None:
+    """Seed prices AND a portfolio_daily anchor so require_ready_or_warming
+    treats the store as READY. Without the anchor the decorator returns
+    202 INITIALIZING because get_today_snapshot() reads portfolio_daily,
+    not prices."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with store.connect_rw() as conn:
         for d, close in rows:
             conn.execute(
                 "INSERT INTO prices VALUES (?, ?, ?, ?, ?, ?)",
                 (d, symbol, close, "TWD", "yfinance", now),
+            )
+        # Anchor row so the daily layer reports READY.
+        if rows:
+            anchor_date = rows[-1][0]
+            conn.execute(
+                "INSERT OR IGNORE INTO portfolio_daily(date, equity_twd, "
+                "fx_usd_twd, n_positions, has_overlay) VALUES (?, ?, ?, ?, ?)",
+                (anchor_date, 0.0, 30.0, 0, 0),
             )
 
 
@@ -121,27 +133,29 @@ def test_daily_prices_filters_by_window(app_with_daily_prices) -> None:
     assert len(pts) == 2
 
 
-def test_daily_prices_404_for_unknown_symbol(app_with_daily_prices) -> None:
+def test_daily_prices_unknown_symbol_returns_empty_points(app_with_daily_prices) -> None:
+    """Store is READY (anchor row exists), so the decorator passes through.
+    Unknown symbol → 200 with empty points (preferred over 404)."""
     client = app_with_daily_prices.test_client()
     r = client.get("/api/daily/prices/9999")
-    assert r.status_code == 200  # empty envelope is preferred over 404
+    assert r.status_code == 200
     body = r.get_json()
     assert body["data"]["points"] == []
     assert body["data"]["empty"] is True
 
 
-def test_daily_prices_empty_envelope_on_fresh_db(tmp_path, monkeypatch) -> None:
-    """Phase 4 contract: empty DB returns empty envelope, not 500."""
+def test_daily_prices_initializing_on_fresh_db(tmp_path, monkeypatch) -> None:
+    """Phase 9 contract: empty store returns 202 INITIALIZING, not 500
+    and not silent-empty 200."""
     monkeypatch.setenv("DAILY_DB_PATH", str(tmp_path / "dashboard.db"))
     portfolio_path = tmp_path / "portfolio.json"
     portfolio_path.write_text(json.dumps({"months": [], "summary": {}}))
     app = create_app(data_path=portfolio_path)
     client = app.test_client()
     r = client.get("/api/daily/prices/2330")
-    assert r.status_code == 200
+    assert r.status_code == 202
     body = r.get_json()
-    assert body["data"]["points"] == []
-    assert body["data"]["empty"] is True
+    assert body["data"]["state"] == "INITIALIZING"
 
 
 def test_ticker_detail_with_resolution_daily_returns_daily_branch(

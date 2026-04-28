@@ -59,14 +59,16 @@ def app_with_daily_data(tmp_path: Path, monkeypatch):
 # --- /api/daily/equity ---------------------------------------------------
 
 
-def test_daily_equity_returns_empty_envelope_on_fresh_db(app) -> None:
+def test_daily_equity_returns_initializing_on_fresh_db(app) -> None:
+    """Empty store → 202 INITIALIZING (require_ready_or_warming).
+    Returning empty rows at HTTP 200 would silently let stale-or-never-
+    populated state look like 'data is fine, just empty'."""
     client = app.test_client()
     r = client.get("/api/daily/equity")
-    assert r.status_code == 200
+    assert r.status_code == 202
     body = r.get_json()
     assert body["ok"] is True
-    assert body["data"]["points"] == []
-    assert body["data"]["empty"] is True
+    assert body["data"]["state"] == "INITIALIZING"
 
 
 def test_daily_equity_returns_seeded_curve(app_with_daily_data) -> None:

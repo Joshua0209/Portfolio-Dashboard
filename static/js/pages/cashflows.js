@@ -6,11 +6,18 @@
 
   async function init() {
     window.charts.applyDefaults();
-    const [cf, monthly, bank] = await Promise.all([
+    const [cf, monthlyRaw, bank] = await Promise.all([
       window.api.get("/api/cashflows/cumulative"),
       window.api.get("/api/cashflows/monthly"),
       window.api.get("/api/cashflows/bank"),
     ]);
+
+    // Defensive unwrap: monthly is currently a bare list, but ?resolution=daily
+    // may evolve to return a dict like {monthly: [...], daily: [...]}. Tolerate
+    // both shapes so a backend change does not crash the page.
+    const monthly = Array.isArray(monthlyRaw)
+      ? monthlyRaw
+      : (monthlyRaw && Array.isArray(monthlyRaw.monthly) ? monthlyRaw.monthly : []);
 
     renderKPIs(cf);
     renderRealVsCounterfactual(cf);

@@ -94,13 +94,64 @@ def test_retry_failed_marks_rows_resolved(client, app, monkeypatch):
 
     from app import price_sources
 
-    def fake_get_prices(symbol, currency, start, end, store=None):
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
         return [{
             "date": "2026-04-25", "close": 600.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }]
 
     monkeypatch.setattr(price_sources, "get_prices", fake_get_prices)
+
+    r = client.post("/api/admin/retry-failed")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["data"]["resolved"] == 1
+    assert body["data"]["still_failing"] == 0
+
+
+def test_retry_failed_persists_fetched_rows_to_prices_table(client, app, monkeypatch):
+    """Critical contract: a successful retry MUST write the fetched rows
+    to the prices table. Earlier code only marked the DLQ row resolved
+    and discarded the fetched data, leaving dates_checked claiming the
+    range was covered while no actual prices were stored."""
+    _seed_failure(app, task_type="tw_prices", target="2330")
+
+    from app import price_sources
+
+    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+        return [{
+            "date": "2026-04-25", "close": 1234.5,
+            "symbol": symbol, "currency": currency, "source": "yfinance",
+        }]
+
+    monkeypatch.setattr(price_sources, "get_prices", fake_get_prices)
+
+    r = client.post("/api/admin/retry-failed")
+    assert r.get_json()["data"]["resolved"] == 1
+
+    ds: DailyStore = app.extensions["daily_store"]
+    with ds.connect_ro() as conn:
+        row = conn.execute(
+            "SELECT date, symbol, close FROM prices WHERE symbol = '2330'"
+        ).fetchone()
+    assert row is not None, "fetched price rows must be persisted"
+    assert row["close"] == 1234.5
+
+
+def test_retry_failed_handles_benchmark_prices_task_type(client, app, monkeypatch):
+    """Phase 10 dispatcher gap: benchmark_prices DLQ rows used to raise
+    ValueError because the resolver had no branch for them. The fix
+    routes them through get_yfinance_prices."""
+    _seed_failure(app, task_type="benchmark_prices", target="0050.TW")
+
+    from app import price_sources
+
+    def fake_get_yfinance_prices(symbol, start, end, store=None, today=None):
+        return [{
+            "date": "2026-04-25", "close": 200.0, "volume": 1_000_000,
+        }]
+
+    monkeypatch.setattr(price_sources, "get_yfinance_prices", fake_get_yfinance_prices)
 
     r = client.post("/api/admin/retry-failed")
     assert r.status_code == 200

@@ -36,10 +36,11 @@ def _seed(app, rows):
 # --- Period returns ---------------------------------------------------------
 
 
-def test_period_returns_empty_envelope_when_no_data(app):
+def test_period_returns_initializing_when_no_data(app):
+    """Empty store → 202 INITIALIZING via require_ready_or_warming."""
     r = app.test_client().get("/api/today/period-returns")
-    assert r.status_code == 200
-    assert r.get_json()["data"]["empty"] is True
+    assert r.status_code == 202
+    assert r.get_json()["data"]["state"] == "INITIALIZING"
 
 
 def test_period_returns_computes_mtd_qtd_ytd(app):
@@ -63,9 +64,10 @@ def test_period_returns_computes_mtd_qtd_ytd(app):
 # --- Drawdown ---------------------------------------------------------------
 
 
-def test_drawdown_empty_when_no_data(app):
-    r = app.test_client().get("/api/today/drawdown").get_json()["data"]
-    assert r["empty"] is True
+def test_drawdown_initializing_when_no_data(app):
+    r = app.test_client().get("/api/today/drawdown")
+    assert r.status_code == 202
+    assert r.get_json()["data"]["state"] == "INITIALIZING"
 
 
 def test_drawdown_recovers_to_zero_on_new_high(app):

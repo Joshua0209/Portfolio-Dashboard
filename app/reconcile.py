@@ -17,6 +17,7 @@ the next page load.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -146,7 +147,6 @@ def _persist_event(
     out of it for display, the accordion shows the full payload for a
     human to triage.
     """
-    import json
     only_pdf = diff["only_in_pdf"]
     only_overlay = diff["only_in_overlay"]
     if not only_pdf and not only_overlay:

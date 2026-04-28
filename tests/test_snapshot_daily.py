@@ -113,7 +113,7 @@ def test_run_advances_last_known_date_after_fetch(store, portfolio, monkeypatch)
 
     # Patch the price fetch so the test doesn't hit the network. Returns
     # 3 fresh rows for the 3 newly-in-window days.
-    def fake_get_prices(symbol, ccy, start, end, store=None):
+    def fake_get_prices(symbol, ccy, start, end, store=None, today=None):
         return [
             {"date": "2026-04-23", "symbol": symbol, "close": 920.0,
              "currency": "TWD", "source": "yfinance"},
@@ -125,7 +125,7 @@ def test_run_advances_last_known_date_after_fetch(store, portfolio, monkeypatch)
 
     monkeypatch.setattr(snap_mod, "_get_prices", fake_get_prices)
     monkeypatch.setattr(snap_mod, "_get_fx_rates",
-                        lambda ccy, start, end: [])
+                        lambda ccy, start, end, store=None, today=None: [])
 
     portfolio_dict = json.loads(Path(portfolio).read_text())
     summary = snap_mod.run(store, portfolio_dict)

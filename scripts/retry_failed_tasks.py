@@ -34,6 +34,9 @@ def build_resolver(store: DailyStore):
     Mirrors app/api/today.py::_build_retry_resolver. We deliberately
     duplicate the dispatch instead of importing the request-scoped one,
     because the CLI must run without a Flask app context.
+
+    Each branch returns a callable that fetches AND persists — see
+    retry_open_tasks docstring for the contract.
     """
     from app import price_sources
 
@@ -43,15 +46,38 @@ def build_resolver(store: DailyStore):
         floor = store.get_meta("backfill_floor") or "2025-08-01"
         today = store.get_meta("last_known_date") or floor
         if ttype == "tw_prices":
-            return lambda: price_sources.get_prices(
-                target, "TWD", floor, today, store=store
-            )
+            def _do() -> None:
+                rows = price_sources.get_prices(
+                    target, "TWD", floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_symbol_prices(store, target, rows)
+            return _do
         if ttype == "foreign_prices":
-            return lambda: price_sources.get_prices(
-                target, "USD", floor, today, store=store
-            )
+            def _do() -> None:
+                rows = price_sources.get_prices(
+                    target, "USD", floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_symbol_prices(store, target, rows)
+            return _do
         if ttype == "fx_rates":
-            return lambda: price_sources.get_fx_rates(target, floor, today)
+            def _do() -> None:
+                rows = price_sources.get_fx_rates(
+                    target, floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_fx_rows(store, target, rows)
+            return _do
+        if ttype == "benchmark_prices":
+            def _do() -> None:
+                rows = price_sources.get_yfinance_prices(
+                    target, floor, today, store=store, today=today,
+                )
+                ccy = "TWD" if target.endswith((".TW", ".TWO")) else "USD"
+                tagged = [
+                    {**r, "symbol": target, "currency": ccy, "source": "yfinance"}
+                    for r in rows
+                ]
+                backfill_runner._persist_symbol_prices(store, target, tagged)
+            return _do
         raise ValueError(f"unknown task_type: {ttype}")
 
     return resolver

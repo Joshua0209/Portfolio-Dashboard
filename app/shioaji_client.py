@@ -28,11 +28,14 @@ log = logging.getLogger(__name__)
 
 _TPE = ZoneInfo("Asia/Taipei")
 
-# Optional dependency — never fail the import path if unavailable.
+# Optional dependency — never fail the import path if unavailable. We
+# narrow to ImportError/ModuleNotFoundError so a partially-installed or
+# corrupted shioaji that throws a different exception during its own
+# __init__ surfaces loudly instead of silently being treated as absent.
 try:
     import shioaji as _shioaji  # noqa: F401  (only the module handle, no symbols)
     _SHIOAJI_AVAILABLE = True
-except Exception:  # noqa: BLE001 — any failure means "not installed", treat as off
+except (ImportError, ModuleNotFoundError):
     _shioaji = None  # type: ignore[assignment]
     _SHIOAJI_AVAILABLE = False
 

@@ -92,13 +92,17 @@ def test_snapshot_returns_latest_with_delta(seeded_app):
     assert data["weekday"] == "Friday"
 
 
-def test_snapshot_empty_db_returns_empty_envelope(app):
+def test_snapshot_empty_db_returns_initializing_202(app):
+    """Empty store → 202 INITIALIZING (per the require_ready_or_warming
+    contract in app/api/_helpers.py). Returning HTTP 200 + empty body
+    would silently report 'no data' as 'data is fine but empty', which
+    would let a stale or never-run backfill render zeros on /today."""
     client = app.test_client()
     r = client.get("/api/today/snapshot")
-    assert r.status_code == 200
+    assert r.status_code == 202
     body = r.get_json()
     assert body["ok"] is True
-    assert body["data"]["empty"] is True
+    assert body["data"]["state"] == "INITIALIZING"
 
 
 # --- /api/today/movers --------------------------------------------------
@@ -119,11 +123,11 @@ def test_movers_returns_top_gainers_and_losers(seeded_app):
     assert movers["0050"]["delta_pct"] < 0
 
 
-def test_movers_empty_db_returns_empty(app):
+def test_movers_empty_db_returns_initializing_202(app):
     client = app.test_client()
     r = client.get("/api/today/movers")
-    assert r.status_code == 200
-    assert r.get_json()["data"]["movers"] == []
+    assert r.status_code == 202
+    assert r.get_json()["data"]["state"] == "INITIALIZING"
 
 
 # --- /api/today/sparkline -----------------------------------------------

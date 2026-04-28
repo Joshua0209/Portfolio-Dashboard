@@ -189,15 +189,19 @@
     }
 
     function rerender() {
+      // Compute filteredSorted() once and pass through to renderRows so
+      // large tables (transactions, holdings) don't redo filter+sort on
+      // every keystroke. Both calls produce the same result because
+      // `rows` is not mutated between them.
       const f = filteredSorted();
       counter.textContent = `${f.length.toLocaleString()} of ${rows.length.toLocaleString()} rows`;
       pager.update(f.length);
       applySortIndicators();
-      renderRows();
+      renderRows(f);
     }
 
-    function renderRows() {
-      const f = filteredSorted();
+    function renderRows(precomputed) {
+      const f = precomputed || filteredSorted();
       const slice = pager.slice(f);
       const tbody = table.querySelector("tbody");
       while (tbody.firstChild) tbody.removeChild(tbody.firstChild);

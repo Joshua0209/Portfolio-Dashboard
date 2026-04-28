@@ -7,7 +7,9 @@ through.
 """
 from __future__ import annotations
 
-from flask import Blueprint, request
+import re
+
+from flask import Blueprint, abort, request
 
 from ._helpers import (
     daily_store,
@@ -17,6 +19,17 @@ from ._helpers import (
 )
 
 bp = Blueprint("daily", __name__, url_prefix="/api/daily")
+
+# Strict ISO YYYY-MM-DD; rejects bad month/day so a malformed query like
+# ?start=2026-99-99 returns HTTP 400 instead of bubbling a ValueError
+# from date.fromisoformat() deeper in the store layer.
+_ISO_DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+
+
+def _validate_iso_date(s: str | None, field: str) -> str | None:
+    if s is not None and not _ISO_DATE_RE.match(s):
+        abort(400, description=f"{field} must be YYYY-MM-DD")
+    return s
 
 
 def _normalize_trade_date(d: str) -> str:
@@ -28,8 +41,8 @@ def _normalize_trade_date(d: str) -> str:
 @bp.get("/equity")
 @require_ready_or_warming
 def equity_curve():
-    start = request.args.get("start") or None
-    end = request.args.get("end") or None
+    start = _validate_iso_date(request.args.get("start") or None, "start")
+    end = _validate_iso_date(request.args.get("end") or None, "end")
     points = daily_store().get_equity_curve(start=start, end=end)
     return envelope({
         "points": points,
@@ -49,8 +62,8 @@ def prices(symbol: str):
     if a marker looks misplaced, check portfolio.json, not the SQLite
     cache.
     """
-    start = request.args.get("start") or None
-    end = request.args.get("end") or None
+    start = _validate_iso_date(request.args.get("start") or None, "start")
+    end = _validate_iso_date(request.args.get("end") or None, "end")
     points = daily_store().get_ticker_history(symbol, start=start, end=end)
 
     pdf = portfolio_store()

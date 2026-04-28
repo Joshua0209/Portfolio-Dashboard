@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.yfinance_client import fetch_fx as yfinance_fetch_fx
 from app.yfinance_client import fetch_prices as yfinance_fetch_prices
@@ -98,7 +98,9 @@ def months_in_range(start: str, end: str) -> list[tuple[int, int]]:
     return out
 
 
-def _tag(rows: list[dict], symbol: str, currency: str, source: str) -> list[dict]:
+def _tag(
+    rows: list[dict[str, Any]], symbol: str, currency: str, source: str,
+) -> list[dict[str, Any]]:
     return [
         {**r, "symbol": symbol, "currency": currency, "source": source}
         for r in rows

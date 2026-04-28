@@ -88,13 +88,18 @@ def require_ready_or_warming(handler):
     FAILED       → 503 + error envelope (frontend deep-links to the
                    Developer Tools accordion).
     READY        → call the wrapped handler normally.
+
+    READY + empty store is treated as INITIALIZING — mirrors the
+    /api/health contract in app/__init__.py: rows are required before
+    callers should see "ready". Without this, an endpoint decorated to
+    require ready would happily return an empty body at HTTP 200 during
+    a fresh boot when the daemon hasn't written any rows yet, hiding a
+    real "still warming up" state behind silent-empty responses.
     """
 
     @wraps(handler)
     def wrapper(*args, **kwargs):
         snap = backfill_state.get().snapshot()
-        if snap["state"] == "READY":
-            return handler(*args, **kwargs)
         if snap["state"] == "FAILED":
             return (
                 {
@@ -107,11 +112,16 @@ def require_ready_or_warming(handler):
                 },
                 503,
             )
+        if snap["state"] == "READY":
+            ds_snap = daily_store().get_today_snapshot()
+            if ds_snap is not None:
+                return handler(*args, **kwargs)
+        # INITIALIZING, or READY-but-empty
         return (
             {
                 "ok": True,
                 "data": {
-                    "state": snap["state"],
+                    "state": "INITIALIZING",
                     "progress": snap["progress"],
                 },
             },

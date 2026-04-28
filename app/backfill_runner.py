@@ -1,19 +1,20 @@
-"""Cold-start daily backfill: portfolio.json + TWSE → SQLite cache.
+"""Cold-start daily backfill: portfolio.json + yfinance → SQLite cache.
 
-This module is the bridge from the JSON source-of-truth to the daily
-SQLite cache. It walks the trade ledger and holdings tables in
-data/portfolio.json, computes a per-symbol fetch window per spec §6.1
+Walks the trade ledger and holdings tables in data/portfolio.json,
+computes a per-symbol fetch window per spec §6.1
 (BACKFILL_FLOOR=2025-08-01, [max(first_trade, FLOOR), max(last_trade,
-last_held_date)]), pulls prices via app.price_sources.get_prices, and
-UPSERTs into the prices / positions_daily / portfolio_daily tables.
+last_held_date)]), and pulls TW + foreign prices via
+app.price_sources.get_prices, FX rates via get_fx_rates, and benchmark
+prices via get_yfinance_prices. UPSERTs into the prices / fx_daily /
+positions_daily / portfolio_daily tables.
 
-Phase 3 wires the TW path only. Foreign + FX land in Phase 6.
-
-The Phase 9 background-thread wrapper (and INITIALIZING/READY/FAILED
-state machine) is layered on top of this in a later commit; for now,
-run_tw_backfill() is a synchronous function that any caller (the
-scripts/backfill_daily.py CLI, future tests, the eventual daemon) can
-invoke directly.
+Entry points:
+  run_full_backfill() — orchestrates all four upstreams (recommended)
+  run_tw_backfill()   — TW-only subset (kept for targeted smoke tests)
+  start()             — daemon-thread wrapper with the
+                        INITIALIZING / READY / FAILED state machine;
+                        called from create_app() when
+                        BACKFILL_ON_STARTUP=true.
 """
 from __future__ import annotations
 
@@ -31,6 +32,26 @@ from app.daily_store import BACKFILL_FLOOR_DEFAULT, DailyStore
 from app.price_sources import get_fx_rates, get_prices, get_yfinance_prices
 
 log = logging.getLogger(__name__)
+
+_PROJECT_ROOT_STR = str(Path(__file__).resolve().parent.parent)
+_HOME_STR = str(Path.home())
+
+
+def _sanitize_error_message(msg: str) -> str:
+    """Strip absolute filesystem paths from DLQ-persisted exception text.
+
+    `failed_tasks.error_message` is exposed via the unauthenticated
+    `/api/admin/failed-tasks` endpoint; full paths leak host layout when
+    the dashboard is reachable from a tunnel or LAN. Replace project
+    root and $HOME with placeholders. Truncate to 500 chars to keep
+    pathological tracebacks from filling the row."""
+    if not msg:
+        return msg
+    out = msg.replace(_PROJECT_ROOT_STR, "<project>").replace(_HOME_STR, "~")
+    if len(out) > 500:
+        out = out[:497] + "..."
+    return out
+
 
 # Module-level so a second start() in the same process doesn't double-spawn.
 _thread_lock = threading.Lock()
@@ -397,10 +418,10 @@ def _derive_positions_and_portfolio(
         foreign_currency[entry["code"]] = entry["currency"]
 
     # ref_price_by_month_code = month-end MV-per-share from holdings, used
-    # as a last-resort price when neither TWSE/yfinance nor forward-fill
-    # produce a close. Without this, symbols TWSE permanently blocks (the
-    # circuit-breaker survivors) silently drop out of daily V — the daily
-    # equity curve under-tracks the true portfolio for those holdings.
+    # as a last-resort price when neither yfinance nor forward-fill produce
+    # a close. Without this, symbols whose daily fetch fails (DLQ candidates)
+    # silently drop out of daily V — the daily equity curve under-tracks
+    # the true portfolio for those holdings.
     ref_price_by_month_code: dict[str, dict[str, float]] = {"tw": {}, "foreign": {}}
     for m in portfolio.get("months", []):
         ym = m.get("month")
@@ -447,8 +468,8 @@ def _derive_positions_and_portfolio(
     # Forward-fill closes across priced_dates. Two distinct gap sources:
     #   • foreign symbols: yfinance is silent on US holidays/weekends but
     #     those can still be TW trading days (and vice versa).
-    #   • TW symbols: TWSE WAF intermittently rejects some symbols during
-    #     a backfill, leaving holes inside the fetched window.
+    #   • TW symbols: yfinance occasionally returns no rows for a date
+    #     (thin-volume NaN, network blip), leaving holes in the window.
     # Without forward-fill, holdings *vanish from V* on every gap day and
     # the daily equity curve gyrates wildly (e.g. r_d = +1274% when 16
     # symbols re-appear on the next priced day). Carrying the most-recent
@@ -466,12 +487,12 @@ def _derive_positions_and_portfolio(
     foreign_close_filled = _build_filled(foreign_codes)
 
     # Stock splits cause a sudden mismatch between PDF holdings qty
-    # (post-split) and TWSE close (pre-split for days before the split
-    # date). e.g. 00631L Feb→Mar 2026 went 220→4620 shares while the
-    # underlying price dropped ~22×. Without adjustment, daily MV spikes
-    # to (4620 × pre-split 530) ≈ 2.45M, then crashes back at month-end.
-    # Detect the split factor from holdings, find the split day from
-    # TWSE prices, and rescale pre-split closes to the post-split scale.
+    # (post-split) and yfinance close (pre-split for days before the
+    # split date). e.g. 00631L Feb→Mar 2026 went 220→4620 shares while
+    # the underlying price dropped ~22×. Without adjustment, daily MV
+    # spikes to (4620 × pre-split 530) ≈ 2.45M, then crashes back at
+    # month-end. Detect the split factor from holdings, find the split
+    # day from prices, and rescale pre-split closes to the post-split scale.
     def _split_adjusted(
         venue: str, code: str, filled: dict[str, float]
     ) -> dict[str, float]:
@@ -593,17 +614,15 @@ def _derive_positions_and_portfolio(
                 close = tw_close_filled.get(code, {}).get(d)
                 if close is None:
                     # Last resort: PDF-month ref_price for the month of d.
-                    # NOTE — same-month-only fallback. If the symbol is held
+                    # NOTE — same-month-only fallback. If a symbol is held
                     # mid-month but exits before the next month-end, it is
                     # absent from that month's holdings table, so this lookup
                     # returns None and the row is skipped below — silently
-                    # under-counting equity_twd for the holding window. Used
-                    # to compound the TWSE-WAF circuit-breaker bug; now that
-                    # TW prices route through yfinance the daily-price path
-                    # almost always succeeds and this fallback rarely fires.
-                    # If a future regression brings the fallback back into
-                    # play, walk back through prior months' anchors instead
-                    # of giving up at d[:7].
+                    # under-counting equity_twd for the holding window.
+                    # Rare in practice now that TW prices route through
+                    # yfinance, but if a regression brings the fallback
+                    # back into play, walk back through prior months'
+                    # anchors instead of giving up at d[:7].
                     close = ref_price_by_month_code["tw"].get(f"{code}|{d[:7]}")
                 if close is None:
                     continue
@@ -912,8 +931,8 @@ def _round_robin(queues: dict[str, list[FetchTask]]) -> Iterable[FetchTask]:
 
     Insertion order of the queues dict defines the rotation order:
     tw → fx → foreign → benchmark → tw → … This spreads consecutive
-    upstream calls across different APIs so no single one (e.g. TWSE's
-    WAF) sees back-to-back hits."""
+    upstream calls across different hosts so no single one sees
+    back-to-back hits (yfinance throttles aggressively on bursts)."""
     while any(queues.values()):
         for upstream in list(queues.keys()):
             if queues[upstream]:
@@ -936,7 +955,7 @@ def _record_dlq_failure(
     """Mirror of fetch_with_dlq's exception branch — writes / bumps a row
     in failed_tasks. Used by the deferred-retry pass when a task fails a
     second time."""
-    message = f"{type(exc).__name__}: {exc}"
+    message = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
     now = _now_utc_iso()
     log.warning("retry pass: %s/%s failed again: %s", task_type, target, message)
     with store.connect_rw() as conn:
@@ -1164,6 +1183,16 @@ def run_full_backfill(
     for task in _round_robin(queues):
         if task.upstream in tripped:
             breaker_skipped[task.upstream].append(task.target)
+            # Record to DLQ so retry_failed_tasks can resume them later;
+            # without this row, breaker-skipped first-pass tasks are
+            # silently lost — see KNOWN HAZARD comment on run_tw_backfill.
+            _record_dlq_failure(
+                store, task.dlq_task_type, task.target,
+                RuntimeError(
+                    f"circuit_breaker: {task.upstream} market exceeded "
+                    f"{max_failures_per_market} failures"
+                ),
+            )
             continue
         log.info("%s: %s", task.upstream, task.descriptor)
         rows, exc = _try_fetch(task.fetch_fn)
@@ -1334,6 +1363,13 @@ def run_tw_backfill(
             break
         if tripped:
             breaker_skipped.append(code)
+            _record_dlq_failure(
+                store, "tw_prices", code,
+                RuntimeError(
+                    f"circuit_breaker: tw market exceeded "
+                    f"{max_failures_per_market} failures"
+                ),
+            )
             continue
         start, end = window
         log.info("backfill: %s [%s..%s]", code, start, end)
@@ -1387,10 +1423,10 @@ def fetch_with_dlq(
     store: DailyStore,
     task_type: str,
     target: str,
-    fn,
-    *args,
-    **kwargs,
-):
+    fn: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     """Wrap an external fetch so a single-symbol failure becomes a row in
     `failed_tasks` instead of aborting the run. Returns fn's value on
     success, or None on failure.
@@ -1404,7 +1440,7 @@ def fetch_with_dlq(
     try:
         return fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 — boundary by design
-        message = f"{type(exc).__name__}: {exc}"
+        message = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
         now = _now_utc_iso()
         log.warning(
             "fetch_with_dlq: %s/%s failed: %s", task_type, target, message
@@ -1439,31 +1475,44 @@ def fetch_with_dlq(
         return None
 
 
-def retry_open_tasks(store: DailyStore, resolver) -> dict[str, int]:
+Resolver = Callable[[dict[str, Any]], Callable[[], Any]]
+
+
+def retry_open_tasks(store: DailyStore, resolver: Resolver) -> dict[str, int]:
     """Walk every open failed_tasks row and retry it.
 
-    `resolver(row) -> callable`: caller-supplied factory that returns
-    the no-arg fn to retry for a given row. On success, sets resolved_at
-    on the row. On failure, bumps attempts.
+    `resolver(row) -> callable`: caller-supplied factory that returns a
+    no-arg callable that fetches AND persists the rows for the given DLQ
+    entry. On success (no exception), sets resolved_at on the row. On
+    failure, bumps attempts.
 
-    Used by the /api/admin/retry-failed endpoint and by
-    scripts/retry_failed_tasks.py. The split between this function and
-    fetch_with_dlq is deliberate: fetch_with_dlq runs *during* a
-    backfill, retry_open_tasks runs against the persisted DLQ later.
+    The callable MUST persist on its own — `retry_open_tasks` discards
+    the return value. This mirrors the FetchTask round-robin path which
+    pairs fetch_fn with persist_fn. A resolver that only fetches will
+    silently mark dates_checked but lose the actual price rows; the
+    contract is "do everything needed to make the original failure
+    no-longer-failing."
+
+    Used by /api/admin/retry-failed and scripts/retry_failed_tasks.py.
     """
+    columns = (
+        "id, task_type, target, attempts, error_message, "
+        "first_seen_at, last_attempt_at, resolved_at"
+    )
     with store.connect_ro() as conn:
         rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM failed_tasks WHERE resolved_at IS NULL"
+            f"SELECT {columns} FROM failed_tasks WHERE resolved_at IS NULL"
         ).fetchall()]
 
     resolved = 0
     still_failing = 0
     for row in rows:
-        retry_fn = resolver(row)
         try:
+            retry_fn = resolver(row)
             retry_fn()
         except Exception as exc:  # noqa: BLE001 — same boundary
             now = _now_utc_iso()
+            sanitized = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
             with store.connect_rw() as conn:
                 conn.execute(
                     """
@@ -1473,7 +1522,7 @@ def retry_open_tasks(store: DailyStore, resolver) -> dict[str, int]:
                         error_message = ?
                     WHERE id = ?
                     """,
-                    (now, f"{type(exc).__name__}: {exc}", row["id"]),
+                    (now, sanitized, row["id"]),
                 )
             still_failing += 1
             continue

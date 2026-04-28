@@ -25,7 +25,12 @@ import re
 from flask import Blueprint, request
 
 from .. import analytics, backfill_runner
-from ._helpers import daily_store as _store, envelope, store as portfolio_store
+from ._helpers import (
+    daily_store as _store,
+    envelope,
+    require_ready_or_warming,
+    store as portfolio_store,
+)
 
 bp = Blueprint("today", __name__)
 
@@ -68,12 +73,18 @@ def failed_tasks():
 
 
 def _build_retry_resolver():
-    """Map a failed_tasks row → callable that re-runs the original fetch.
+    """Map a failed_tasks row → callable that fetches AND persists rows
+    for that task_type.
 
     Lives inside the request scope so each task_type's retry is wired to
     the live fetch helpers (and any test-time monkeypatching applies).
-    The resolver is intentionally permissive: unknown task_types raise
-    so a future task_type added without a retry plan fails loudly.
+    Unknown task_types raise — a future task_type added without a retry
+    plan must fail loudly rather than silently mark itself resolved.
+
+    NOTE: foreign_prices currency is hardcoded "USD" because the DLQ row
+    does not store the original currency. Non-USD foreign tickers (HKD,
+    JPY) would be incorrectly retried as USD. If non-USD venues are
+    added, persist ccy in failed_tasks first.
     """
     # Lazy imports so the price_sources module is captured per-request,
     # which means monkeypatch.setattr(app.price_sources, ...) in tests
@@ -82,29 +93,56 @@ def _build_retry_resolver():
 
     store = _store()
 
+    def _window() -> tuple[str, str]:
+        floor = store.get_meta("backfill_floor") or "2025-08-01"
+        today = store.get_meta("last_known_date") or floor
+        return floor, today
+
     def resolver(row):
         ttype = row["task_type"]
         target = row["target"]
+        floor, today = _window()
         if ttype == "tw_prices":
             # Phase 10's retry policy: re-fetch the broad window. The DLQ
             # row doesn't persist start/end (they're derivable), so a
             # bounded retry over the BACKFILL_FLOOR..today envelope is
             # the conservative choice — duplicate UPSERTs are cheap.
-            floor = store.get_meta("backfill_floor") or "2025-08-01"
-            today = store.get_meta("last_known_date") or floor
-            return lambda: price_sources.get_prices(
-                target, "TWD", floor, today, store=store
-            )
+            def _do() -> None:
+                rows = price_sources.get_prices(
+                    target, "TWD", floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_symbol_prices(store, target, rows)
+            return _do
         if ttype == "foreign_prices":
-            floor = store.get_meta("backfill_floor") or "2025-08-01"
-            today = store.get_meta("last_known_date") or floor
-            return lambda: price_sources.get_prices(
-                target, "USD", floor, today, store=store
-            )
+            def _do() -> None:
+                rows = price_sources.get_prices(
+                    target, "USD", floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_symbol_prices(store, target, rows)
+            return _do
         if ttype == "fx_rates":
-            floor = store.get_meta("backfill_floor") or "2025-08-01"
-            today = store.get_meta("last_known_date") or floor
-            return lambda: price_sources.get_fx_rates(target, floor, today)
+            def _do() -> None:
+                rows = price_sources.get_fx_rates(
+                    target, floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_fx_rows(store, target, rows)
+            return _do
+        if ttype == "benchmark_prices":
+            # Benchmarks land in the prices table tagged with their own
+            # symbol/currency/source — mirrors run_benchmark_backfill.
+            # Currency derived from strategy table; default TWD when the
+            # ticker carries a .TW/.TWO suffix, USD otherwise.
+            def _do() -> None:
+                rows = price_sources.get_yfinance_prices(
+                    target, floor, today, store=store, today=today,
+                )
+                ccy = "TWD" if target.endswith((".TW", ".TWO")) else "USD"
+                tagged = [
+                    {**r, "symbol": target, "currency": ccy, "source": "yfinance"}
+                    for r in rows
+                ]
+                backfill_runner._persist_symbol_prices(store, target, tagged)
+            return _do
         raise ValueError(f"unknown task_type: {ttype}")
 
     return resolver
@@ -188,6 +226,7 @@ def _staleness_band(stale_days: int) -> str:
 
 
 @bp.get("/api/today/snapshot")
+@require_ready_or_warming
 def today_snapshot():
     """Latest equity row + delta vs the immediately prior trading day.
 
@@ -224,6 +263,7 @@ def today_snapshot():
 
 
 @bp.get("/api/today/movers")
+@require_ready_or_warming
 def today_movers():
     """Top movers from positions_daily — for each symbol, % delta between
     the two most recent dates. Returns up to N gainers/losers in a single
@@ -260,6 +300,7 @@ def today_movers():
 
 
 @bp.get("/api/today/sparkline")
+@require_ready_or_warming
 def today_sparkline():
     """Last 30 trading days of equity_twd for the hero sparkline."""
     ds = _store()
@@ -273,6 +314,7 @@ def today_sparkline():
 
 
 @bp.get("/api/today/period-returns")
+@require_ready_or_warming
 def today_period_returns():
     """MTD / QTD / YTD / inception equity returns for the hero strip.
 
@@ -326,6 +368,7 @@ def today_period_returns():
 
 
 @bp.get("/api/today/drawdown")
+@require_ready_or_warming
 def today_drawdown():
     """Underwater equity curve — % below running all-time-high.
 
@@ -372,6 +415,7 @@ def today_drawdown():
 
 
 @bp.get("/api/today/risk-metrics")
+@require_ready_or_warming
 def today_risk_metrics():
     """Daily-resolution risk metrics: rolling 30d annualized vol,
     Sharpe (rf=0), Sortino, hit rate, max DD. Daily returns are
@@ -440,6 +484,7 @@ def today_risk_metrics():
 
 
 @bp.get("/api/today/calendar")
+@require_ready_or_warming
 def today_calendar():
     """Per-trading-day return (% from flow-adjusted daily TWR), with
     calendar metadata for heatmap rendering. Returns:

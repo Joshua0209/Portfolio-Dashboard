@@ -376,7 +376,7 @@ class DailyStore:
             for r in rows
         }
 
-    def get_positions_snapshot(self, date: str) -> list[dict[str, Any]]:
+    def get_positions_snapshot(self, as_of_date: str) -> list[dict[str, Any]]:
         """All open positions on a single trading day."""
         with self.connect_ro() as conn:
             return [
@@ -385,7 +385,7 @@ class DailyStore:
                     "SELECT date, symbol, qty, cost_local, mv_local, mv_twd, "
                     "type, source FROM positions_daily "
                     "WHERE date = ? AND qty != 0 ORDER BY mv_twd DESC",
-                    (date,),
+                    (as_of_date,),
                 ).fetchall()
             ]
 

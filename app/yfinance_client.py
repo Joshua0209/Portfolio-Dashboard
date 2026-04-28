@@ -4,10 +4,11 @@ Two operations:
   - fetch_prices(symbol, start, end)  → [{date, close, volume}]
   - fetch_fx(ccy, start, end)         → [{date, rate}]   (rate = ccy → TWD)
 
-Both return rows in the same shape as twse_client / tpex_client so the
-router can treat all three uniformly. yfinance is imported lazily so the
-test suite doesn't pay the import cost on every run, and the module
-attribute `_yf` is monkeypatchable for unit tests.
+Both return rows in the shape expected by app.price_sources so the router
+can consume them uniformly across TW (.TW / .TWO suffix) and foreign
+paths. yfinance is imported lazily so the test suite doesn't pay the
+import cost on every run, and the module attribute `_yf` is
+monkeypatchable for unit tests.
 
 Date contract:
   - `start` and `end` are ISO YYYY-MM-DD strings; window is inclusive.
@@ -22,6 +23,8 @@ NaN handling:
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Iterator
 from datetime import date, timedelta
 from typing import Any
 
@@ -29,13 +32,19 @@ log = logging.getLogger(__name__)
 
 # Lazy import surface; tests replace this with a SimpleNamespace.
 _yf: Any = None
+_yf_lock = threading.Lock()
 
 
 def _ensure_yf() -> Any:
+    """Double-checked locking so concurrent backfill threads don't race
+    the import. Tests monkeypatch `_yf` directly; production runs hit
+    this lock exactly once per process."""
     global _yf
     if _yf is None:  # pragma: no cover — exercised in real runs only
-        import yfinance as yf
-        _yf = yf
+        with _yf_lock:
+            if _yf is None:
+                import yfinance as yf
+                _yf = yf
     return _yf
 
 
@@ -47,7 +56,7 @@ def _next_day_iso(d: str) -> str:
     return (date.fromisoformat(d) + timedelta(days=1)).isoformat()
 
 
-def _iter_days(start: str, end: str):
+def _iter_days(start: str, end: str) -> Iterator[str]:
     s = date.fromisoformat(start)
     e = date.fromisoformat(end)
     cur = s
@@ -108,14 +117,12 @@ def fetch_fx(ccy: str, start: str, end: str) -> list[dict]:
     """Return [{date, rate}, ...] where rate is ccy → TWD.
 
     TWD is the identity case (rate=1.0 for every calendar day) so we
-    don't waste a yfinance request fetching it. For all other currencies
-    we ask Yahoo for `<CCY>=X` (which is the inverse direction — USD per
-    TWD or similar — wait, Yahoo's `TWD=X` is actually USD-per-TWD…).
+    don't waste a yfinance request fetching it.
 
-    Actually Yahoo's quoting is: `<CCY>=X` is "1 USD in <CCY>". So
-    `TWD=X` is the USD→TWD rate, which is exactly what we want for
-    USD positions held in a TWD-functional account. For HKD/JPY we'd
-    use `HKDTWD=X` (e.g., "1 HKD in TWD") if we ever wire those in.
+    Yahoo's quoting convention: `<CCY>=X` returns "1 USD in <CCY>". So
+    `TWD=X` is the USD→TWD rate — units: TWD per USD — which is what we
+    want for USD positions held in a TWD-functional account. For HKD/JPY
+    we use the explicit pair (e.g. `HKDTWD=X` = "1 HKD in TWD").
     """
     if ccy == "TWD":
         return [{"date": d, "rate": 1.0} for d in _iter_days(start, end)]

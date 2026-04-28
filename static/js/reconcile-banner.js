@@ -38,12 +38,18 @@
       const id = root.dataset.eventId;
       if (!id) return;
       fetch(`/api/admin/reconcile/${id}/dismiss`, { method: "POST" })
-        .then(() => {
-          root.hidden = true;
+        .then((res) => {
+          // Fail-closed: only hide on a confirmed server-side dismiss.
+          // A network or 5xx error must leave the banner visible because
+          // it signals data-integrity divergence (PDF vs overlay), not
+          // staleness. Hiding on transient errors would mask a real
+          // unresolved reconciliation event.
+          if (res.ok) {
+            root.hidden = true;
+          }
         })
         .catch(() => {
-          // Network failure: hide locally for this session only.
-          root.hidden = true;
+          /* network failure → leave banner visible (fail-closed) */
         });
     });
   }

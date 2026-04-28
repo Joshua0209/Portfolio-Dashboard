@@ -7,7 +7,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from flask import Flask, render_template
+from flask import Flask, abort, render_template, request
 
 from .data_store import DataStore
 from .daily_store import DailyStore
@@ -106,6 +106,47 @@ def create_app(data_path: Path | str | None = None) -> Flask:
             backfill_runner.start(daily, data_path)
 
     jinja_filters.register(app)
+
+    # Optional admin-token gate. When ADMIN_TOKEN is set, every POST
+    # /api/admin/* request must echo it back via the X-Admin-Token
+    # header. Off by default so the localhost workflow keeps working;
+    # opt in only when exposing the dashboard via tunnel/LAN/proxy.
+    @app.before_request
+    def _admin_token_gate():
+        token = os.environ.get("ADMIN_TOKEN")
+        if not token:
+            return None
+        if request.method != "POST" or not request.path.startswith("/api/admin/"):
+            return None
+        if request.headers.get("X-Admin-Token") != token:
+            abort(401)
+        return None
+
+    @app.after_request
+    def _security_headers(response):
+        # Conservative defaults. CSP allows inline styles because the
+        # dashboard's chart/table components inject style attributes;
+        # tightening to nonce-based requires a template-wide refactor
+        # not worth the risk on a personal-use surface. No external
+        # script origins are allowed — Chart.js + the rest are bundled
+        # under /static.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault(
+            "Referrer-Policy", "strict-origin-when-cross-origin",
+        )
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "object-src 'none'",
+        )
+        return response
 
     from .api import summary, holdings, performance, transactions, cashflows
     from .api import dividends, risk, fx, tax, tickers, benchmarks, daily

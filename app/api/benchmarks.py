@@ -112,8 +112,8 @@ def compare():
             # Performance page's chart treatment. The line lands exactly
             # on portfolio.stats.twr_total at the last month-end, so a
             # head-to-head against the strategy curves stays apples-to-
-            # apples (strategies still run their own daily Mod Dietz, but
-            # the comparison floor — your TWR — agrees with Overview).
+            # apples (strategies compute daily price-relative returns;
+            # the comparison baseline — your TWR — agrees with Overview).
             from app.api.performance import _monthly_anchored_cum
             daily_dates = [r["date"] for r in equity_series]
             anchored_cum = _monthly_anchored_cum(daily_dates, months, portfolio_cum)

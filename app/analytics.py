@@ -11,7 +11,8 @@ import math
 from calendar import monthrange
 from collections import defaultdict, deque
 from datetime import date, datetime
-from typing import Iterable, Literal
+from collections.abc import Callable
+from typing import Any, Iterable, Literal
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -157,6 +158,20 @@ def daily_investment_flows(months: list[dict]) -> list[dict]:
     return [{"date": d, "flow_twd": by_date[d]} for d in sorted(by_date)]
 
 
+# Bank tx categories that are NOT external flows (capital in/out): they
+# represent internal portfolio movements (dividends, settlements, FX).
+# Module-level constant — recomputing this set on every call to
+# daily_external_flows allocated unnecessarily during cold-start backfills
+# that walk every month.
+_DAILY_FLOW_EXCLUDED_CATEGORIES = frozenset({
+    "tw_dividend",
+    "foreign_dividend",
+    "stock_settle_tw",
+    "stock_settle_fx",
+    "fx_convert",
+})
+
+
 def daily_external_flows(months: list[dict]) -> list[dict]:
     """Per-day external flow series (TWD) for daily Modified Dietz.
 
@@ -175,25 +190,18 @@ def daily_external_flows(months: list[dict]) -> list[dict]:
     Sign matches Modified Dietz: positive = inflow into the portfolio
     system (e.g. salary deposit), negative = outflow (e.g. transfer out).
     """
-    EXCLUDED = {
-        "tw_dividend",
-        "foreign_dividend",
-        "stock_settle_tw",
-        "stock_settle_fx",
-        "fx_convert",
-    }
     by_date: dict[str, float] = defaultdict(float)
     for m in months:
         bank = m.get("bank") or {}
         fx = bank.get("fx") or {}
         for tx in bank.get("tx_twd", []) or []:
-            if tx.get("category") in EXCLUDED:
+            if tx.get("category") in _DAILY_FLOW_EXCLUDED_CATEGORIES:
                 continue
             d = _normalize_iso_date(tx.get("date"))
             if d:
                 by_date[d] += float(tx.get("signed_amount") or 0)
         for tx in bank.get("tx_foreign", []) or []:
-            if tx.get("category") in EXCLUDED:
+            if tx.get("category") in _DAILY_FLOW_EXCLUDED_CATEGORIES:
                 continue
             d = _normalize_iso_date(tx.get("date"))
             if not d:
@@ -743,7 +751,7 @@ def monthly_flows(months: list[dict], venue_flows: list[dict] | None = None) -> 
 
 def reprice_holdings_with_daily(
     holdings: list[dict],
-    get_latest_close,
+    get_latest_close: Callable[[str], dict[str, Any] | None],
     current_fx_usd_twd: float | None = None,
 ) -> list[dict]:
     """Override each holding's ref_price/mv/unrealized with today's close.

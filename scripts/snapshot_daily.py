@@ -45,16 +45,25 @@ def _next_day(d: str) -> str:
     return date(y, m, dd).fromordinal(date(y, m, dd).toordinal() + 1).isoformat()
 
 
-def _get_prices(symbol: str, ccy: str, start: str, end: str, store: DailyStore | None = None):
+def _get_prices(
+    symbol: str, ccy: str, start: str, end: str,
+    store: DailyStore | None = None, today: str | None = None,
+):
     """Indirection for the price-source router. Tests monkeypatch this
-    so they don't hit TWSE / yfinance."""
+    so they don't hit yfinance."""
     from app.price_sources import get_prices
-    return get_prices(symbol, ccy, start, end, store=store)
+    return get_prices(symbol, ccy, start, end, store=store, today=today)
 
 
-def _get_fx_rates(ccy: str, start: str, end: str):
+def _get_fx_rates(
+    ccy: str, start: str, end: str,
+    store: DailyStore | None = None, today: str | None = None,
+):
+    """Pass store + today so the set-minus path skips already-checked
+    dates and successful fetches mark their range — keeps incremental
+    runs from re-paying for cached FX days."""
     from app.price_sources import get_fx_rates
-    return get_fx_rates(ccy, start, end)
+    return get_fx_rates(ccy, start, end, store=store, today=today)
 
 
 # --- Window math -----------------------------------------------------------
@@ -185,7 +194,9 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     for code in _held_tw_symbols(portfolio):
         rows = backfill_runner.fetch_with_dlq(
             store, "tw_prices", code,
-            lambda c=code, s=start, e=end: _get_prices(c, "TWD", s, e, store=store),
+            lambda c=code, s=start, e=end, t=end: _get_prices(
+                c, "TWD", s, e, store=store, today=t,
+            ),
         )
         if rows is None:
             continue
@@ -197,7 +208,9 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     for code, ccy in _held_foreign_symbols(portfolio):
         rows = backfill_runner.fetch_with_dlq(
             store, "foreign_prices", code,
-            lambda c=code, ccy=ccy, s=start, e=end: _get_prices(c, ccy, s, e, store=store),
+            lambda c=code, ccy=ccy, s=start, e=end, t=end: _get_prices(
+                c, ccy, s, e, store=store, today=t,
+            ),
         )
         if rows is None:
             continue
@@ -213,7 +226,9 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     for ccy in sorted(needed_ccys):
         rows = backfill_runner.fetch_with_dlq(
             store, "fx_rates", ccy,
-            lambda c=ccy, s=start, e=end: _get_fx_rates(c, s, e),
+            lambda c=ccy, s=start, e=end, t=end: _get_fx_rates(
+                c, s, e, store=store, today=t,
+            ),
         )
         if rows is None:
             continue
