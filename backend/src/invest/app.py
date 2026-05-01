@@ -18,10 +18,13 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import Response
 
 from invest.http.deps import require_admin
+from invest.http.routers.cashflows import router as cashflows_router
 from invest.http.routers.dividends import router as dividends_router
 from invest.http.routers.fx import router as fx_router
 from invest.http.routers.health import router as health_router
 from invest.http.routers.holdings import router as holdings_router
+from invest.http.routers.performance import router as performance_router
+from invest.http.routers.risk import router as risk_router
 from invest.http.routers.summary import router as summary_router
 from invest.http.routers.tax import router as tax_router
 from invest.http.routers.tickers import router as tickers_router
@@ -39,6 +42,9 @@ def create_app() -> FastAPI:
     app.include_router(fx_router)
     app.include_router(tax_router)
     app.include_router(tickers_router)
+    app.include_router(performance_router)
+    app.include_router(risk_router)
+    app.include_router(cashflows_router)
 
     # Cycle 39 admin probe — wired to exercise require_admin in tests.
     # Replaced by the real admin router in Cycle 42.
