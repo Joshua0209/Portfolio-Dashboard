@@ -46,6 +46,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from invest.domain.trade import Side
@@ -58,7 +59,14 @@ from invest.persistence.models.trade import Trade
 
 @pytest.fixture
 def engine():
-    eng = create_engine("sqlite:///:memory:")
+    # StaticPool + check_same_thread=False so the in-memory DB is shared
+    # across the TestClient's worker thread and the test thread. Without
+    # this, each FastAPI request lands on a fresh empty in-memory DB.
+    eng = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     SQLModel.metadata.create_all(eng)
     return eng
 
