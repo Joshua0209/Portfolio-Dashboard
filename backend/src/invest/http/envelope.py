@@ -19,3 +19,13 @@ from typing import Any
 def success(data: Any) -> dict[str, Any]:
     """Wrap a payload in the canonical success envelope."""
     return {"ok": True, "data": data}
+
+
+def error(message: str) -> dict[str, Any]:
+    """Wrap an error message in the canonical failure envelope.
+
+    Diverges from the legacy Flask convention (which returned
+    ok=True even on 404 with meta.error). Phase 8 regenerates the
+    frontend client from OpenAPI so this is a safe, cleaner break.
+    """
+    return {"ok": False, "error": message}
