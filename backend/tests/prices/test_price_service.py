@@ -25,8 +25,12 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from invest.persistence.models.failed_task import FailedTask
 from invest.persistence.models.price import Price
+from invest.persistence.models.symbol_market import SymbolMarket
 from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.price_repo import PriceRepo
+from invest.persistence.repositories.symbol_market_repo import (
+    SymbolMarketRepo,
+)
 from invest.prices import price_service
 
 
@@ -65,6 +69,11 @@ def price_repo(session):
 @pytest.fixture
 def dlq(session):
     return FailedTaskRepo(session)
+
+
+@pytest.fixture
+def market_repo(session):
+    return SymbolMarketRepo(session)
 
 
 def _seed_price(price_repo: PriceRepo, *, symbol: str, on: date, close: str = "100"):
@@ -227,6 +236,93 @@ class TestHappyPath:
         assert prices[0].source == "yfinance"
         assert prices[0].date == date(2026, 4, 30)
         assert dlq.find_open() == []
+
+    def test_tw_known_tpex_routes_via_probe_and_persists_bare_symbol(
+        self, price_repo, dlq, market_repo
+    ):
+        """A TWD-currency call routes through the .TW/.TWO probe.
+        With cached 'tpex' verdict, the wrapper fetches '5483.TWO'
+        but the Price row is keyed on the BARE '5483' — that's the
+        canonical identity throughout the system."""
+        market_repo.upsert(SymbolMarket(symbol="5483", market="tpex"))
+
+        class TwClient:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def fetch_prices(self, symbol, start, end):
+                self.calls.append(symbol)
+                if symbol == "5483.TWO":
+                    return [{
+                        "date": "2026-04-30",
+                        "close": 250.0,
+                        "volume": 100,
+                    }]
+                return []
+
+        client = TwClient()
+        result = price_service.fetch_and_store(
+            "5483",
+            "TWD",
+            date(2026, 4, 30),
+            price_repo=price_repo,
+            dlq=dlq,
+            client=client,
+            market_repo=market_repo,
+        )
+        assert result == Decimal("250.0")
+        assert client.calls == ["5483.TWO"]
+        prices = price_repo.find_prices("5483")
+        assert len(prices) == 1
+        assert prices[0].symbol == "5483"
+        assert prices[0].currency == "TWD"
+
+    def test_tw_unknown_symbol_outcome_c_writes_dlq_once(
+        self, price_repo, dlq, market_repo
+    ):
+        """Cache miss + both .TW/.TWO empty -> verdict 'unknown',
+        and Outcome C writes a single DLQ row. A second call for
+        the same symbol short-circuits via the negative cache:
+        no extra client calls, no DLQ bump."""
+        client = StubClient()  # always empty
+
+        for d in (date(2026, 4, 30), date(2026, 5, 1)):
+            price_service.fetch_and_store(
+                "9999",
+                "TWD",
+                d,
+                price_repo=price_repo,
+                dlq=dlq,
+                client=client,
+                market_repo=market_repo,
+            )
+
+        # First call probed BOTH suffixes; second call short-circuited
+        # via the 'unknown' verdict — exactly two client calls total.
+        symbols_probed = [c["symbol"] for c in client.calls]
+        assert symbols_probed == ["9999.TW", "9999.TWO"]
+
+        # Outcome C: one DLQ row, attempts NOT bumped on the second
+        # call (middle-path rule from Cycle 21).
+        tasks = dlq.find_open()
+        assert len(tasks) == 1
+        assert tasks[0].attempts == 1
+
+    def test_twd_without_market_repo_raises(self, price_repo, dlq):
+        """Defensive contract: TWD currency requires a market_repo
+        for the probe. Better to fail loudly at the call site than
+        to silently fetch '2330' (no suffix), which yfinance would
+        return [] for, masking a wiring bug."""
+        client = StubClient()
+        with pytest.raises(ValueError, match="market_repo"):
+            price_service.fetch_and_store(
+                "2330",
+                "TWD",
+                date(2026, 4, 30),
+                price_repo=price_repo,
+                dlq=dlq,
+                client=client,
+            )
 
     def test_recovery_resolves_open_dlq_row(self, price_repo, dlq):
         """If the symbol previously failed (DLQ row open), a successful
