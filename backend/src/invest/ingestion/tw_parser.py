@@ -43,6 +43,13 @@ _TRADE_MARGIN_SELL_RE = re.compile(
     rf"^({_DATE})\s+(資賣)\s+(.+?)\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_DATE})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s*$"
 )
 
+_HOLDING_RE = re.compile(
+    rf"^(現股|融資|融券)\s+(\S+)\s+(.+?)\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+(-?[\d.]+)%\s+({_NUM})\s+({_NUM})\s+(-?[\d.]+)%\s*$"
+)
+_SUBTOTAL_RE = re.compile(
+    rf"^小計\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+({_NUM})\s+(-?[\d.]+)%"
+)
+
 _SIDE_MAP: dict[str, Side] = {
     "普買": Side.CASH_BUY,
     "櫃買": Side.CASH_BUY,
@@ -51,6 +58,48 @@ _SIDE_MAP: dict[str, Side] = {
     "資買": Side.MARGIN_BUY,
     "資賣": Side.MARGIN_SELL,
 }
+
+
+@dataclass(frozen=True)
+class ParsedTwHolding:
+    """One row from the 證券庫存 (holdings) table.
+
+    Percentages stored as fractions (2.35% → 0.0235); the format
+    layer multiplies by 100 only at presentation time.
+
+    'type' encodes direction (現股 cash long / 融資 margin long /
+    融券 short). The same code appears at most once per type per
+    statement.
+    """
+
+    type: str
+    code: str
+    name: str
+    qty: int
+    avg_cost: Decimal
+    cost: Decimal
+    ref_price: Decimal
+    mkt_value: Decimal
+    unrealized_pnl: Decimal
+    unrealized_pct: Decimal
+    cum_dividend: Decimal
+    unrealized_pnl_with_div: Decimal
+    unrealized_pct_with_div: Decimal
+
+
+@dataclass(frozen=True)
+class ParsedTwSubtotal:
+    """The 小計 row at the bottom of the 證券庫存 table.
+
+    The redundant percentage column from the PDF is dropped — it's
+    derivable from the four raw values, and storing it would let it
+    drift out of sync with them.
+    """
+
+    qty: int
+    cost: Decimal
+    mkt_value: Decimal
+    unrealized_pnl: Decimal
 
 
 @dataclass(frozen=True)
@@ -157,3 +206,42 @@ def parse_tw_trade_line(line: str) -> Optional[ParsedTwTrade]:
         )
 
     return None
+
+
+def parse_tw_holding_row(line: str) -> Optional[ParsedTwHolding]:
+    """Parse one row from the 證券庫存 (holdings) table. None if no match."""
+    if not line or not line.strip():
+        return None
+    m = _HOLDING_RE.match(line.strip())
+    if not m:
+        return None
+    return ParsedTwHolding(
+        type=m.group(1),
+        code=m.group(2),
+        name=m.group(3).strip(),
+        qty=int(_dec(m.group(4))),
+        avg_cost=_dec(m.group(5)),
+        cost=_dec(m.group(6)),
+        ref_price=_dec(m.group(7)),
+        mkt_value=_dec(m.group(8)),
+        unrealized_pnl=_dec(m.group(9)),
+        unrealized_pct=Decimal(m.group(10)) / Decimal("100"),
+        cum_dividend=_dec(m.group(11)),
+        unrealized_pnl_with_div=_dec(m.group(12)),
+        unrealized_pct_with_div=Decimal(m.group(13)) / Decimal("100"),
+    )
+
+
+def parse_tw_subtotal_row(line: str) -> Optional[ParsedTwSubtotal]:
+    """Parse the 小計 row at the bottom of the holdings table."""
+    if not line or not line.strip():
+        return None
+    m = _SUBTOTAL_RE.match(line.strip())
+    if not m:
+        return None
+    return ParsedTwSubtotal(
+        qty=int(_dec(m.group(1))),
+        cost=_dec(m.group(2)),
+        mkt_value=_dec(m.group(3)),
+        unrealized_pnl=_dec(m.group(4)),
+    )
