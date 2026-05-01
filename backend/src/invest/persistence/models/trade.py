@@ -15,7 +15,7 @@ class Trade(SQLModel, table=True):
     code: str = Field(index=True)
     side: int
     qty: int
-    price: Decimal = Field(max_digits=18, decimal_places=6)
+    price: Decimal = Field(max_digits=22, decimal_places=10)
     currency: str = Field(max_length=3)
     fee: Decimal = Field(default=Decimal("0"), max_digits=18, decimal_places=4)
     tax: Decimal = Field(default=Decimal("0"), max_digits=18, decimal_places=4)
