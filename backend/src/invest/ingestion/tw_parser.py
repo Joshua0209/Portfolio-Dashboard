@@ -61,6 +61,19 @@ _SIDE_MAP: dict[str, Side] = {
 
 
 @dataclass(frozen=True)
+class ParsedTwRebate:
+    """One nonzero rebate entry from the top of the statement.
+
+    Sinopac prints two rebate lines (電子折讓金 / 一般折讓金); zero
+    values are excluded by the parser so an empty tuple means
+    'nothing rebated this month'.
+    """
+
+    type: str
+    amount_twd: Decimal
+
+
+@dataclass(frozen=True)
 class ParsedTwHolding:
     """One row from the 證券庫存 (holdings) table.
 
@@ -244,4 +257,91 @@ def parse_tw_subtotal_row(line: str) -> Optional[ParsedTwSubtotal]:
         cost=_dec(m.group(2)),
         mkt_value=_dec(m.group(3)),
         unrealized_pnl=_dec(m.group(4)),
+    )
+
+
+@dataclass(frozen=True)
+class ParsedSecuritiesStatement:
+    """Full TW 證券月對帳單, post-parse.
+
+    Section tuples are immutable; the aggregate is frozen. Consumers
+    that need to filter/transform should build new collections rather
+    than mutate.
+    """
+
+    month: str
+    holdings: tuple[ParsedTwHolding, ...]
+    subtotal: Optional[ParsedTwSubtotal]
+    trades: tuple[ParsedTwTrade, ...]
+    rebates: tuple[ParsedTwRebate, ...]
+    net_cashflow_twd: Decimal
+
+
+_PERIOD_RE = re.compile(r"成交年月：(\d{6})")
+_REBATE_RE = re.compile(rf"^(電子折讓金|一般折讓金)：\s*({_NUM})")
+_NET_CASHFLOW_RE = re.compile(rf"客戶淨收付：\s*幣別：臺幣\s*({_NUM})")
+
+
+def parse_securities_text(text: str) -> ParsedSecuritiesStatement:
+    """Parse a full TW 證券月對帳單 from extracted text.
+
+    Raises ValueError if 成交年月 (period) cannot be extracted — the
+    period is the canonical month key downstream; missing it would
+    let unrelated months merge into a single bucket.
+    """
+    period_m = _PERIOD_RE.search(text)
+    if not period_m:
+        raise ValueError("Missing 成交年月 (period) in TW securities statement")
+    period = period_m.group(1)
+    month = f"{period[:4]}-{period[4:]}"
+
+    rebates: list[ParsedTwRebate] = []
+    for line in text.splitlines():
+        rm = _REBATE_RE.match(line.strip())
+        if rm:
+            amt = _dec(rm.group(2))
+            if amt != 0:
+                rebates.append(ParsedTwRebate(type=rm.group(1), amount_twd=amt))
+
+    holdings: list[ParsedTwHolding] = []
+    trades: list[ParsedTwTrade] = []
+    subtotal: Optional[ParsedTwSubtotal] = None
+
+    in_holdings = False
+    in_trades = False
+
+    for raw in text.splitlines():
+        line = raw.strip()
+
+        if "證券庫存" in line and "證券交易明細" not in line:
+            in_holdings, in_trades = True, False
+            continue
+        if "證券交易明細" in line:
+            in_holdings, in_trades = False, True
+            continue
+        if "客戶淨收付" in line or "電子折讓金額明細" in line:
+            in_holdings = in_trades = False
+
+        if in_holdings:
+            if h := parse_tw_holding_row(line):
+                holdings.append(h)
+                continue
+            if s := parse_tw_subtotal_row(line):
+                subtotal = s
+                continue
+
+        if in_trades:
+            if t := parse_tw_trade_line(line):
+                trades.append(t)
+
+    cf_m = _NET_CASHFLOW_RE.search(text)
+    net_cashflow = _dec(cf_m.group(1)) if cf_m else Decimal("0")
+
+    return ParsedSecuritiesStatement(
+        month=month,
+        holdings=tuple(holdings),
+        subtotal=subtotal,
+        trades=tuple(trades),
+        rebates=tuple(rebates),
+        net_cashflow_twd=net_cashflow,
     )
