@@ -221,6 +221,7 @@ def parse_tw_trade_line(line: str) -> Optional[ParsedTwTrade]:
     return None
 
 
+
 def parse_tw_holding_row(line: str) -> Optional[ParsedTwHolding]:
     """Parse one row from the 證券庫存 (holdings) table. None if no match."""
     if not line or not line.strip():
