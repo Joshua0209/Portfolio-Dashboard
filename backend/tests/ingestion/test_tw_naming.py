@@ -213,9 +213,13 @@ class TestResolveTwCode:
         assert resolve_tw_code("台積", {"台積電": "2330"}) == ""
 
     def test_prefix_match_within_ratio_cap(self):
-        """INVARIANT: prefix match accepted when len(holding)/len(trade)
-        < 2.5. '貿聯KY' (5) → '貿聯-KY' (7), ratio 1.4 — OK."""
-        assert resolve_tw_code("貿聯KY", {"貿聯-KY": "3665"}) == "3665"
+        """INVARIANT: prefix match accepted when holding starts with
+        trade AND len(holding)/len(trade) < 2.5. Real-world shape:
+        a 4-char trade name '台積電X' is the prefix of a 7-char
+        holding '台積電X股票' → ratio 1.75× → accept."""
+        # Synthetic ASCII for unambiguity: trade='AAAA' (4 chars) is
+        # a prefix of holding='AAAABCD' (7 chars), ratio 1.75×.
+        assert resolve_tw_code("AAAA", {"AAAABCD": "1234"}) == "1234"
 
     def test_prefix_match_rejected_when_ratio_too_loose(self):
         """INVARIANT: ratio cap 2.5× prevents '致茂' (4) from inheriting
