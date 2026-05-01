@@ -196,30 +196,32 @@ class TestHealth:
 
 
 class TestRequireAdmin:
-    """Tests use a probe endpoint (/admin-probe) wired in app factory
-    so we don't have to mount a router-under-test for every dep.
+    """Originally tested via a /api/admin/_probe fixture endpoint in
+    Cycle 39's app factory. Cycle 42 mounted the real admin router
+    (refresh, retry-failed, reconcile, reconcile/dismiss), so the
+    probe is gone and these tests exercise require_admin via the real
+    POST /api/admin/refresh endpoint instead.
 
     Legacy contract preserved verbatim: token unset = no gate;
-    token set = enforce on this endpoint."""
+    token set = enforce."""
 
     def test_allows_when_admin_token_unset(self, client, monkeypatch):
         monkeypatch.delenv("ADMIN_TOKEN", raising=False)
-        r = client.post("/api/admin/_probe")
-        # Probe endpoint in scaffolding returns 204; gate is off.
-        assert r.status_code == 204
+        r = client.post("/api/admin/refresh")
+        assert r.status_code == 200
 
     def test_returns_401_when_token_set_and_header_missing(
         self, client, monkeypatch,
     ):
         monkeypatch.setenv("ADMIN_TOKEN", "secret-xyz")
-        r = client.post("/api/admin/_probe")
+        r = client.post("/api/admin/refresh")
         assert r.status_code == 401
 
     def test_returns_401_when_token_set_and_header_wrong(
         self, client, monkeypatch,
     ):
         monkeypatch.setenv("ADMIN_TOKEN", "secret-xyz")
-        r = client.post("/api/admin/_probe", headers={"X-Admin-Token": "wrong"})
+        r = client.post("/api/admin/refresh", headers={"X-Admin-Token": "wrong"})
         assert r.status_code == 401
 
     def test_allows_when_token_set_and_header_matches(
@@ -227,6 +229,6 @@ class TestRequireAdmin:
     ):
         monkeypatch.setenv("ADMIN_TOKEN", "secret-xyz")
         r = client.post(
-            "/api/admin/_probe", headers={"X-Admin-Token": "secret-xyz"},
+            "/api/admin/refresh", headers={"X-Admin-Token": "secret-xyz"},
         )
-        assert r.status_code == 204
+        assert r.status_code == 200
