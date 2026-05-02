@@ -17,30 +17,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date as _date_t
-from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
-from invest.ingestion.foreign_parser import (
-    ParsedForeignStatement,
-    ParsedForeignTrade,
+from invest.ingestion._common import (
+    _flat_holdings,
+    _foreign_to_trade,
+    _tw_to_trade,
 )
+from invest.ingestion.foreign_parser import ParsedForeignStatement
 from invest.ingestion.tw_naming import (
     build_name_to_code,
     load_overrides,
     resolve_tw_code,
 )
-from invest.ingestion.tw_parser import (
-    ParsedSecuritiesStatement,
-    ParsedTwTrade,
-)
+from invest.ingestion.tw_parser import ParsedSecuritiesStatement
 from invest.persistence.models.reconcile_event import ReconcileEvent
 from invest.persistence.models.trade import Trade
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 from invest.persistence.repositories.trade_repo import TradeRepo
-
-
-_FOREIGN_CCY_TO_VENUE = {"USD": "US", "HKD": "HK", "JPY": "JP"}
 
 # Match key for diffing parsed-trade vs existing Trade row. Price
 # intentionally excluded — Shioaji and PDF can disagree by a few
@@ -65,37 +59,10 @@ def _key(t: Trade) -> _MatchKey:
     return (t.date, t.code, t.side, t.qty)
 
 
-def _tw_to_trade(t: ParsedTwTrade, code: str) -> Trade:
-    return Trade(
-        date=t.date, code=code, side=int(t.side), qty=t.qty,
-        price=t.price, currency="TWD",
-        fee=t.fee, tax=t.tax, rebate=Decimal("0"),
-        source="pdf", venue="TW",
-    )
-
-
-def _foreign_to_trade(t: ParsedForeignTrade) -> Trade:
-    venue = _FOREIGN_CCY_TO_VENUE.get(t.ccy, t.ccy)
-    return Trade(
-        date=t.date, code=t.code, side=int(t.side), qty=t.qty,
-        price=t.price, currency=t.ccy,
-        fee=t.fee, tax=Decimal("0"), rebate=Decimal("0"),
-        source="pdf-foreign", venue=venue,
-    )
-
-
-def _flat_holdings(statements: list[ParsedSecuritiesStatement]) -> list[dict]:
-    out: list[dict] = []
-    for s in statements:
-        for h in s.holdings:
-            out.append({"name": h.name, "code": h.code})
-    return out
-
-
 def _build_pdf_trades(
     securities: list[ParsedSecuritiesStatement],
     foreign: list[ParsedForeignStatement],
-    overrides_path: Optional[Path],
+    overrides_path: Path | None,
 ) -> list[Trade]:
     overrides = load_overrides(overrides_path) if overrides_path else {}
     name_to_code = build_name_to_code(_flat_holdings(securities), overrides)
@@ -141,32 +108,48 @@ def verify_trades_against_statements(
     foreign: list[ParsedForeignStatement],
     trade_repo: TradeRepo,
     reconcile_repo: ReconcileRepo,
-    overrides_path: Optional[Path] = None,
+    overrides_path: Path | None = None,
     apply: bool = False,
 ) -> VerifyResult:
     """Diff parsed trades vs Trade table; emit reconcile events."""
     pdf_trades = _build_pdf_trades(securities, foreign, overrides_path)
-    pdf_index: dict[_MatchKey, Trade] = {_key(t): t for t in pdf_trades}
+    # pdf_index is also a list-per-key so two PDF fills with the same
+    # (date, code, side, qty) are both tracked.
+    pdf_index: dict[_MatchKey, list[Trade]] = {}
+    for t in pdf_trades:
+        pdf_index.setdefault(_key(t), []).append(t)
 
     months = _months_in_input(securities, foreign)
-    db_index: dict[_MatchKey, Trade] = {}
+    # db_index maps each match key to a list of DB rows.  Using a list
+    # (instead of the old single-entry dict) means two scaling-in fills
+    # that share (date, code, side, qty) are both visible — the old
+    # dict silently dropped the second entry.
+    db_index: dict[_MatchKey, list[Trade]] = {}
     for month in months:
         for row in trade_repo.find_by_month(month):
-            db_index[_key(row)] = row
+            db_index.setdefault(_key(row), []).append(row)
 
     pdf_only: list[Trade] = []
     shioaji_only: list[Trade] = []
     matched = 0
 
-    for k, ptrade in pdf_index.items():
-        if k in db_index:
-            matched += 1
-        else:
-            pdf_only.append(ptrade)
+    # Work on copies so we can pop entries as we consume them.
+    remaining_db: dict[_MatchKey, list[Trade]] = {
+        k: list(v) for k, v in db_index.items()
+    }
 
-    for k, dbtrade in db_index.items():
-        if k not in pdf_index:
-            shioaji_only.append(dbtrade)
+    for k, ptrades in pdf_index.items():
+        db_pool = remaining_db.get(k, [])
+        for ptrade in ptrades:
+            if db_pool:
+                db_pool.pop(0)
+                matched += 1
+            else:
+                pdf_only.append(ptrade)
+
+    # Anything still left in remaining_db was unmatched (shioaji-only).
+    for leftover_list in remaining_db.values():
+        shioaji_only.extend(leftover_list)
 
     events_inserted = 0
     for t in pdf_only:

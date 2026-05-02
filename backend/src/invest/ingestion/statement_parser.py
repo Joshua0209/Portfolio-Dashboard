@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 from invest.ingestion.bank_parser import (
     ParsedBankStatement,
@@ -45,7 +45,7 @@ _FILENAME_KEYWORDS: tuple[tuple[str, StatementType], ...] = (
 )
 
 
-def detect_statement_type(filename: str) -> Optional[StatementType]:
+def detect_statement_type(filename: str) -> StatementType | None:
     """Filename keyword → statement type. None if unrecognized.
 
     Accepts either bare filename or a path with directories.

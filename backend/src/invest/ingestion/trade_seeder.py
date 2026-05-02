@@ -17,28 +17,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date as _date_t
-from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
-from invest.ingestion.foreign_parser import (
-    ParsedForeignStatement,
-    ParsedForeignTrade,
+from invest.ingestion._common import (
+    _FOREIGN_CCY_TO_VENUE,  # noqa: F401 — re-exported for callers that may import it
+    _flat_holdings,
+    _foreign_to_trade,
+    _tw_to_trade,
 )
+from invest.ingestion.foreign_parser import ParsedForeignStatement
 from invest.ingestion.tw_naming import (
     build_name_to_code,
     load_overrides,
     resolve_tw_code,
 )
-from invest.ingestion.tw_parser import (
-    ParsedSecuritiesStatement,
-    ParsedTwTrade,
-)
+from invest.ingestion.tw_parser import ParsedSecuritiesStatement
 from invest.persistence.models.trade import Trade
 from invest.persistence.repositories.trade_repo import TradeRepo
-
-
-_FOREIGN_CCY_TO_VENUE = {"USD": "US", "HKD": "HK", "JPY": "JP"}
 
 
 @dataclass(frozen=True)
@@ -48,52 +43,9 @@ class SeedResult:
     tw_unresolved_codes: tuple[str, ...]
 
 
-def _flat_holdings(statements: list[ParsedSecuritiesStatement]) -> list[dict]:
-    """Flatten holdings across statements into the [{name, code}, ...]
-    shape build_name_to_code expects."""
-    out: list[dict] = []
-    for s in statements:
-        for h in s.holdings:
-            out.append({"name": h.name, "code": h.code})
-    return out
-
-
 def _date_range(rows: list[Trade]) -> tuple[_date_t, _date_t]:
     dates = [r.date for r in rows]
     return min(dates), max(dates)
-
-
-def _tw_to_trade_row(t: ParsedTwTrade, code: str) -> Trade:
-    return Trade(
-        date=t.date,
-        code=code,
-        side=int(t.side),
-        qty=t.qty,
-        price=t.price,
-        currency="TWD",
-        fee=t.fee,
-        tax=t.tax,
-        rebate=Decimal("0"),
-        source="pdf",
-        venue="TW",
-    )
-
-
-def _foreign_to_trade_row(t: ParsedForeignTrade) -> Trade:
-    venue = _FOREIGN_CCY_TO_VENUE.get(t.ccy, t.ccy)
-    return Trade(
-        date=t.date,
-        code=t.code,
-        side=int(t.side),
-        qty=t.qty,
-        price=t.price,
-        currency=t.ccy,
-        fee=t.fee,
-        tax=Decimal("0"),
-        rebate=Decimal("0"),
-        source="pdf-foreign",
-        venue=venue,
-    )
 
 
 def seed_trades_from_statements(
@@ -101,7 +53,7 @@ def seed_trades_from_statements(
     securities: list[ParsedSecuritiesStatement],
     foreign: list[ParsedForeignStatement],
     trade_repo: TradeRepo,
-    overrides_path: Optional[Path] = None,
+    overrides_path: Path | None = None,
 ) -> SeedResult:
     """Seed Trade rows from parsed statements. Idempotent."""
     overrides = load_overrides(overrides_path) if overrides_path else {}
@@ -115,7 +67,7 @@ def seed_trades_from_statements(
             if not code:
                 unresolved.append(t.name)
                 continue
-            tw_rows.append(_tw_to_trade_row(t, code))
+            tw_rows.append(_tw_to_trade(t, code))
 
     if tw_rows:
         start, end = _date_range(tw_rows)
@@ -126,7 +78,7 @@ def seed_trades_from_statements(
     foreign_rows: list[Trade] = []
     for s in foreign:
         for t in s.trades:
-            foreign_rows.append(_foreign_to_trade_row(t))
+            foreign_rows.append(_foreign_to_trade(t))
 
     if foreign_rows:
         start, end = _date_range(foreign_rows)

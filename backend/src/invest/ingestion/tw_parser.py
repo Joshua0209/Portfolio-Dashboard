@@ -23,8 +23,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Optional
-
 from invest.domain.trade import Side
 
 _NUM = r"-?[\d,]+(?:\.\d+)?"
@@ -137,7 +135,7 @@ class ParsedTwTrade:
     margin_loan: Decimal = field(default_factory=lambda: Decimal("0"))
     self_funded: Decimal = field(default_factory=lambda: Decimal("0"))
     collateral: Decimal = field(default_factory=lambda: Decimal("0"))
-    interest_start: Optional[date] = None
+    interest_start: date | None = None
 
 
 def _dec(s: str) -> Decimal:
@@ -149,7 +147,7 @@ def _date(s: str) -> date:
     return date(int(y), int(m), int(d))
 
 
-def parse_tw_trade_line(line: str) -> Optional[ParsedTwTrade]:
+def parse_tw_trade_line(line: str) -> ParsedTwTrade | None:
     """Parse a single trade-table row. Returns None for non-trade lines."""
     if not line or not line.strip():
         return None
@@ -221,7 +219,7 @@ def parse_tw_trade_line(line: str) -> Optional[ParsedTwTrade]:
     return None
 
 
-def parse_tw_holding_row(line: str) -> Optional[ParsedTwHolding]:
+def parse_tw_holding_row(line: str) -> ParsedTwHolding | None:
     """Parse one row from the 證券庫存 (holdings) table. None if no match."""
     if not line or not line.strip():
         return None
@@ -245,7 +243,7 @@ def parse_tw_holding_row(line: str) -> Optional[ParsedTwHolding]:
     )
 
 
-def parse_tw_subtotal_row(line: str) -> Optional[ParsedTwSubtotal]:
+def parse_tw_subtotal_row(line: str) -> ParsedTwSubtotal | None:
     """Parse the 小計 row at the bottom of the holdings table."""
     if not line or not line.strip():
         return None
@@ -271,7 +269,7 @@ class ParsedSecuritiesStatement:
 
     month: str
     holdings: tuple[ParsedTwHolding, ...]
-    subtotal: Optional[ParsedTwSubtotal]
+    subtotal: ParsedTwSubtotal | None
     trades: tuple[ParsedTwTrade, ...]
     rebates: tuple[ParsedTwRebate, ...]
     net_cashflow_twd: Decimal
@@ -305,7 +303,7 @@ def parse_securities_text(text: str) -> ParsedSecuritiesStatement:
 
     holdings: list[ParsedTwHolding] = []
     trades: list[ParsedTwTrade] = []
-    subtotal: Optional[ParsedTwSubtotal] = None
+    subtotal: ParsedTwSubtotal | None = None
 
     in_holdings = False
     in_trades = False

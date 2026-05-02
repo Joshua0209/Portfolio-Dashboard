@@ -17,8 +17,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date as _date_t
 from decimal import Decimal
-from typing import Optional
-
 from invest.domain.trade import Side
 
 _NUM = r"-?[\d,]+(?:\.\d+)?"
