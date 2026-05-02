@@ -33,11 +33,6 @@ class FxClient(Protocol):
 def _open_task_for(
     dlq: FailedTaskRepo, ccy: str
 ) -> Optional[FailedTask]:
-    """Find the (single) open DLQ row for `ccy`, if any.
-
-    Filters in Python: at ~10 currencies the cost is negligible.
-    Switch to a payload-column index if the DLQ grows substantially.
-    """
     for t in dlq.find_by_type(_TASK_TYPE):
         if t.resolved_at is None and t.payload.get("ccy") == ccy:
             return t

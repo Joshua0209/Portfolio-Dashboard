@@ -1,7 +1,13 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 from sqlmodel import Session, select
-from invest.persistence._utils import utcnow
-from invest.persistence.models.reconcile_event import ReconcileEvent, ReconcileStatus
+from invest.persistence.models.reconcile_event import ReconcileEvent
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class ReconcileRepo:
     def __init__(self, session: Session):
         self.session = session
@@ -15,7 +21,7 @@ class ReconcileRepo:
     def find_open(self) -> List[ReconcileEvent]:
         stmt = (
             select(ReconcileEvent)
-            .where(ReconcileEvent.status == ReconcileStatus.OPEN)
+            .where(ReconcileEvent.status == "open")
             .order_by(ReconcileEvent.detected_at)
         )
         return list(self.session.exec(stmt).all())
@@ -23,7 +29,7 @@ class ReconcileRepo:
         stmt = (
             select(ReconcileEvent)
             .where(
-                ReconcileEvent.status == ReconcileStatus.OPEN,
+                ReconcileEvent.status == "open",
                 ReconcileEvent.pdf_month == pdf_month,
             )
             .order_by(ReconcileEvent.detected_at)
@@ -33,7 +39,7 @@ class ReconcileRepo:
         event = self.session.get(ReconcileEvent, event_id)
         if event is None:
             return
-        event.status = ReconcileStatus.DISMISSED
-        event.dismissed_at = utcnow()
+        event.status = "dismissed"
+        event.dismissed_at = _utcnow()
         self.session.add(event)
         self.session.commit()

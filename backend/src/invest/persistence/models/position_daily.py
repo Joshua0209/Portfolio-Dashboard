@@ -1,9 +1,14 @@
-from datetime import date as _date, datetime
+from datetime import date as _date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
-from sqlalchemy import UniqueConstraint
+
 from sqlmodel import Field, SQLModel
-from invest.persistence._utils import utcnow
+from sqlalchemy import UniqueConstraint
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 class PositionDaily(SQLModel, table=True):
     __tablename__ = "positions_daily"
@@ -12,6 +17,7 @@ class PositionDaily(SQLModel, table=True):
             "date", "code", "source", name="uq_pos_daily_date_code_source"
         ),
     )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     date: _date = Field(index=True)
     code: str = Field(index=True)
@@ -20,4 +26,4 @@ class PositionDaily(SQLModel, table=True):
     currency: str = Field(max_length=3)
     market_value: Decimal = Field(max_digits=20, decimal_places=4)
     source: str = Field(index=True)
-    ingested_at: datetime = Field(default_factory=utcnow)
+    ingested_at: datetime = Field(default_factory=_utcnow)

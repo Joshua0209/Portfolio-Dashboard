@@ -11,7 +11,6 @@ class TradeRepo:
         self.session.refresh(trade)
         return trade
     def find_by_month(self, month: str) -> List[Trade]:
-        """Return all trades in the given month. month must be 'YYYY-MM'."""
         year_s, mon_s = month.split("-")
         y, m = int(year_s), int(mon_s)
         start = _date(y, m, 1)

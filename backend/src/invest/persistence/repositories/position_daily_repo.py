@@ -37,11 +37,7 @@ class PositionDailyRepo:
         end: _date,
         rows: Iterable[PositionDaily],
     ) -> None:
-        """Idempotent truncate-and-replace by (source, [start, end] inclusive).
-        flush() between deletes and inserts is required: SQLite enforces
-        UniqueConstraint(date, code, source) at INSERT time, not at commit,
-        so pending deletes must reach the DB before the new rows land.
-        """
+        """Idempotent truncate-and-replace by (source, [start, end] inclusive)."""
         existing = self.session.exec(
             select(PositionDaily).where(
                 PositionDaily.source == source,
