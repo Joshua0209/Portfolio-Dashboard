@@ -18,10 +18,6 @@ from typing import Any
 from sqlmodel import Session
 
 from invest.ingestion import trade_verifier
-from invest.ingestion.statement_parser import (
-    ParsedForeignStatement,
-    ParsedSecuritiesStatement,
-)
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 from invest.persistence.repositories.trade_repo import TradeRepo
 
@@ -32,8 +28,8 @@ def run(
     session: Session,
     *,
     month: str,
-    securities: list[ParsedSecuritiesStatement],
-    foreign: list[ParsedForeignStatement],
+    securities: list,
+    foreign: list,
     apply: bool = False,
 ) -> dict[str, Any]:
     """Verify parsed PDF statements against Trade rows for `month`.

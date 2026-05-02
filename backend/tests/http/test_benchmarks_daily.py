@@ -48,9 +48,10 @@ def engine():
 
 
 @pytest.fixture
-def client(engine):
+def client(engine, fake_portfolio, fake_daily):
     from invest.app import create_app
     from invest.http.deps import get_session
+    from .conftest import install_store_overrides
 
     app = create_app()
 
@@ -59,6 +60,7 @@ def client(engine):
             yield s
 
     app.dependency_overrides[get_session] = _override
+    install_store_overrides(app, portfolio=fake_portfolio, daily=fake_daily)
     return TestClient(app)
 
 
@@ -79,11 +81,14 @@ def _portfolio_row(d: date) -> PortfolioDaily:
 
 
 class TestBenchmarks:
-    def test_strategies_empty_list(self, client):
+    def test_strategies_full_catalogue(self, client):
         d = _data(client.get("/api/benchmarks/strategies"))
-        # Phase 6 baseline: empty catalogue. Phase 7 ports STRATEGIES
-        # alongside the yfinance fetcher.
-        assert d == []
+        # Phase 6.5: full STRATEGIES catalogue ported. List, not empty.
+        assert isinstance(d, list)
+        assert len(d) > 0
+        # Each entry has the required keys.
+        for s in d:
+            assert {"key", "name", "market", "weights", "description"} <= set(s.keys())
 
     def test_compare_empty_envelope(self, client):
         d = _data(client.get("/api/benchmarks/compare"))

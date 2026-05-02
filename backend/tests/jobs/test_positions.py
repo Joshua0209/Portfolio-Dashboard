@@ -35,7 +35,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, SQLModel, create_engine
 
 from invest.jobs import _positions
 from invest.persistence.models.fx_rate import FxRate
@@ -264,7 +264,7 @@ class TestBuildDailySingleTW:
         assert result["positions_rows"] == 1
         assert result["portfolio_rows"] == 1
 
-        rows = session.exec(select(PositionDaily)).all()
+        rows = session.query(PositionDaily).all()
         assert len(rows) == 1
         assert rows[0].code == "2330"
         assert rows[0].qty == 100
@@ -272,7 +272,7 @@ class TestBuildDailySingleTW:
         assert rows[0].market_value == Decimal("51000")
         assert rows[0].currency == "TWD"
 
-        port = session.exec(select(PortfolioDaily)).all()
+        port = session.query(PortfolioDaily).all()
         assert len(port) == 1
         assert port[0].equity == Decimal("51000")
         assert port[0].currency == "TWD"
@@ -293,7 +293,9 @@ class TestBuildDailySingleTW:
 
         _positions.build_daily(session, start=d_buy, end=d_sell)
 
-        positions = session.exec(select(PositionDaily).order_by(PositionDaily.date)).all()
+        positions = session.query(PositionDaily).order_by(
+            PositionDaily.date
+        ).all()
         # Only buy day has a position; sell day fully exits.
         assert len(positions) == 1
         assert positions[0].date == d_buy
@@ -318,12 +320,12 @@ class TestBuildDailyForeign:
 
         _positions.build_daily(session, start=d, end=d)
 
-        positions = session.exec(select(PositionDaily)).all()
+        positions = session.query(PositionDaily).all()
         assert len(positions) == 1
         assert positions[0].currency == "USD"
         assert positions[0].market_value == Decimal("1900")  # 10 * 190 USD
 
-        port = session.exec(select(PortfolioDaily)).all()
+        port = session.query(PortfolioDaily).all()
         assert len(port) == 1
         # 10 * 190 USD * 31.5 TWD/USD = 59850 TWD
         assert port[0].equity == Decimal("59850.00")
@@ -347,10 +349,10 @@ class TestBuildDailyForeign:
 
         _positions.build_daily(session, start=d, end=d)
 
-        positions = session.exec(select(PositionDaily)).all()
+        positions = session.query(PositionDaily).all()
         assert len(positions) == 1  # local-currency row preserved
 
-        port = session.exec(select(PortfolioDaily)).all()
+        port = session.query(PortfolioDaily).all()
         # No portfolio row when the only position can't be FX-converted.
         assert len(port) == 0
 
@@ -378,7 +380,7 @@ class TestBuildDailyMixed:
 
         _positions.build_daily(session, start=d, end=d)
 
-        port = session.exec(select(PortfolioDaily)).all()
+        port = session.query(PortfolioDaily).all()
         assert len(port) == 1
         assert port[0].equity == Decimal("104000.00")  # 50000 + 54000
 
@@ -411,7 +413,7 @@ class TestBuildDailyForwardFill:
 
         _positions.build_daily(session, start=d1, end=d3)
 
-        rows_2330 = session.exec(select(PositionDaily).where(PositionDaily.code == "2330")).all()
+        rows_2330 = session.query(PositionDaily).filter_by(code="2330").all()
         # 2330 has a row on every priced day, with d2 close forward-filled.
         assert len(rows_2330) == 3
         rows_2330_sorted = sorted(rows_2330, key=lambda r: r.date)
@@ -434,7 +436,7 @@ class TestBuildDailyForwardFill:
         _positions.build_daily(session, start=d_fri, end=d_mon)
 
         port = (
-            session.exec(select(PortfolioDaily).order_by(PortfolioDaily.date)).all()
+            session.query(PortfolioDaily).order_by(PortfolioDaily.date).all()
         )
         assert len(port) == 2  # both days have a portfolio row
         # Monday's equity uses Friday's FX (forward-filled).

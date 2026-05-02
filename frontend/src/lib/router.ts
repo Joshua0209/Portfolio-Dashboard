@@ -82,11 +82,6 @@ export const createRouter = (opts: CreateRouterOptions): Router => {
     return null;
   };
 
-  // AbortController per route: deferred. Page-level fetch calls go through
-  // deps.api.get() which does not currently accept an AbortSignal parameter.
-  // Wiring cancellation requires threading the signal through MountDeps and
-  // every page's fetch chain (~30+ lines across 12 pages) — a structural
-  // change tracked for a dedicated cleanup pass.
   const render = async (): Promise<void> => {
     const { pathname, search } = window.location;
     const found = match(pathname);

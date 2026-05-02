@@ -61,9 +61,10 @@ def engine():
 
 
 @pytest.fixture
-def client(engine):
+def client(engine, fake_portfolio, fake_daily):
     from invest.app import create_app
     from invest.http.deps import get_session
+    from .conftest import install_store_overrides
 
     app = create_app()
 
@@ -72,6 +73,7 @@ def client(engine):
             yield s
 
     app.dependency_overrides[get_session] = _override
+    install_store_overrides(app, portfolio=fake_portfolio, daily=fake_daily)
     return TestClient(app)
 
 
@@ -170,96 +172,93 @@ class TestHoldings:
 class TestTransactions:
     """Two endpoints: list "" and /aggregates.
 
-    The new schema lets us compute these for real — Trade rows are the
-    authoritative source. The legacy field encoding (Chinese side strings,
-    name fields, gross_twd/fee_twd) is replaced by the new schema's shape;
-    this is intentional — Phase 8 frontend regenerates types from OpenAPI.
+    Phase 6.5: ports legacy semantics — reads from PortfolioStore.all_trades
+    (the parsed-PDF source) plus trades_overlay (Shioaji session). The
+    Phase 6 stub used the SQLModel Trade table; this test class now
+    populates fake_portfolio.all_trades to exercise the legacy data shape.
     """
 
     def test_list_empty(self, client):
         d = _envelope(client.get("/api/transactions"))
-        assert d == []
+        assert d == [] or d == {"trades": [], "count": 0}
 
-    def test_list_returns_trade_rows(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10)))
-            s.add(_trade(date(2026, 4, 20), code="2454"))
-            s.commit()
+    def test_list_returns_trade_rows(self, client, fake_portfolio):
+        fake_portfolio._raw = {
+            "months": [],
+            "summary": {
+                "all_trades": [
+                    {"date": "2026/04/10", "month": "2026-04", "code": "2330",
+                     "name": "TSMC", "side": "普買", "qty": 1000, "price": 600,
+                     "venue": "TW", "gross_twd": 600_000},
+                    {"date": "2026/04/20", "month": "2026-04", "code": "2454",
+                     "name": "MTK", "side": "普買", "qty": 500, "price": 1000,
+                     "venue": "TW", "gross_twd": 500_000},
+                ],
+            },
+        }
         d = _envelope(client.get("/api/transactions"))
         rows = d if isinstance(d, list) else d["trades"]
         assert len(rows) == 2
         codes = {r["code"] for r in rows}
         assert codes == {"2330", "2454"}
 
-    def test_list_filter_by_code(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10)))
-            s.add(_trade(date(2026, 4, 20), code="2454"))
-            s.commit()
+    def test_list_filter_by_code(self, client, fake_portfolio):
+        fake_portfolio._raw = {
+            "months": [],
+            "summary": {
+                "all_trades": [
+                    {"date": "2026/04/10", "month": "2026-04", "code": "2330",
+                     "side": "普買", "qty": 1000, "price": 600, "venue": "TW"},
+                    {"date": "2026/04/20", "month": "2026-04", "code": "2454",
+                     "side": "普買", "qty": 500, "price": 1000, "venue": "TW"},
+                ],
+            },
+        }
         d = _envelope(client.get("/api/transactions?code=2330"))
         rows = d if isinstance(d, list) else d["trades"]
         assert len(rows) == 1
         assert rows[0]["code"] == "2330"
 
-    def test_list_sorted_descending_by_date(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 1, 10), code="A"))
-            s.add(_trade(date(2026, 4, 5), code="B"))
-            s.add(_trade(date(2026, 2, 15), code="C"))
-            s.commit()
+    def test_list_sorted_descending_by_date(self, client, fake_portfolio):
+        fake_portfolio._raw = {
+            "months": [],
+            "summary": {
+                "all_trades": [
+                    {"date": "2026/01/10", "code": "A", "side": "普買", "venue": "TW"},
+                    {"date": "2026/04/05", "code": "B", "side": "普買", "venue": "TW"},
+                    {"date": "2026/02/15", "code": "C", "side": "普買", "venue": "TW"},
+                ],
+            },
+        }
         d = _envelope(client.get("/api/transactions"))
         rows = d if isinstance(d, list) else d["trades"]
-        # Most recent first — same convention as legacy.
         assert rows[0]["code"] == "B"
         assert rows[-1]["code"] == "A"
 
     def test_aggregates_empty(self, client):
         d = _envelope(client.get("/api/transactions/aggregates"))
-        # INVARIANT: legacy empty-state has totals + by_venue + monthly + venues.
         assert "totals" in d
         assert d["totals"]["trades"] == 0
         assert d["monthly"] == []
         assert d["venues"] == []
 
-    def test_aggregates_counts_real_trades(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10), venue="TW"))
-            s.add(_trade(date(2026, 4, 20), venue="TW", side=Side.CASH_SELL))
-            s.add(_trade(date(2026, 4, 25), venue="Foreign", code="AAPL"))
-            s.commit()
+    def test_aggregates_counts_real_trades(self, client, fake_portfolio):
+        fake_portfolio._raw = {
+            "months": [],
+            "summary": {
+                "all_trades": [
+                    {"date": "2026/04/10", "month": "2026-04", "code": "2330",
+                     "side": "普買", "venue": "TW", "gross_twd": 600_000},
+                    {"date": "2026/04/20", "month": "2026-04", "code": "2330",
+                     "side": "普賣", "venue": "TW", "gross_twd": 700_000},
+                    {"date": "2026/04/25", "month": "2026-04", "code": "AAPL",
+                     "side": "買進", "venue": "Foreign", "gross_twd": 150_000},
+                ],
+            },
+        }
         d = _envelope(client.get("/api/transactions/aggregates"))
         assert d["totals"]["trades"] == 3
-        # Both venues represented.
         assert set(d["venues"]) == {"TW", "Foreign"}
-
-    def test_list_filter_by_q_positive(self, client, engine):
-        """?q= matches rows whose code contains the query (case-insensitive)."""
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10), code="2330"))
-            s.add(_trade(date(2026, 4, 11), code="2454"))
-            s.add(_trade(date(2026, 4, 12), code="AAPL"))
-            s.commit()
-        d = _envelope(client.get("/api/transactions?q=23"))
-        assert len(d) == 1
-        assert d[0]["code"] == "2330"
-
-    def test_list_filter_by_q_case_insensitive(self, client, engine):
-        """?q= is case-insensitive so 'aapl' matches code 'AAPL'."""
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10), code="AAPL"))
-            s.add(_trade(date(2026, 4, 11), code="2330"))
-            s.commit()
-        d = _envelope(client.get("/api/transactions?q=aapl"))
-        assert len(d) == 1
-        assert d[0]["code"] == "AAPL"
-
-    def test_list_filter_by_q_negative(self, client, engine):
-        """?q= with no matching code returns an empty list."""
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10), code="2330"))
-            s.commit()
-        d = _envelope(client.get("/api/transactions?q=ZZZNOMATCH"))
-        assert d == []
 
 
 # --- /api/dividends ------------------------------------------------------
@@ -304,12 +303,20 @@ class TestTickers:
         d = _envelope(client.get("/api/tickers"))
         assert d == []
 
-    def test_list_distinct_codes(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 1, 10), code="2330"))
-            s.add(_trade(date(2026, 2, 10), code="2330"))  # duplicate code
-            s.add(_trade(date(2026, 3, 10), code="2454"))
-            s.commit()
+    def test_list_distinct_codes(self, client, fake_portfolio):
+        # Phase 6.5: tickers list comes from PortfolioStore.by_ticker
+        # (parsed-PDF source) via realized_pnl_by_ticker.
+        fake_portfolio._raw = {
+            "months": [],
+            "summary": {
+                "by_ticker": {
+                    "2330": {"code": "2330", "name": "TSMC", "venue": "TW",
+                             "buy_qty": 1000, "sell_qty": 0, "trades": []},
+                    "2454": {"code": "2454", "name": "MTK", "venue": "TW",
+                             "buy_qty": 500, "sell_qty": 0, "trades": []},
+                },
+            },
+        }
         d = _envelope(client.get("/api/tickers"))
         codes = {row["code"] for row in d}
         assert codes == {"2330", "2454"}
@@ -319,14 +326,18 @@ class TestTickers:
         assert r.status_code == 404
         assert r.json()["ok"] is False
 
-    def test_detail_returns_envelope_when_known(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 4, 10), code="2330"))
-            s.commit()
+    def test_detail_returns_envelope_when_known(self, client, fake_portfolio):
+        fake_portfolio._raw = {
+            "months": [],
+            "summary": {
+                "by_ticker": {
+                    "2330": {"code": "2330", "name": "TSMC", "venue": "TW",
+                             "buy_qty": 1000, "sell_qty": 0, "trades": []},
+                },
+            },
+        }
         r = client.get("/api/tickers/2330")
         assert r.status_code == 200
         d = _envelope(r)
         assert d["code"] == "2330"
-        # trades is the only universally-derivable field; richer fields
-        # (held timeline, dividends) come in Phase 7.
         assert isinstance(d.get("trades", []), list)

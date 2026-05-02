@@ -274,8 +274,7 @@ const renderMovers = (rows: ReadonlyArray<TaxRow>): void => {
 const csvCell = (v: unknown): string => {
   if (v === null || v === undefined) return "";
   const s = String(v);
-  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 const CSV_KEYS: ReadonlyArray<keyof TaxRow> = [

@@ -199,4 +199,5 @@ def _norm_pair_id(pid: Any) -> str:
 
 
 def _parse_iso(s: str) -> _date:
-    return _date.fromisoformat(s)
+    y, m, d = s.split("-")
+    return _date(int(y), int(m), int(d))

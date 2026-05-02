@@ -1,4 +1,5 @@
-// /fx — USD/TWD curve, FX P&L, currency exposure.
+// /fx — USD/TWD curve, FX P&L, currency exposure. Phase 8 Cycle 63.
+// Charts deferred to Cycle 66.
 
 import { EM_DASH, pct, pctAbs, tone, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";

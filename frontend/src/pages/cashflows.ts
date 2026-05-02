@@ -1,4 +1,5 @@
 // /cashflows — real vs counterfactual, monthly waterfall, bank ledger.
+// Phase 8 Cycle 64. Charts deferred to Cycle 66.
 
 import { mountDataTable } from "../components/DataTable";
 import { EM_DASH, date as fmtDate, month as fmtMonth, num, pct, tone, twd } from "../lib/format";

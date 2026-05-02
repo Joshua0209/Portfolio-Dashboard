@@ -1,4 +1,5 @@
 // /transactions — filterable trade log + monthly volume/fees charts.
+// Phase 8 Cycle 64. Charts deferred to Cycle 66.
 
 import { mountDataTable } from "../components/DataTable";
 import type { DataTableHandle } from "../components/DataTable";
@@ -193,8 +194,7 @@ const renderRow = (t: Tx): HTMLTableCellElement[] => [
 const csvCell = (v: unknown): string => {
   if (v === null || v === undefined) return "";
   const s = String(v);
-  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 const CSV_KEYS: ReadonlyArray<keyof Tx> = [
