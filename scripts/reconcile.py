@@ -23,11 +23,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend" / "src"))
 
-# Mirror app/__init__.py:_load_env so the reconcile CLI sees Shioaji
-# creds without the operator having to source .env first. override=False
-# keeps real shell env wins.
+# Load .env so the reconcile CLI sees Shioaji creds without the operator
+# having to source .env first. override=False keeps real shell env wins.
 try:
     from dotenv import load_dotenv  # noqa: E402
     _ENV_PATH = ROOT / ".env"
@@ -36,9 +35,9 @@ try:
 except ImportError:
     pass
 
-from app.daily_store import DailyStore  # noqa: E402
-from app.shioaji_client import ShioajiClient  # noqa: E402
-from app import reconcile  # noqa: E402
+from invest.brokerage.shioaji_client import ShioajiClient  # noqa: E402
+from invest.persistence.daily_store import DailyStore  # noqa: E402
+from invest.reconciliation import reconcile  # noqa: E402
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 

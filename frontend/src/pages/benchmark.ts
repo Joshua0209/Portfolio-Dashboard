@@ -1,4 +1,5 @@
-// /benchmark — portfolio TWR vs market strategies.
+// /benchmark — portfolio TWR vs market strategies. Phase 8 Cycle 65.
+// Charts deferred to Cycle 66.
 
 import { EM_DASH, pct, pctAbs, tone } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";

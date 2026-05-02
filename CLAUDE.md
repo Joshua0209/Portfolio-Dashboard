@@ -1,7 +1,7 @@
 # Sinopac Investment Dashboard
 
 Personal investment performance dashboard built from Sinopac (永豐金) monthly PDF statements.
-Pipeline: encrypted PDFs → decrypt → parse → JSON → **Flask backend + 12-page dashboard**.
+Pipeline: encrypted PDFs → decrypt → parse → JSON → **FastAPI backend (:8001) + Vite/TS dashboard (:5173)**.
 
 A second daily-resolution layer sits on top of the monthly base: yfinance
 prices (TW symbols via `.TW`/`.TWO` suffix, foreign as bare tickers) and FX
@@ -9,6 +9,54 @@ rates cached in a local SQLite (`data/dashboard.db`, WAL mode), plus an
 optional read-only Shioaji client that overlays trades that happened *after*
 the most recent monthly statement closed. The daily layer is a regenerable
 cache — wipe `dashboard.db` and the next backfill rebuilds it in 30–60s.
+
+## Architecture (post-Phase 11 cutover, 2026-05-02)
+
+```
+                    ┌────────────────────────────────────┐
+                    │  Vite + TypeScript SPA  (port 5173) │
+                    │  frontend/                          │
+                    └──────────────┬─────────────────────┘
+                                   │  /api/* via proxy
+                    ┌──────────────▼─────────────────────┐
+                    │  FastAPI backend       (port 8001)  │
+                    │  backend/src/invest/                │
+                    └──────────────┬─────────────────────┘
+                                   │
+                ┌──────────────────┼──────────────────┐
+                │                                       │
+        ┌───────▼─────────┐                  ┌─────────▼────────┐
+        │ data/portfolio  │                  │  data/dashboard. │
+        │ .json (PDF agg) │                  │  db (daily SQLite)│
+        └─────────────────┘                  └──────────────────┘
+                ▲                                       ▲
+                │ written by                            │ written by
+        ┌───────┴─────────┐                  ┌─────────┴────────┐
+        │ scripts/parse_  │                  │ scripts/{backfill│
+        │ statements.py   │                  │ ,snapshot}_daily │
+        └─────────────────┘                  │ .py + Shioaji    │
+                                             │ overlay          │
+                                             └──────────────────┘
+```
+
+**Cutover state**: The Flask backend on :8000 (legacy `app.py` + `app/api/`) was
+deleted in Phase 9; templates and static assets (`templates/`, `static/`) are
+gone — the dashboard is a Vite+TS SPA in `frontend/`. Phase 10 (2026-05-02)
+deleted the entire transitional `app/` package and the top-level `tests/`
+directory. Every legacy module was ported verbatim into the `invest.*`
+namespace under `backend/src/invest/`, scripts/*.py were rewritten as thin
+shims that import from `invest.jobs.*` / `invest.persistence.*` /
+`invest.brokerage.*` / `invest.reconciliation.*`, and the legacy test
+files moved to `backend/tests/legacy/` with their imports rewritten in
+bulk. Phase 11 (2026-05-02) wired `POST /api/admin/refresh` to the
+canonical `invest.jobs.snapshot_workflow.run` (was previously stubbed
+on the SQLModel-backed `snapshot.run_incremental` scaffold) and shipped
+`invest.jobs.trade_backfill` — the source-side feed for the future
+Trade-table aggregator. `scripts/backfill_trades.py` populates the
+SQLModel `trades` table from `data/portfolio.json` (312 PDF trades →
+`source='pdf'` rows, idempotent). Analytics still read PortfolioStore
+on the request path; Phase 11.2 ports analytics one metric at a time
+with byte-equality verification before flipping the read path.
 
 ## Layout
 
@@ -19,67 +67,97 @@ investment/
 ├── sinopac_pdfs/                 # Encrypted source PDFs (gitignored)
 │   └── decrypted/                # Decrypted copies (gitignored — sensitive)
 ├── data/                         # gitignored — real portfolio data
-│   ├── portfolio.json            # Parsed dataset consumed by the dashboard (canonical)
-│   ├── tw_ticker_map.json        # Manual TW name→code overrides (see below)
+│   ├── portfolio.json            # Parsed dataset (PDF aggregate, canonical)
+│   ├── tw_ticker_map.json        # Manual TW name→code overrides
 │   ├── benchmarks.json           # yfinance price cache (7-day TTL)
 │   └── dashboard.db              # Daily-resolution SQLite cache (WAL; regenerable)
 ├── logs/                         # gitignored — daily.log (rotating, 5 MB × 3)
-├── scripts/                      # Pipeline (run from any CWD; ROOT auto-resolved)
-│   ├── download_sinopac_pdfs.py  # Pull statement PDFs from Gmail
-│   ├── decrypt_pdfs.py           # Step 1: env-based password unlock
-│   ├── parse_statements.py       # Step 2: extract holdings + flows → data/portfolio.json
-│   ├── backfill_daily.py         # Cold-start full backfill of dashboard.db
-│   ├── snapshot_daily.py         # Incremental refresh (gap-fills since meta.last_known_date)
-│   ├── reconcile.py              # CLI mirror of POST /api/admin/reconcile
-│   ├── retry_failed_tasks.py     # CLI mirror of POST /api/admin/retry-failed
-│   └── validate_data.py          # Sanity checks across portfolio.json + dashboard.db
-├── app.py                        # Flask entrypoint
-├── app/                          # Backend application package
-│   ├── __init__.py               # create_app(), routes, blueprint registration, layered /api/health
-│   ├── data_store.py             # Mtime-cached portfolio.json loader
-│   ├── daily_store.py            # SQLite (WAL) wrapper around data/dashboard.db
-│   ├── analytics.py              # Drawdown, Sharpe, Sortino, Calmar, HHI, FX P&L, FIFO P&L, sectors
-│   ├── benchmarks.py             # yfinance fetcher + cached strategy curves
-│   ├── filters.py                # Jinja currency/percent/date filters
-│   ├── backfill_runner.py        # Background daemon: cold-start fetch + DLQ wrapper
-│   ├── backfill_state.py         # READY/INITIALIZING/FAILED state machine + progress
-│   ├── price_sources.py          # TW (.TW/.TWO probe) + foreign yfinance router
-│   ├── yfinance_client.py        # yfinance HTTP wrapper (TW + foreign + FX)
-│   ├── shioaji_client.py         # Read-only Shioaji wrapper (no Order/CA imports — see below)
-│   │                              # — Surfaces: list_trades (session), list_open_lots
-│   │                              #   (currently-held), list_realized_pairs (closed pairs)
-│   ├── trade_overlay.py          # 3-source merge: open lots + realized pairs + session trades
-│   ├── reconcile.py              # PDF-vs-overlay trade diff per month (manual trigger only)
-│   │                              # — Also: record_event() for Path A audit hook
-│   └── api/                      # 13 blueprints, all under /api/*
-│       ├── summary.py            # KPIs, equity curve, allocation
-│       ├── holdings.py           # Current/historical positions, sectors
-│       ├── performance.py        # TWR/XIRR/drawdown/rolling/attribution (3 weighting methods)
-│       ├── transactions.py       # Trade log + monthly aggregates + rebates
-│       ├── cashflows.py          # Real vs counterfactual, bank ledger, gross/net views
-│       ├── dividends.py          # Distributions + rebates
-│       ├── risk.py               # Concentration, leverage, drawdown, ratios
-│       ├── fx.py                 # USD/TWD curve, FX P&L attribution
-│       ├── tax.py                # Realized + unrealized P&L by ticker (FIFO)
-│       ├── tickers.py            # Per-security drill-down
-│       ├── benchmarks.py         # Strategy comparison vs portfolio
-│       ├── daily.py              # /api/daily/equity + /api/daily/prices/<symbol>
-│       └── today.py              # /api/today/* widgets + /api/admin/* (no url_prefix; see below)
-├── templates/                    # Jinja2 page templates (12 pages + 3 partials)
-│   ├── _developer_tools.html     # DLQ + reconcile accordion, included on /today
-│   ├── _dlq_banner.html          # Global failed-tasks banner (DOMContentLoaded poll)
-│   ├── _reconcile_banner.html    # Global PDF-vs-overlay banner included from base.html
-└── static/                       # css/, js/ (vanilla; no build step)
-    ├── css/{tokens,app}.css      # Design system + components
-    └── js/{api,charts,format,help,pagination,app}.js + freshness.js + pages/*.js
+│
+├── backend/                      # FastAPI app — canonical
+│   ├── pyproject.toml
+│   ├── src/invest/
+│   │   ├── app.py                # FastAPI factory + lifespan; module-level
+│   │   │                         #   `app = create_app()` for `uvicorn invest.app:app`
+│   │   ├── core/
+│   │   │   ├── config.py         # pydantic Settings (DAILY_DB_PATH, ADMIN_TOKEN)
+│   │   │   └── state.py          # Backfill state machine singleton (Phase 10
+│   │   │                         #   port of app/backfill_state)
+│   │   ├── persistence/
+│   │   │   ├── portfolio_store.py   # JSON-backed monthly aggregate (mtime reload;
+│   │   │   │                        #   port of app/data_store)
+│   │   │   ├── daily_store.py    # SQLite WAL wrapper (verbatim port of app/daily_store)
+│   │   │   ├── models/           # SQLModel ORM tables (Phase 11+ Trade-table source)
+│   │   │   └── repositories/     # Per-aggregate data access
+│   │   ├── analytics/            # Pure-function analytics
+│   │   │   ├── monthly.py        # Verbatim port of app/analytics.py — month-dict input
+│   │   │   ├── holdings_today.py # Warm/cold reprice resolver (port of app/holdings_today)
+│   │   │   ├── twr.py / xirr.py / ratios.py / drawdown.py / concentration.py /
+│   │   │   │ attribution.py / tax_pnl.py / sectors.py
+│   │   │   │   (per-metric files for Phase 11+ Trade-typed inputs)
+│   │   ├── domain/               # Money, Trade, Side, Venue, Position VOs
+│   │   ├── prices/
+│   │   │   ├── yfinance_client.py    # Verbatim port of app/yfinance_client
+│   │   │   ├── sources.py            # get_prices / get_fx_rates / get_yfinance_prices
+│   │   │   │                         #   (port of app/price_sources)
+│   │   │   ├── price_service.py      # Redesigned (Trade-table aggregator) — coexists
+│   │   │   ├── fx_provider.py        # Redesigned FX provider — coexists
+│   │   │   └── tw_probe.py
+│   │   ├── brokerage/
+│   │   │   ├── shioaji_client.py     # READ-ONLY (static-grep guard, verbatim port)
+│   │   │   ├── shioaji_sync.py
+│   │   │   └── trade_overlay.py      # 3-source merge + audit-event hook (port of
+│   │   │                             #   app/trade_overlay)
+│   │   ├── ingestion/            # PDF parsing modules (seeder + verifier)
+│   │   ├── reconciliation/
+│   │   │   ├── reconcile.py          # diff_trades / record_event / get_open_events
+│   │   │   │                         #   (port of app/reconcile)
+│   │   │   └── shioaji_audit.py      # Redesigned audit pipeline — coexists
+│   │   ├── benchmarks.py         # yfinance benchmark fetcher + STRATEGIES catalogue
+│   │   ├── http/
+│   │   │   ├── deps.py           # get_session / get_portfolio_store / get_daily_store /
+│   │   │   │                     #   require_admin
+│   │   │   ├── envelope.py       # {ok, data} response model
+│   │   │   ├── helpers.py        # bank_cash_twd / today_repriced_totals / envelope
+│   │   │   └── routers/          # 14 routers — health, summary, holdings, performance,
+│   │   │                         #   transactions, dividends, fx, tax, risk, cashflows,
+│   │   │                         #   tickers, benchmarks, daily, today (read+admin)
+│   │   └── jobs/
+│   │       ├── backfill_runner.py    # 1725-LOC verbatim port of app/backfill_runner —
+│   │       │                         #   the production cold-start path
+│   │       ├── snapshot_workflow.py  # Incremental refresh — backs both
+│   │       │                         #   scripts/snapshot_daily.py AND
+│   │       │                         #   POST /api/admin/refresh (Phase 11)
+│   │       ├── trade_backfill.py     # PDF → SQLModel `trades` table (Phase 11)
+│   │       ├── backfill.py / snapshot.py / retry_failed.py / verify_month.py
+│   │       │                         # Redesigned scaffolds (Trade-table aggregator) —
+│   │       │                         #   coexist with verbatim ports above
+│   │       └── _positions.py / _dlq.py
+│   └── tests/                    # ~870 tests (pytest)
+│       ├── analytics/ brokerage/ core/ domain/ http/ ingestion/
+│       ├── jobs/ persistence/ prices/ reconciliation/
+│       └── legacy/               # 149 ports of the old top-level tests/ (Phase 10)
+│
+├── frontend/                     # Vite + TypeScript SPA
+│   ├── package.json
+│   ├── vite.config.ts            # API proxy → :8001
+│   └── src/
+│       ├── main.ts
+│       ├── lib/                  # api.ts (typed client), charts.ts, format.ts, paint.ts
+│       ├── components/           # KpiCard, FreshnessDot, DataTable, Banner, Sparkline
+│       ├── pages/                # one per route (overview, today, holdings, …)
+│       └── styles/               # tokens.css, app.css
+│
+└── scripts/                      # Thin shims importing invest.jobs.* / invest.persistence.*
+    ├── download_sinopac_pdfs.py
+    ├── decrypt_pdfs.py
+    ├── parse_statements.py       # → data/portfolio.json
+    ├── backfill_daily.py         # Cold-start daily layer (invest.jobs.backfill_runner)
+    ├── backfill_trades.py        # Phase 11 — populate SQLModel `trades` from PDFs
+    ├── snapshot_daily.py         # Incremental refresh (invest.jobs.snapshot_workflow)
+    ├── reconcile.py              # Manual PDF-vs-overlay diff
+    ├── retry_failed_tasks.py     # Drain DLQ
+    └── validate_data.py          # Sanity checks
 ```
-
-### `today` blueprint exception
-Unlike the other 12 blueprints, `app/api/today.py` registers with no
-`url_prefix` and mounts both `/api/today/*` (read) and `/api/admin/*`
-(operator-triggered writes). This is deliberate cohesion — the admin
-endpoints (refresh, retry-failed, reconcile, dismiss) are reconciliation/
-freshness primitives surfaced by the same `/today` page.
 
 ## Refresh workflow
 
@@ -99,43 +177,39 @@ python3 scripts/decrypt_pdfs.py
 # 3. parse → data/portfolio.json
 python3 scripts/parse_statements.py
 
-# 4. start the Flask dashboard (refreshes data automatically when JSON updates)
-python3 app.py
-# then open http://127.0.0.1:8000/
+# 4. start the FastAPI backend
+PYTHONPATH=backend/src uvicorn invest.app:app --port 8001
+# (mtime-watched portfolio.json — re-parsing while up reloads on next request)
+
+# 5. start the Vite dev server (proxies /api → :8001)
+cd frontend && npm run dev
+# then open http://127.0.0.1:5173/
 ```
 
-The Flask app watches `data/portfolio.json` mtime — re-running `parse_statements.py`
-while the server is up reloads data on the next request without a restart.
+**Daily layer refresh** — three ways:
 
-**Daily layer refresh.** The monthly base updates from PDFs; the daily layer
-(`data/dashboard.db`) updates from public market APIs. Three ways to refresh:
-
-1. **Cold start** — delete `data/dashboard.db` and either set
-   `BACKFILL_ON_STARTUP=true` (background daemon thread on `create_app()`) or
-   run `python scripts/backfill_daily.py` directly. Endpoints under
-   `/api/daily/*` and `/api/today/*` return HTTP 202 + progress while the
-   backfill is running, then flip to 200 with no restart.
+1. **Cold start** — delete `data/dashboard.db` and run
+   `python scripts/backfill_daily.py`. Endpoints under `/api/daily/*` and
+   `/api/today/*` return HTTP 202 + progress until backfill completes.
 2. **Incremental** — `python scripts/snapshot_daily.py` gap-fills from
-   `meta.last_known_date` to today. Idempotent — re-running with no new
-   trading days writes 0 rows. Same code path as `POST /api/admin/refresh`
-   (the "Refresh now" button on `/today`).
+   `meta.last_known_date` to today. Idempotent. Same code path as
+   `POST /api/admin/refresh` (the "Refresh now" button on `/today`).
 3. **Retry the DLQ** — failed external fetches land in `failed_tasks` and
    are drained by `python scripts/retry_failed_tasks.py` or
    `POST /api/admin/retry-failed`.
 
 ## Environment variables
 
-`.env` (gitignored) holds local overrides. None are strictly required — the
-dashboard runs in PDF-only mode when everything is unset.
+`.env` (gitignored) holds local overrides. None are strictly required.
 
 | Variable | Purpose |
 | --- | --- |
-| `SINOPAC_PDF_PASSWORDS` | Comma-separated PDF unlock candidates. The decrypter tries each per file; first that opens wins. Different statement types use different passwords (brokerage = National ID, bank = birth date). |
-| `SINOPAC_API_KEY` / `SINOPAC_SECRET_KEY` | Shioaji read-only credentials. When both are set, `app/trade_overlay.py` overlays post-PDF trades onto the daily layer. Without them, the dashboard is fully functional in PDF-only mode and the overlay logs `skipped_reason='shioaji_unconfigured'` once per process lifetime. |
-| `SINOPAC_CA_CERT_PATH` / `SINOPAC_CA_PASSWORD` | Sinopac PKCS#12 (`.pfx`) bundle and its unlock password. **Documented but not consumed by `app/shioaji_client.py`** — the static-grep guard in `tests/test_shioaji_client.py:47` forbids `activate_ca` from the module, so setting these today is a no-op. They exist in `.env.example` as a deliberate signpost: if/when trading is enabled, it must live in a separate opt-in module that imports `activate_ca` directly, leaving the read-only client untouched. The `.pfx` file itself is gitignored via `*.pfx`. |
-| `BACKFILL_ON_STARTUP` | Default `false`. When `true`, `create_app()` spawns the cold-start backfill in a daemon thread. The Flask debug-reloader is detected via `WERKZEUG_RUN_MAIN` so the parent process is skipped (otherwise both parent and child would spawn a thread). |
-| `ADMIN_TOKEN` | Default unset (admin POSTs unauthenticated). When set, the `before_request` gate in `app/__init__.py` requires every `POST /api/admin/*` to echo the value via `X-Admin-Token` or returns `401`. Reads stay unauthenticated by design. Opt in only when exposing the dashboard via tunnel/LAN/proxy. |
-| `DAILY_DB_PATH` | Override the default `data/dashboard.db` location. Used in tests to swap in a per-test temporary DB. |
+| `SINOPAC_PDF_PASSWORDS` | Comma-separated PDF unlock candidates. The decrypter tries each per file. Different statement types use different passwords (brokerage = National ID, bank = birth date). |
+| `SINOPAC_API_KEY` / `SINOPAC_SECRET_KEY` | Shioaji read-only credentials. When both set, the trade overlay folds post-PDF broker activity into the daily layer. Without them, dashboard runs in PDF-only mode. |
+| `SINOPAC_CA_CERT_PATH` / `SINOPAC_CA_PASSWORD` | Sinopac PKCS#12 (`.pfx`) bundle. **Documented but not consumed** — the static-grep guard forbids `activate_ca` from `app/shioaji_client.py`. Foreign-CA work would go in a separate opt-in module. The `.pfx` file itself is gitignored. |
+| `BACKFILL_ON_STARTUP` | Default `false`. Reserved for future FastAPI lifespan hook. |
+| `ADMIN_TOKEN` | Default unset (admin POSTs unauthenticated). When set, `require_admin` requires `X-Admin-Token` header on every `POST /api/admin/*`. |
+| `DAILY_DB_PATH` | Override the default `./data/dashboard.db` location. |
 
 Never commit any of these values.
 
@@ -151,87 +225,57 @@ External cashflows = `客戶淨收付` (TW) + `應收/付` sum (foreign), TWD-co
 
 ## Performance metrics
 
-- **TWR (Modified Dietz, monthly)** — three flow-weighting variants, switchable
-  in the UI and via `?method=` on `/api/performance/*`:
-  - `day_weighted` (default): each per-trade flow weighted by `(D-d)/D`. A sell
-    on the last day of the month barely shrinks the denominator. Most accurate
-    when deposits/withdrawals cluster intra-month.
-  - `mid_month`: legacy Modified Dietz, all flows weighted 0.5:
-    `r = (V_end − V_start − F) / (V_start + 0.5·F)`.
-  - `eom`: end-of-month assumption, flows weighted 0.0.
-  - All three chain across months. Month 1 is forced to 0% (no prior equity).
-- **XIRR**: Newton-Raphson on cashflow dates. Money-weighted; reflects what
-  *your money* actually earned. Cashflows dated to month-mid; final equity
-  treated as a terminal inflow.
-- **Sortino / Calmar / Sharpe** — all three printed on the Performance page
-  with reference bands (<1 weak, 1–2 acceptable, 2–3 good, 3–5 excellent,
-  >5 elite or thin sample).
+- **TWR (Modified Dietz, monthly)** — three flow-weighting variants,
+  switchable via `?method=` on `/api/performance/*`:
+  - `day_weighted` (default): each per-trade flow weighted by `(D-d)/D`.
+  - `mid_month`: legacy Modified Dietz, all flows weighted 0.5.
+  - `eom`: end-of-month, flows weighted 0.0.
+- **XIRR**: Newton-Raphson on cashflow dates. Money-weighted.
+- **Sortino / Calmar / Sharpe** with reference bands.
 
-TWR and XIRR often diverge. TWR ≫ XIRR usually means recent deposits haven't
-had time to compound; that's normal, not a bug.
+TWR and XIRR often diverge — TWR ≫ XIRR usually means recent deposits
+haven't had time to compound; that's normal, not a bug.
 
 ## TW ticker codes for trades
 
 The TW monthly statement's *trade* table prints only the abbreviated stock
-name, not the ticker code — the code only appears in the *holdings* table.
-For positions held at any month-end the parser auto-derives the code by
-matching trade name → holdings name. For intra-month round-trips (bought
-and sold within the same month) or pre-data-window exits, the name never
-appears in any holdings table.
-
-`data/tw_ticker_map.json` is the manual override file that fills those
-gaps. Keys are normalized halfwidth names (`'台玻'`, `'貿聯KY'`); values
-are codes (`'1802'`). When `個股分析` shows a blank 代號 for a closed
-position, add an entry and re-run `scripts/parse_statements.py`.
+name. For positions held at any month-end the parser auto-derives the code
+by matching name → holdings table. For intra-month round-trips,
+`data/tw_ticker_map.json` is the manual override file.
 
 ## Caveats
 
 - **Margin (融資)**: equity = market value of all positions, but cost includes
-  only your portion (資自備款). Equity-based returns can look inflated. Read
-  `holdings_detail.type == "融資"` rows with that in mind.
-- **Foreign FX**: only USD positions are TWD-converted right now. Add HKD/JPY
-  rates from the bank statement if those positions appear (extend the loop in
-  `scripts/parse_statements.py:main`).
-- **Dividends**: bank-derived per-event records are the source of truth.
-  `summary.dividends[]` carries one row per cash credit (TW `ACH股息` and
-  foreign `國外股息`), with the ticker resolved from the memo column.
-  Per-holding lifetime dividend sits on `tw.holdings[i].cum_dividend`
-  (parsed from `累計配息`). The broker `海外股票現金股利明細` section is
-  used as a backfill only — it's frequently empty.
-- **The fetch() requirement**: opening static HTML directly (file://) fails
-  because browsers block local JSON fetches. Always use the Flask app or a local server.
-- **Sector mapping**: `app/analytics.py` has a hand-curated heuristic in
-  `_TW_SECTOR_HINTS` and `_US_SECTOR_HINTS`. Unmapped tickers fall through
-  to "TW Equity (other)" / "US Equity (other)". Extend the dicts as needed
-  — there's no external API call.
+  only your portion (資自備款). Equity-based returns can look inflated.
+- **Foreign FX**: only USD positions are TWD-converted today.
+- **Dividends**: bank-derived per-event records are source of truth; the
+  broker `海外股票現金股利明細` section is a backfill only.
+- **Sector mapping**: hand-curated heuristic in `analytics.monthly.sector_of`.
 
 ## Dashboard pages (URL → purpose)
 
 | URL | Purpose |
 |---|---|
-| `/today` | Tactical view. Hero with weekday-named Δ vs prior session, top movers, 30-day sparkline, MTD/QTD/YTD/Inception strip, underwater drawdown curve, risk-and-return tile, daily-return calendar heatmap, freshness dot, Developer Tools accordion (DLQ + manual reconciliation). Markets-closed wallclock-context line shows when `today_in_tpe ≠ data_date` (weekend / pre-open). |
+| `/today` | Tactical view — Δ vs prior session, top movers, sparkline, MTD/QTD/YTD/Inception, drawdown, risk-and-return tile, calendar heatmap, freshness, Developer Tools accordion (DLQ + reconcile) |
 | `/` | KPI hero, equity curve, allocation donut, top movers, recent activity |
-| `/holdings` | Sortable table, treemap-style position map, sector breakdown, CSV export |
-| `/performance` | TWR/XIRR, monthly returns, drawdown, rolling 3/6/12M, venue attribution |
-| `/risk` | Drawdown curve, HHI concentration, top-5/10 share, leverage exposure |
-| `/fx` | USD/TWD curve, FX-attributable P&L, currency exposure stack |
-| `/transactions` | Filterable trade log, monthly volume + fee charts, CSV export |
-| `/cashflows` | Real vs counterfactual chart, monthly waterfall, bank ledger |
+| `/holdings` | Sortable table, treemap, sector breakdown |
+| `/performance` | TWR/XIRR, monthly returns, drawdown, rolling, attribution |
+| `/risk` | Drawdown curve, HHI, top-5/10 share, leverage |
+| `/fx` | USD/TWD curve, FX-attributable P&L, currency exposure |
+| `/transactions` | Filterable trade log, monthly volume + fee charts |
+| `/cashflows` | Real vs counterfactual, monthly waterfall, bank ledger |
 | `/dividends` | Monthly income, top payers, full distribution log |
-| `/tax` | Per-ticker realized + unrealized P&L, win rate, CSV export |
-| `/ticker/<code>` | Position over time, cost vs MV chart, trades, dividends |
-| `/benchmark` | Portfolio TWR vs market strategies (TW + US, multi-tier) |
+| `/tax` | Per-ticker realized + unrealized P&L, win rate |
+| `/ticker/<code>` | Position over time, cost vs MV, trades, dividends |
+| `/benchmark` | Portfolio TWR vs market strategies |
 
-A global freshness widget renders in the sidebar footer of every page
-(`templates/base.html` + `static/js/freshness.js`), driven by
-`/api/today/freshness`. Network failure renders "—" instead of crashing
-the page — never breaks navigation.
+A global freshness widget renders in the sidebar footer of every page,
+driven by `/api/today/freshness`. Network failure renders "—".
 
 ## API surface
 
 All endpoints return `{"ok": true, "data": ...}`. Errors are HTTP non-200.
-Convention: TWD unless field name says otherwise; foreign positions show
-both `_local` and `_twd` values where relevant.
+TWD unless field name says otherwise.
 
 ### Monthly base (always available)
 ```
@@ -239,9 +283,8 @@ GET  /api/health
        → {months_loaded, as_of, daily_state: READY|INITIALIZING|FAILED,
           daily_last_known, daily_progress, daily_error}
 GET  /api/summary
-GET  /api/holdings/{current,sectors,timeline}
-GET  /api/holdings/snapshot/<month>
-GET  /api/performance/{timeseries,rolling,attribution}[?method=day_weighted|mid_month|eom]
+GET  /api/holdings/{current,timeline,sectors,snapshot/<month>}
+GET  /api/performance/{timeseries,rolling,attribution}[?method=…]
 GET  /api/transactions[?venue=&side=&code=&month=&q=]
 GET  /api/transactions/aggregates
 GET  /api/cashflows/{monthly,cumulative,bank}
@@ -251,163 +294,201 @@ GET  /api/fx
 GET  /api/tax
 GET  /api/tickers
 GET  /api/tickers/<code>
-GET  /api/benchmarks/strategies
-GET  /api/benchmarks/compare?keys=tw_passive,us_passive
+GET  /api/benchmarks/{strategies,compare}
 ```
 
 ### `?resolution=daily` query parameter
 
-Most monthly endpoints accept an optional `?resolution=daily` flag,
-gated by `app/api/_helpers.py:want_daily()`. When the daily SQLite
-layer has rows, the body switches to a daily-shape payload (per-day
-rows keyed by `date` instead of monthly rows keyed by `month`) and
-adds `"resolution": "daily"` to the envelope. When the daily layer is
-empty, the parameter is silently ignored and the monthly shape is
-returned — pages that opt in via `static/js/api.js` therefore render
-correctly even before the cold-start backfill finishes.
+Most monthly endpoints accept `?resolution=daily`. When the daily layer
+has rows, the body switches to a daily-shape payload and adds
+`"resolution": "daily"` to the envelope. When empty, the parameter is
+silently ignored and monthly shape is returned.
 
-Honoured by:
-- `/api/summary` (KPIs reprice against today's closes unconditionally;
-  flag swaps the equity-curve series)
-- `/api/holdings/timeline`
-- `/api/performance/timeseries` and `/api/performance/rolling`
-- `/api/risk` (drawdown curve)
-- `/api/fx` (rate curve + `fx_pnl_daily`)
-- `/api/cashflows/monthly` (daily branch returns dict with `monthly`+`daily`)
-- `/api/benchmarks/compare` (adds `portfolio_daily_curve`; strategy
-  curves stay monthly to keep apples-to-apples comparison)
+Honoured by: `/api/summary`, `/api/holdings/timeline`, `/api/performance/*`,
+`/api/risk`, `/api/fx`, `/api/cashflows/monthly`, `/api/benchmarks/compare`.
 
 ### Daily-resolution layer
 ```
 GET  /api/daily/equity[?start=YYYY-MM-DD&end=YYYY-MM-DD]
 GET  /api/daily/prices/<symbol>
 ```
-Both endpoints validate the `start`/`end` query params against the
-`YYYY-MM-DD` regex and return `400` on malformed input.
 
 ### `/today` widgets
 ```
 GET  /api/today/snapshot           # latest equity + Δ vs prior priced day
-GET  /api/today/movers             # gainers/decliners between two priced dates
-GET  /api/today/sparkline          # last 30 trading days of equity_twd
-GET  /api/today/period-returns     # MTD / QTD / YTD / Inception
-GET  /api/today/drawdown           # underwater curve + max-DD metadata
-GET  /api/today/risk-metrics       # ann return/vol, Sharpe, Sortino, hit rate
-GET  /api/today/calendar           # daily-return calendar heatmap
-GET  /api/today/freshness          # data_date, today_in_tpe, stale_days, band
-GET  /api/today/reconcile          # open reconciliation events (drives the global banner)
+GET  /api/today/movers
+GET  /api/today/sparkline
+GET  /api/today/period-returns
+GET  /api/today/drawdown
+GET  /api/today/risk-metrics
+GET  /api/today/calendar
+GET  /api/today/freshness
+GET  /api/today/reconcile
 ```
 
-### Admin / operator (all manual-trigger; never auto-fired)
+### Admin / operator (manual-trigger)
 ```
-POST /api/admin/refresh                     # incremental gap-fill (calls snapshot_daily)
-GET  /api/admin/failed-tasks                # open DLQ rows
-POST /api/admin/retry-failed                # drain the DLQ → {resolved, still_failing}
-POST /api/admin/reconcile?month=YYYY-MM     # PDF vs Shioaji-overlay diff for one month
+POST /api/admin/refresh                     # snapshot_daily.run
+GET  /api/admin/failed-tasks
+POST /api/admin/retry-failed
+POST /api/admin/reconcile?month=YYYY-MM
 POST /api/admin/reconcile/<event_id>/dismiss
 ```
-
-### Health states (Phase 9 contract)
-- `READY` — daily store has rows; daily/today endpoints return 200.
-- `INITIALIZING` — backfill in progress *or* daily store empty. Daily/today
-  endpoints return HTTP 202 with `progress` payload. Frontend `static/js/api.js`
-  retries with exponential backoff.
-- `FAILED` — backfill exception. Daily/today endpoints return HTTP 503 with
-  the error string. Banner deep-links to `/today#developer-tools`.
 
 ## Invariants (read these before editing the daily layer)
 
 ### Shioaji is read-only — forever
-`app/shioaji_client.py` MUST NOT import `Order`, `place_order`,
-`cancel_order`, `update_order`, or `activate_ca` from the Shioaji SDK.
-This is enforced by static-grep tests in `tests/test_shioaji_client.py`
-and `tests/test_reconcile.py`. The dashboard reads broker state; it never
-modifies it. Without credentials, the client logs once and returns `[]`
-on every read — the daily layer treats unconfigured Shioaji as a clean
-no-op, never as an error.
+`backend/src/invest/brokerage/shioaji_client.py` MUST NOT import `Order`,
+`place_order`, `cancel_order`, `update_order`, or `activate_ca`. Static-
+grep tests in `backend/tests/brokerage/test_shioaji_client.py` enforce
+this. The dashboard reads broker state; it never modifies it.
 
-The client exposes three read-only surfaces (Phase 11 Path A — confirmed
-empirically by `scripts/probe_shioaji_pnl_detail.py`):
+The client exposes three read-only surfaces (Phase 11 Path A):
+| Method | Returns |
+|---|---|
+| `list_trades(start, end)` | Session-only — typically just today's fills |
+| `list_open_lots(close_resolver)` | Currently-held lots |
+| `list_realized_pairs(begin, end)` | Buy legs + sell summary for closed pairs |
 
-| Method | SDK call | Returns |
-|---|---|---|
-| `list_trades(start, end)` | `api.list_trades()` (no args in 1.3.x) | Session-only — typically just today's fills |
-| `list_open_lots(close_resolver)` | `api.list_position_detail(stock_account)` | Currently-held lots, qty derived via `round(mv_twd / close)` |
-| `list_realized_pairs(begin, end)` | `api.list_profit_loss` + `list_profit_loss_detail` per id | Buy legs + sell summary for closed pairs |
+**SDK quirk**: `quantity` field is always 0 for 零股 (odd-lot < 1000 shares).
+Qty derived from `cost / price` for legs and `mv_twd / close` for open lots.
 
-**SDK quirk pinned by all three methods**: `quantity` field is always 0
-for 零股 (odd-lot, < 1000 shares). Qty is derived from `cost / price`
-for legs (`list_realized_pairs`) and `mv_twd / close` for open lots.
+**Foreign account walled off**: per the 2026-05-01 probe (PLAN §3),
+`signed=False` on H-account → broker enrollment missing. Foreign trades
+remain PDF-canonical. `venue='TW'` hard-coded in shioaji_client.
 
-**Foreign account walled off**: `api.list_accounts()` returns the
-H-type 複委託 account (`AccountType.H`) but every accounting query
-against it (`list_positions`, `list_profit_loss`) responds HTTP 406
-"Account Not Acceptable". Foreign trades remain PDF-canonical. The
-client hard-codes `venue='TW'` accordingly.
-
-### Reconciliation is manual-trigger only
-`app/reconcile.py` MUST NOT be invoked from `app/backfill_runner.py`,
+### Reconciliation is operator-triggered for the destructive form
+`invest.reconciliation.reconcile.run_for_month` MUST NOT be invoked from
+`invest.jobs.backfill_runner`, `invest.jobs.snapshot_workflow`,
 `scripts/parse_statements.py`, or `scripts/snapshot_daily.py`. The diff
-is *operator-triggered*: the user clicks "Reconcile this month" on
-`/today` (POST `/api/admin/reconcile?month=YYYY-MM`) or runs
-`python scripts/reconcile.py YYYY-MM`. This is enforced by static-grep
-tests. Rationale: PDFs are the canonical source — auto-fired diffs would
-either be noisy (statement still settling) or destructive (a half-known
-month would banner spurious "missing trades").
+runs automatically (read-only, emits events); the `--apply` flag that
+mutates `trades` rows is gated behind `POST /api/admin/reconcile`.
+PDFs are canonical — auto-fired diffs would be noisy or destructive.
 
 ### PDF rows are canonical; overlay rows never overwrite them
-`app/trade_overlay.py` writes `positions_daily` rows with
-`source='overlay'`, but the UPSERT carries `WHERE positions_daily.source =
-'overlay'` so an existing `source='pdf'` row is never overwritten.
-PDFs win every conflict.
+`invest.brokerage.trade_overlay` writes `positions_daily` rows with
+`source='overlay'`, but the UPSERT carries `WHERE
+positions_daily.source='overlay'` so an existing `source='pdf'` row is
+never overwritten.
 
 ### 3-source overlay merge (Phase 11 Path A)
-`trade_overlay.merge()` pulls from all three Shioaji read surfaces
-(open lots, realized pairs, session trades), unifies them into trade-
-shaped records, and dedups by `(date, code, side, int(round(qty)))`
-with priority `realized_pair > list_trades > open_lot`. Open-lot
-synthetic trades carry `price=0.0` and yield to richer sources with
-the same key.
+`trade_overlay.merge()` pulls open lots + realized pairs + session trades,
+unifies them into trade-shaped records, dedups by `(date, code, side,
+int(round(qty)))` with priority `realized_pair > list_trades > open_lot`.
 
-**Buy legs may pre-date `gap_start`** (locked decision #1 option C):
-the `begin/end` window passed to `list_realized_pairs` filters SELL
-dates only, so a closed pair can carry buy legs from months earlier.
-This is intentional — it lets the audit hook compare against the full
-PDF history rather than a windowed slice.
-
-### Audit hook fires on broker-vs-PDF leg-count mismatch (STRICT rule)
+### Audit hook fires on broker-vs-PDF leg-count mismatch (STRICT)
 For each `pair_id` from `list_realized_pairs`, `trade_overlay._fire_audit_events`
 counts SDK buy legs vs PDF buy trades for the same `(code, ≤sell_date)`
-window. Any divergence — including legitimate broker consolidations of
-partial fills — fires `reconcile.record_event(event_type=
-'broker_pdf_buy_leg_mismatch', detail={...})` so the operator can
-review via the existing `/today` reconcile banner.
-
-The audit hook is informational, not corrective — PDFs still win on
-`positions_daily` writes via the UPSERT guard above. The event
-encodes `event_type` inside `diff_summary` JSON; legacy PDF-vs-overlay
-diffs (from `reconcile.run_for_month`) coexist in the same table
-without `event_type` set, so banner consumers branch on
-`payload.get('event_type')`.
+window. Any divergence fires `invest.reconciliation.reconcile.record_event(
+event_type='broker_pdf_buy_leg_mismatch', ...)` for the operator to review.
 
 ### The daily layer is a cache
 `data/dashboard.db` (SQLite, WAL mode + busy_timeout=5000) is regenerable
-from `portfolio.json` plus public APIs. It contains no source-of-truth
-data. Backups should use `sqlite3 ... .backup` (atomic, transactionally
-consistent) — never `cp` because WAL keeps in-flight pages in
-`dashboard.db-wal` / `dashboard.db-shm` sidecars.
+from `portfolio.json` plus public APIs. Backups should use
+`sqlite3 ... .backup` (atomic, transactionally consistent), never `cp`
+because of WAL sidecars.
 
-## Adding a new statement type
+## Backend ↔ frontend dev
 
-The parser dispatches in `scripts/parse_statements.py:main` based on filename
-substring (`證券月對帳單`, `複委託`, `銀行綜合`). To add a new type:
+```bash
+# Backend (port 8001)
+PYTHONPATH=backend/src uvicorn invest.app:app --port 8001
 
-1. Write a `parse_<type>(pdf_path) -> dict` function returning a structured
-   month record.
-2. Add a filename branch in `main()` to populate `files_by_month[ym][...]`.
-3. Decide if it's inside-portfolio (affects equity & flows) or external.
-4. Surface the new fields in the relevant `app/api/*.py` blueprint and
-   wire up a chart in the matching `templates/*.html` + `static/js/pages/*.js`.
+# Frontend (port 5173)
+cd frontend && npm run dev
+
+# Override proxy target if backend runs elsewhere:
+VITE_API_TARGET=http://127.0.0.1:9999 npm run dev
+```
+
+Tests:
+```bash
+# Whole backend suite (869 tests + 4 skipped)
+cd backend && pytest
+
+# Targeted subsets:
+cd backend && pytest tests/legacy/      # 149 verbatim-ported coverage tests
+cd backend && pytest tests/analytics/   # Pure-function analytics
+cd backend && pytest tests/jobs/        # Backfill + snapshot orchestration
+```
+
+## Phase 11 cutover summary (2026-05-02)
+
+**Done**:
+- `POST /api/admin/refresh` now routes through the canonical
+  `invest.jobs.snapshot_workflow.run` (yfinance + Shioaji + DailyStore +
+  PortfolioStore) — the same code path as `python scripts/snapshot_daily.py`.
+  Previously the endpoint was on the SQLModel-backed `snapshot.run_incremental`
+  scaffold (a no-op orchestrator that never executed real fetches).
+- Added `invest.jobs.trade_backfill` — populates the SQLModel `trades`
+  table from `data/portfolio.json:summary.all_trades`. Maps the 8
+  observed Chinese side strings (`普買/普賣/資買/資賣/櫃買/櫃賣/買進/賣出`)
+  onto the canonical `Side` enum (`CASH_BUY/CASH_SELL/MARGIN_BUY/MARGIN_SELL`),
+  with venue/currency carrying the TW-vs-Foreign and main-vs-OTC distinctions.
+- Idempotent re-run: clears prior `source='pdf'` rows and reinserts.
+  `source='overlay'` rows are never touched (same invariant as
+  `positions_daily`).
+- Smoke-tested against real `data/portfolio.json`: all 312 trades
+  mapped (0 skipped); idempotent re-run round-trips at 312 rows.
+- Added `scripts/backfill_trades.py` (thin shim invoking the backfill).
+- 23 new unit tests in `backend/tests/jobs/test_trade_backfill.py`
+  covering the side mapping, idempotency, overlay-row preservation,
+  and unknown-side leniency.
+
+**Deferred to Phase 11.2+** (the *aggregator* — the hard part):
+- Rewrite analytics modules (`invest.analytics.{twr, xirr, ratios,
+  drawdown, concentration, attribution, tax_pnl, sectors}`) to compute
+  monthly aggregates from the `trades` table on-the-fly, replacing
+  PortfolioStore as the source of truth on the request path. Each
+  metric ships behind a byte-equality verifier (compare new output
+  against `PortfolioStore.summary[*]` for every month in the
+  production dataset) before flipping the corresponding router branch.
+- Wire price + FX repositories on top of the `prices` / `fx_daily`
+  SQLModel tables (the SQLModel scaffolds already exist; need population
+  and read-side verification against `DailyStore`).
+- Decommission `PortfolioStore` once all router branches are flipped.
+
+## Phase 10 cutover summary (2026-05-02)
+
+**Done**:
+- Verbatim-ported the entire transitional `app/` package into the
+  `invest.*` namespace under `backend/src/invest/`:
+  - `app/yfinance_client` → `invest.prices.yfinance_client`
+  - `app/price_sources`   → `invest.prices.sources`
+  - `app/shioaji_client`  → `invest.brokerage.shioaji_client`
+  - `app/trade_overlay`   → `invest.brokerage.trade_overlay`
+  - `app/reconcile`       → `invest.reconciliation.reconcile`
+  - `app/backfill_state`  → `invest.core.state`
+  - `app/backfill_runner` → `invest.jobs.backfill_runner` (1725 LOC)
+  - `app/daily_store`     → `invest.persistence.daily_store`
+  - `app/data_store`      → `invest.persistence.portfolio_store`
+  - `app/holdings_today`  → `invest.analytics.holdings_today`
+  - `app/analytics`       → `invest.analytics.monthly`
+  - `app/benchmarks`      → `invest.benchmarks`
+  - `scripts/snapshot_daily.run` → `invest.jobs.snapshot_workflow.run`
+- Rewrote `scripts/{backfill_daily,snapshot_daily,reconcile,
+  retry_failed_tasks,validate_data}.py` as thin shims pointing at
+  `invest.jobs.*` / `invest.persistence.*` / `invest.brokerage.*` /
+  `invest.reconciliation.*`.
+- Moved the top-level `tests/` directory (149 tests covering the legacy
+  modules) into `backend/tests/legacy/`, rewriting every `from app.X
+  import Y` import in bulk so coverage is preserved against the new
+  namespace.
+- Deleted the entire `app/` package and the top-level `tests/` directory.
+- Deleted the byte-equality parity tests in `backend/tests/analytics/`
+  (their job ended when `app/` was removed — the modules they pinned
+  parity against no longer exist).
+
+**Coexistence note**: The redesigned scaffolds in `invest.jobs.{backfill,
+snapshot,retry_failed}` and `invest.prices.{price_service,fx_provider}`
+and `invest.reconciliation.shioaji_audit` (a Trade-table / SQLModel /
+Repo-pattern design) coexist with the verbatim ports. The verbatim
+ports power production today; the redesigned scaffolds receive features
+as Phase 11+ lands.
+
+**Phase 11+ landed in Phase 11 (2026-05-02)** — see "Phase 11 cutover
+summary" above. The remaining `PortfolioStore` → analytics-on-trades
+migration is now Phase 11.2+.
 
 ## Files NOT to commit
 
@@ -417,3 +498,5 @@ substring (`證券月對帳單`, `複委託`, `銀行綜合`). To add a new type
 - `logs/` (daily.log)
 - `credentials.json`, `token.json`
 - `.env`
+- `*.pfx` (Sinopac CA bundle)
+- `shioaji.log` / `**/shioaji.log` (SDK auto-creates)

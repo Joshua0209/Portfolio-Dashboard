@@ -1,71 +1,59 @@
-"""GET /api/health - liveness + dataset state.
+"""GET /api/health — liveness + dataset state.
 
-Same response shape as the legacy /api/health (CLAUDE.md 'API surface'
-section) so the existing frontend can switch backends without changes.
+Phase 6.5 wiring: reads from PortfolioStore (months_loaded, as_of) and
+DailyStore (daily_last_known via meta). Same envelope shape as the
+legacy /api/health so the frontend keys carry forward unchanged.
 
-State derivation in this Phase 6 baseline:
-  months_loaded     count(distinct YYYY-MM) over Trade.date
-  as_of             max(Trade.date), null if no rows
-  daily_state       READY if PortfolioDaily has rows, else INITIALIZING
-                    (FAILED deferred to Phase 7 jobs/state machine)
-  daily_last_known  max(PortfolioDaily.date)
-  daily_progress    {} placeholder
+  months_loaded     len(PortfolioStore.months)
+  as_of             PortfolioStore.kpis['as_of'] (parsed-PDF cutoff)
+  daily_state       READY if DailyStore.last_known_date is set,
+                    else INITIALIZING
+  daily_last_known  DailyStore.get_meta('last_known_date')
+  daily_progress    {} placeholder (Phase 7 backfill state machine)
   daily_error       null placeholder
 
-Phase 7 will wire daily_progress and daily_error from a real backfill
-state machine. The keys are reserved here so the response shape is
-stable across phases - the frontend already keys on these in the
-legacy code.
+Why not SQLModel queries: Phase 6.5 routers all read from PortfolioStore
+(JSON aggregate) and the legacy DailyStore (raw SQL on the SQLite cache).
+The new SQLModel ORM tables sit alongside the legacy schema in the same
+DB but use different column names and aren't used on the request path
+yet. Phase 10+ migrates to Trade-table-derived aggregates and the
+SQLModel queries become live.
 """
 from __future__ import annotations
 
-from datetime import date as _date
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
-from sqlmodel import Session, select
 
-from invest.http.deps import get_session
+from invest.http.deps import get_daily_store, get_portfolio_store
 from invest.http.envelope import success
-from invest.persistence.models.portfolio_daily import PortfolioDaily
-from invest.persistence.models.trade import Trade
+from invest.persistence.daily_store import DailyStore
+from invest.persistence.portfolio_store import PortfolioStore
 
 
 router = APIRouter()
 
 
 @router.get("/api/health")
-def health(session: Session = Depends(get_session)) -> dict[str, Any]:
-    return success(_health_payload(session))
+def health(
+    s: PortfolioStore = Depends(get_portfolio_store),
+    daily: DailyStore = Depends(get_daily_store),
+) -> dict[str, Any]:
+    months_loaded = len(s.months)
+    as_of = s.as_of
 
+    try:
+        daily_last_known = daily.get_meta("last_known_date")
+    except Exception:
+        daily_last_known = None
 
-def _health_payload(session: Session) -> dict[str, Any]:
-    months_loaded = _count_distinct_months(session)
-    max_trade_date = session.exec(select(func.max(Trade.date))).one()
-    max_pd_date = session.exec(select(func.max(PortfolioDaily.date))).one()
+    daily_state = "READY" if daily_last_known else "INITIALIZING"
 
-    daily_state = "READY" if max_pd_date is not None else "INITIALIZING"
-
-    return {
+    return success({
         "months_loaded": months_loaded,
-        "as_of": _iso(max_trade_date),
+        "as_of": as_of,
         "daily_state": daily_state,
-        "daily_last_known": _iso(max_pd_date),
+        "daily_last_known": daily_last_known,
         "daily_progress": {},
         "daily_error": None,
-    }
-
-
-def _count_distinct_months(session: Session) -> int:
-    """Distinct YYYY-MM count from Trade.date.
-
-    SQLite's strftime is the most portable way; SQLAlchemy doesn't
-    surface a generic year-month extractor.
-    """
-    stmt = select(func.count(func.distinct(func.strftime("%Y-%m", Trade.date))))
-    return int(session.exec(stmt).one() or 0)
-
-
-def _iso(d: _date | None) -> str | None:
-    return d.isoformat() if d else None
+    })

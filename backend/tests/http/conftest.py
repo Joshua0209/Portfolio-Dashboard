@@ -101,6 +101,23 @@ class _FakeDaily:
     def get_today_snapshot(self) -> dict | None:
         return self.snapshot
 
+    def get_meta(self, key: str) -> str | None:
+        # Tests that need a specific meta value override this method
+        # via attribute assignment (e.g. fake_daily.get_meta = lambda k: ...).
+        return None
+
+    def connect_ro(self):
+        """No-op connection — tests that exercise raw-SQL paths through
+        DailyStore (e.g. trades_overlay) override this with a context
+        manager that yields a real sqlite connection."""
+        from contextlib import nullcontext
+
+        class _NoTable:
+            def execute(self, *_args, **_kwargs):
+                raise Exception("no table")
+
+        return nullcontext(_NoTable())
+
     def get_positions_snapshot(self, _date: str) -> list[dict]:
         return list(self.positions)
 

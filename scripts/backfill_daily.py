@@ -20,11 +20,11 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend" / "src"))
 
-# Mirror app/__init__.py:_load_env so the cold-start CLI sees Shioaji
-# creds (and other env vars) without the operator having to source .env
-# in their shell first. override=False keeps real shell env wins.
+# Load .env so the cold-start CLI sees Shioaji creds (and other env vars)
+# without the operator having to source .env in their shell first.
+# override=False keeps real shell env wins.
 try:
     from dotenv import load_dotenv  # noqa: E402
     _ENV_PATH = ROOT / ".env"
@@ -33,8 +33,8 @@ try:
 except ImportError:
     pass
 
-from app.backfill_runner import run_full_backfill, run_tw_backfill  # noqa: E402
-from app.daily_store import DailyStore  # noqa: E402
+from invest.jobs.backfill_runner import run_full_backfill, run_tw_backfill  # noqa: E402
+from invest.persistence.daily_store import DailyStore  # noqa: E402
 
 
 def main() -> int:
