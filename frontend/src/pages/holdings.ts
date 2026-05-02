@@ -7,6 +7,7 @@ import { EM_DASH, int, month, num, pct, pctAbs, tone, twd } from "../lib/format"
 import type { ChartCtor } from "../lib/charts";
 import { palette } from "../lib/charts";
 import { paintTreemap } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -49,22 +50,6 @@ interface Sector {
   value_twd: number;
   count: number;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, text: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = text;
-};
 
 const KPIS: ReadonlyArray<readonly [string, string, string]> = [
   ["Market value", "kpi-mv", EM_DASH],

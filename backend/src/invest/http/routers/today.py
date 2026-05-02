@@ -34,8 +34,10 @@ Reconcile event projection
 """
 from __future__ import annotations
 
+import math
 import re
-from datetime import date as _date, datetime
+from datetime import date as _date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -44,6 +46,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlmodel import Session, select
 
+from invest.analytics.drawdown import max_drawdown, underwater_curve
+from invest.analytics.ratios import sharpe, sortino
 from invest.http.deps import (
     get_daily_store,
     get_portfolio_store,
@@ -55,6 +59,9 @@ from invest.persistence.models.portfolio_daily import PortfolioDaily
 from invest.jobs import retry_failed, snapshot_workflow
 from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
+
+_TRADING_DAYS_PER_YEAR = 252
+_ONE_DAY = timedelta(days=1)
 
 read_router = APIRouter()
 admin_router = APIRouter()
@@ -100,6 +107,197 @@ def _today_in_tpe() -> str:
     return datetime.now(ZoneInfo("Asia/Taipei")).date().isoformat()
 
 
+def _parse_iso(d: str) -> _date:
+    y, m, dd = (int(p) for p in d.split("-"))
+    return _date(y, m, dd)
+
+
+def _period_anchors(today: _date) -> dict[str, _date]:
+    """Cutoff dates for each window: the period boundary immediately
+    *before* the period started. Anchor equity is the last row whose
+    date is <= cutoff — i.e., the close before the period began.
+    """
+    qtr_first_month = ((today.month - 1) // 3) * 3 + 1
+    return {
+        "MTD": _date(today.year, today.month, 1) - _ONE_DAY,
+        "QTD": _date(today.year, qtr_first_month, 1) - _ONE_DAY,
+        "YTD": _date(today.year, 1, 1) - _ONE_DAY,
+    }
+
+
+def _compute_period_windows(curve: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    last = curve[-1]
+    last_eq = float(last.get("equity_twd") or 0)
+    last_date = _parse_iso(last["date"])
+    cutoffs = _period_anchors(last_date)
+
+    windows: list[dict[str, Any]] = []
+    for label, cutoff in cutoffs.items():
+        anchor = _last_row_on_or_before(curve, cutoff)
+        windows.append(_window_dict(label, anchor, last_eq))
+
+    inception_anchor = curve[0]
+    windows.append(_window_dict("Inception", inception_anchor, last_eq))
+    return windows
+
+
+def _last_row_on_or_before(
+    curve: list[dict[str, Any]], cutoff: _date
+) -> dict[str, Any] | None:
+    """Return the last row whose date <= cutoff, or None.
+
+    Requires curve to be sorted ascending by date (as returned by
+    DailyStore.get_equity_curve). The early break relies on this order —
+    a descending or unsorted curve would produce a silently wrong result.
+    """
+    target = cutoff.isoformat()
+    candidate: dict[str, Any] | None = None
+    for row in curve:
+        if row["date"] <= target:
+            candidate = row
+        else:
+            break
+    return candidate
+
+
+def _window_dict(
+    label: str, anchor: dict[str, Any] | None, last_eq: float
+) -> dict[str, Any]:
+    if anchor is None:
+        return {"label": label, "delta_pct": None, "delta_twd": None, "anchor_date": None}
+    anchor_eq = float(anchor.get("equity_twd") or 0)
+    if anchor_eq <= 0:
+        return {
+            "label": label,
+            "delta_pct": None,
+            "delta_twd": last_eq - anchor_eq,
+            "anchor_date": anchor["date"],
+        }
+    return {
+        "label": label,
+        "delta_pct": ((last_eq / anchor_eq) - 1.0) * 100.0,
+        "delta_twd": last_eq - anchor_eq,
+        "anchor_date": anchor["date"],
+    }
+
+
+def _daily_returns(curve: list[dict[str, Any]]) -> list[Decimal]:
+    """Day-over-day equity returns. Skips rows where the prior equity
+    was non-positive (cannot define a return)."""
+    out: list[Decimal] = []
+    prev: float | None = None
+    for row in curve:
+        eq = float(row.get("equity_twd") or 0)
+        if prev is not None and prev > 0:
+            out.append(Decimal(str((eq / prev) - 1.0)))
+        prev = eq
+    return out
+
+
+def _compute_risk_metrics(curve: list[dict[str, Any]]) -> dict[str, Any]:
+    returns = _daily_returns(curve)
+    n = len(returns)
+    if n < 2:
+        return {"empty": True, "n_days": n}
+
+    floats = [float(r) for r in returns]
+    mean = sum(floats) / n
+    variance = sum((r - mean) ** 2 for r in floats) / (n - 1)
+    stdev = math.sqrt(variance)
+    ann_return = (1.0 + mean) ** _TRADING_DAYS_PER_YEAR - 1.0
+    ann_vol = stdev * math.sqrt(_TRADING_DAYS_PER_YEAR)
+
+    rolling_vol = None
+    if n >= 30:
+        recent = floats[-30:]
+        rmean = sum(recent) / 30
+        rvar = sum((r - rmean) ** 2 for r in recent) / 29
+        rolling_vol = math.sqrt(rvar) * math.sqrt(_TRADING_DAYS_PER_YEAR) * 100.0
+
+    equities = [Decimal(str(row.get("equity_twd") or 0)) for row in curve]
+    mdd = float(max_drawdown(equities))
+    positive = sum(1 for r in floats if r > 0)
+    return {
+        "ann_return_pct": ann_return * 100.0,
+        "ann_vol_pct": ann_vol * 100.0,
+        "rolling_30d_vol_pct": rolling_vol,
+        "sharpe": float(sharpe(returns, periods_per_year=_TRADING_DAYS_PER_YEAR)),
+        "sortino": float(sortino(returns, periods_per_year=_TRADING_DAYS_PER_YEAR)),
+        "max_drawdown_pct": mdd * 100.0,
+        "hit_rate_pct": (positive / n) * 100.0,
+        "best_day_pct": max(floats) * 100.0,
+        "worst_day_pct": min(floats) * 100.0,
+        "n_days": n,
+    }
+
+
+def _compute_calendar(curve: list[dict[str, Any]]) -> dict[str, Any]:
+    cells: list[dict[str, Any]] = []
+    months: dict[tuple[int, int], dict[str, Any]] = {}
+    prev_eq: float | None = None
+    for row in curve:
+        eq = float(row.get("equity_twd") or 0)
+        if prev_eq is not None and prev_eq > 0:
+            ret_pct = ((eq / prev_eq) - 1.0) * 100.0
+            cells.append({"date": row["date"], "return_pct": ret_pct})
+            d = _parse_iso(row["date"])
+            key = (d.year, d.month)
+            if key not in months:
+                months[key] = {
+                    "year": d.year,
+                    "month": d.month,
+                    "label": f"{d.year}-{d.month:02d}",
+                }
+        prev_eq = eq
+    ordered_months = [months[k] for k in sorted(months.keys())]
+    return {"cells": cells, "months": ordered_months}
+
+
+def _compute_movers(daily) -> list[dict[str, Any]]:
+    """Latest two distinct dates from positions_daily — per-symbol
+    market-value % change between them.
+
+    TODO: this function bypasses DailyStore's named-method interface and
+    issues raw SQL via connect_ro directly. Migrate to a
+    DailyStore.get_movers() method so schema changes don't silently break
+    this router branch.
+    """
+    if not hasattr(daily, "connect_ro"):
+        return []
+    with daily.connect_ro() as conn:
+        rows = conn.execute(
+            "SELECT date FROM positions_daily ORDER BY date DESC LIMIT 1"
+        ).fetchall()
+        if not rows:
+            return []
+        latest = rows[0]["date"]
+        prev_row = conn.execute(
+            "SELECT date FROM positions_daily WHERE date < ? ORDER BY date DESC LIMIT 1",
+            (latest,),
+        ).fetchone()
+        if not prev_row:
+            return []
+        prev = prev_row["date"]
+        cur_rows = conn.execute(
+            "SELECT symbol, mv_twd FROM positions_daily WHERE date = ?",
+            (latest,),
+        ).fetchall()
+        prev_rows = conn.execute(
+            "SELECT symbol, mv_twd FROM positions_daily WHERE date = ?",
+            (prev,),
+        ).fetchall()
+    prev_map = {r["symbol"]: r["mv_twd"] for r in prev_rows}
+    movers: list[dict[str, Any]] = []
+    for r in cur_rows:
+        prev_mv = prev_map.get(r["symbol"])
+        if prev_mv is None or prev_mv <= 0:
+            continue
+        delta_pct = ((r["mv_twd"] / prev_mv) - 1.0) * 100.0
+        movers.append({"symbol": r["symbol"], "delta_pct": delta_pct})
+    movers.sort(key=lambda m: abs(m["delta_pct"]), reverse=True)
+    return movers
+
+
 @read_router.get("/api/today/snapshot")
 def today_snapshot(daily=Depends(get_daily_store)) -> Any:
     snap = daily.get_today_snapshot()
@@ -119,7 +317,7 @@ def today_snapshot(daily=Depends(get_daily_store)) -> Any:
 def today_movers(daily=Depends(get_daily_store)) -> Any:
     if _max_pd_date(daily) is None:
         return _initializing_response()
-    return success({"gainers": [], "decliners": []})
+    return success({"movers": _compute_movers(daily)})
 
 
 @read_router.get("/api/today/sparkline")
@@ -134,34 +332,46 @@ def today_sparkline(daily=Depends(get_daily_store)) -> Any:
 def today_period_returns(daily=Depends(get_daily_store)) -> Any:
     if _max_pd_date(daily) is None:
         return _initializing_response()
-    return success({"mtd": 0, "qtd": 0, "ytd": 0, "inception": 0})
+    curve = daily.get_equity_curve()
+    if len(curve) < 2:
+        return success({"empty": True, "windows": []})
+    return success({"windows": _compute_period_windows(curve)})
 
 
 @read_router.get("/api/today/drawdown")
 def today_drawdown(daily=Depends(get_daily_store)) -> Any:
     if _max_pd_date(daily) is None:
         return _initializing_response()
-    return success({"curve": [], "max_drawdown": 0, "current_drawdown": 0})
+    curve = daily.get_equity_curve()
+    if len(curve) < 2:
+        return success({"empty": True, "points": []})
+    equities = [Decimal(str(row.get("equity_twd") or 0)) for row in curve]
+    underwater = underwater_curve(equities)
+    points = [
+        {"date": row["date"], "drawdown_pct": float(dd) * 100.0}
+        for row, dd in zip(curve, underwater)
+    ]
+    return success({"points": points})
 
 
 @read_router.get("/api/today/risk-metrics")
 def today_risk_metrics(daily=Depends(get_daily_store)) -> Any:
     if _max_pd_date(daily) is None:
         return _initializing_response()
-    return success({
-        "annualized_return": 0,
-        "annualized_volatility": 0,
-        "sharpe": 0,
-        "sortino": 0,
-        "hit_rate": 0,
-    })
+    curve = daily.get_equity_curve()
+    if len(curve) < 2:
+        return success({"empty": True})
+    return success(_compute_risk_metrics(curve))
 
 
 @read_router.get("/api/today/calendar")
 def today_calendar(daily=Depends(get_daily_store)) -> Any:
     if _max_pd_date(daily) is None:
         return _initializing_response()
-    return success({"days": []})
+    curve = daily.get_equity_curve()
+    if len(curve) < 2:
+        return success({"empty": True, "cells": [], "months": []})
+    return success(_compute_calendar(curve))
 
 
 @read_router.get("/api/today/freshness")

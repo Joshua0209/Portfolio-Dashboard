@@ -10,7 +10,7 @@ optional read-only Shioaji client that overlays trades that happened *after*
 the most recent monthly statement closed. The daily layer is a regenerable
 cache — wipe `dashboard.db` and the next backfill rebuilds it in 30–60s.
 
-## Architecture (post-Phase 11 cutover, 2026-05-02)
+## Architecture
 
 ```
                     ┌────────────────────────────────────┐
@@ -39,24 +39,16 @@ cache — wipe `dashboard.db` and the next backfill rebuilds it in 30–60s.
                                              └──────────────────┘
 ```
 
-**Cutover state**: The Flask backend on :8000 (legacy `app.py` + `app/api/`) was
-deleted in Phase 9; templates and static assets (`templates/`, `static/`) are
-gone — the dashboard is a Vite+TS SPA in `frontend/`. Phase 10 (2026-05-02)
-deleted the entire transitional `app/` package and the top-level `tests/`
-directory. Every legacy module was ported verbatim into the `invest.*`
-namespace under `backend/src/invest/`, scripts/*.py were rewritten as thin
-shims that import from `invest.jobs.*` / `invest.persistence.*` /
-`invest.brokerage.*` / `invest.reconciliation.*`, and the legacy test
-files moved to `backend/tests/legacy/` with their imports rewritten in
-bulk. Phase 11 (2026-05-02) wired `POST /api/admin/refresh` to the
-canonical `invest.jobs.snapshot_workflow.run` (was previously stubbed
-on the SQLModel-backed `snapshot.run_incremental` scaffold) and shipped
-`invest.jobs.trade_backfill` — the source-side feed for the future
-Trade-table aggregator. `scripts/backfill_trades.py` populates the
-SQLModel `trades` table from `data/portfolio.json` (312 PDF trades →
-`source='pdf'` rows, idempotent). Analytics still read PortfolioStore
-on the request path; Phase 11.2 ports analytics one metric at a time
-with byte-equality verification before flipping the read path.
+**Source-of-truth split**:
+- `data/portfolio.json` — PDF aggregate; canonical for monthly metrics. Read
+  on the request path through `PortfolioStore` (mtime-watched).
+- `data/dashboard.db` — daily SQLite cache (yfinance prices + FX +
+  `positions_daily` + `portfolio_daily`). Regenerable from `portfolio.json`
+  plus public APIs in 30–60s.
+- SQLModel `trades` table — populated from PDFs by `invest.jobs.trade_backfill`
+  (`source='pdf'`) and from the broker by the overlay (`source='overlay'`).
+  Source-side feed for the in-progress analytics-on-trades migration; not
+  yet on the request path — analytics still read PortfolioStore.
 
 ## Layout
 
@@ -80,38 +72,33 @@ investment/
 │   │   │                         #   `app = create_app()` for `uvicorn invest.app:app`
 │   │   ├── core/
 │   │   │   ├── config.py         # pydantic Settings (DAILY_DB_PATH, ADMIN_TOKEN)
-│   │   │   └── state.py          # Backfill state machine singleton (Phase 10
-│   │   │                         #   port of app/backfill_state)
+│   │   │   └── state.py          # Backfill state machine singleton
 │   │   ├── persistence/
-│   │   │   ├── portfolio_store.py   # JSON-backed monthly aggregate (mtime reload;
-│   │   │   │                        #   port of app/data_store)
-│   │   │   ├── daily_store.py    # SQLite WAL wrapper (verbatim port of app/daily_store)
-│   │   │   ├── models/           # SQLModel ORM tables (Phase 11+ Trade-table source)
+│   │   │   ├── portfolio_store.py   # JSON-backed monthly aggregate (mtime reload)
+│   │   │   ├── daily_store.py    # SQLite WAL wrapper
+│   │   │   ├── models/           # SQLModel ORM tables (Trade-table source)
 │   │   │   └── repositories/     # Per-aggregate data access
 │   │   ├── analytics/            # Pure-function analytics
-│   │   │   ├── monthly.py        # Verbatim port of app/analytics.py — month-dict input
-│   │   │   ├── holdings_today.py # Warm/cold reprice resolver (port of app/holdings_today)
+│   │   │   ├── monthly.py        # PortfolioStore-backed (canonical today; month-dict input)
+│   │   │   ├── holdings_today.py # Warm/cold reprice resolver
 │   │   │   ├── twr.py / xirr.py / ratios.py / drawdown.py / concentration.py /
 │   │   │   │ attribution.py / tax_pnl.py / sectors.py
-│   │   │   │   (per-metric files for Phase 11+ Trade-typed inputs)
+│   │   │   │   (per-metric files; trades-backed inputs, in-progress)
 │   │   ├── domain/               # Money, Trade, Side, Venue, Position VOs
 │   │   ├── prices/
-│   │   │   ├── yfinance_client.py    # Verbatim port of app/yfinance_client
+│   │   │   ├── yfinance_client.py    # Network fetcher with cache + retries
 │   │   │   ├── sources.py            # get_prices / get_fx_rates / get_yfinance_prices
-│   │   │   │                         #   (port of app/price_sources)
-│   │   │   ├── price_service.py      # Redesigned (Trade-table aggregator) — coexists
-│   │   │   ├── fx_provider.py        # Redesigned FX provider — coexists
+│   │   │   ├── price_service.py      # Trade-table aggregator (in-progress) — coexists
+│   │   │   ├── fx_provider.py        # Trade-table FX provider (in-progress) — coexists
 │   │   │   └── tw_probe.py
 │   │   ├── brokerage/
-│   │   │   ├── shioaji_client.py     # READ-ONLY (static-grep guard, verbatim port)
+│   │   │   ├── shioaji_client.py     # READ-ONLY (static-grep guard)
 │   │   │   ├── shioaji_sync.py
-│   │   │   └── trade_overlay.py      # 3-source merge + audit-event hook (port of
-│   │   │                             #   app/trade_overlay)
+│   │   │   └── trade_overlay.py      # 3-source merge + audit-event hook
 │   │   ├── ingestion/            # PDF parsing modules (seeder + verifier)
 │   │   ├── reconciliation/
 │   │   │   ├── reconcile.py          # diff_trades / record_event / get_open_events
-│   │   │   │                         #   (port of app/reconcile)
-│   │   │   └── shioaji_audit.py      # Redesigned audit pipeline — coexists
+│   │   │   └── shioaji_audit.py      # Trade-table audit pipeline (in-progress) — coexists
 │   │   ├── benchmarks.py         # yfinance benchmark fetcher + STRATEGIES catalogue
 │   │   ├── http/
 │   │   │   ├── deps.py           # get_session / get_portfolio_store / get_daily_store /
@@ -122,20 +109,19 @@ investment/
 │   │   │                         #   transactions, dividends, fx, tax, risk, cashflows,
 │   │   │                         #   tickers, benchmarks, daily, today (read+admin)
 │   │   └── jobs/
-│   │       ├── backfill_runner.py    # 1725-LOC verbatim port of app/backfill_runner —
-│   │       │                         #   the production cold-start path
+│   │       ├── backfill_runner.py    # 1725-LOC production cold-start path
 │   │       ├── snapshot_workflow.py  # Incremental refresh — backs both
 │   │       │                         #   scripts/snapshot_daily.py AND
-│   │       │                         #   POST /api/admin/refresh (Phase 11)
-│   │       ├── trade_backfill.py     # PDF → SQLModel `trades` table (Phase 11)
+│   │       │                         #   POST /api/admin/refresh
+│   │       ├── trade_backfill.py     # PDF → SQLModel `trades` table
 │   │       ├── backfill.py / snapshot.py / retry_failed.py / verify_month.py
-│   │       │                         # Redesigned scaffolds (Trade-table aggregator) —
-│   │       │                         #   coexist with verbatim ports above
+│   │       │                         # Trade-table aggregator scaffolds (in-progress) —
+│   │       │                         #   coexist with the canonical jobs above
 │   │       └── _positions.py / _dlq.py
 │   └── tests/                    # ~870 tests (pytest)
 │       ├── analytics/ brokerage/ core/ domain/ http/ ingestion/
 │       ├── jobs/ persistence/ prices/ reconciliation/
-│       └── legacy/               # 149 ports of the old top-level tests/ (Phase 10)
+│       └── legacy/               # 149 tests inherited from the pre-cutover top-level tests/
 │
 ├── frontend/                     # Vite + TypeScript SPA
 │   ├── package.json
@@ -152,7 +138,7 @@ investment/
     ├── decrypt_pdfs.py
     ├── parse_statements.py       # → data/portfolio.json
     ├── backfill_daily.py         # Cold-start daily layer (invest.jobs.backfill_runner)
-    ├── backfill_trades.py        # Phase 11 — populate SQLModel `trades` from PDFs
+    ├── backfill_trades.py        # Populate SQLModel `trades` from PDFs
     ├── snapshot_daily.py         # Incremental refresh (invest.jobs.snapshot_workflow)
     ├── reconcile.py              # Manual PDF-vs-overlay diff
     ├── retry_failed_tasks.py     # Drain DLQ
@@ -206,7 +192,7 @@ cd frontend && npm run dev
 | --- | --- |
 | `SINOPAC_PDF_PASSWORDS` | Comma-separated PDF unlock candidates. The decrypter tries each per file. Different statement types use different passwords (brokerage = National ID, bank = birth date). |
 | `SINOPAC_API_KEY` / `SINOPAC_SECRET_KEY` | Shioaji read-only credentials. When both set, the trade overlay folds post-PDF broker activity into the daily layer. Without them, dashboard runs in PDF-only mode. |
-| `SINOPAC_CA_CERT_PATH` / `SINOPAC_CA_PASSWORD` | Sinopac PKCS#12 (`.pfx`) bundle. **Documented but not consumed** — the static-grep guard forbids `activate_ca` from `app/shioaji_client.py`. Foreign-CA work would go in a separate opt-in module. The `.pfx` file itself is gitignored. |
+| `SINOPAC_CA_CERT_PATH` / `SINOPAC_CA_PASSWORD` | Sinopac PKCS#12 (`.pfx`) bundle. **Documented but not consumed** — the static-grep guard forbids `activate_ca` from `invest.brokerage.shioaji_client`. Foreign-CA work would go in a separate opt-in module. The `.pfx` file itself is gitignored. |
 | `BACKFILL_ON_STARTUP` | Default `false`. Reserved for future FastAPI lifespan hook. |
 | `ADMIN_TOKEN` | Default unset (admin POSTs unauthenticated). When set, `require_admin` requires `X-Admin-Token` header on every `POST /api/admin/*`. |
 | `DAILY_DB_PATH` | Override the default `./data/dashboard.db` location. |
@@ -343,7 +329,7 @@ POST /api/admin/reconcile/<event_id>/dismiss
 grep tests in `backend/tests/brokerage/test_shioaji_client.py` enforce
 this. The dashboard reads broker state; it never modifies it.
 
-The client exposes three read-only surfaces (Phase 11 Path A):
+The client exposes three read-only surfaces:
 | Method | Returns |
 |---|---|
 | `list_trades(start, end)` | Session-only — typically just today's fills |
@@ -371,7 +357,7 @@ PDFs are canonical — auto-fired diffs would be noisy or destructive.
 positions_daily.source='overlay'` so an existing `source='pdf'` row is
 never overwritten.
 
-### 3-source overlay merge (Phase 11 Path A)
+### 3-source overlay merge
 `trade_overlay.merge()` pulls open lots + realized pairs + session trades,
 unifies them into trade-shaped records, dedups by `(date, code, side,
 int(round(qty)))` with priority `realized_pair > list_trades > open_lot`.
@@ -412,83 +398,29 @@ cd backend && pytest tests/analytics/   # Pure-function analytics
 cd backend && pytest tests/jobs/        # Backfill + snapshot orchestration
 ```
 
-## Phase 11 cutover summary (2026-05-02)
+## In-progress migration: analytics on trades
 
-**Done**:
-- `POST /api/admin/refresh` now routes through the canonical
-  `invest.jobs.snapshot_workflow.run` (yfinance + Shioaji + DailyStore +
-  PortfolioStore) — the same code path as `python scripts/snapshot_daily.py`.
-  Previously the endpoint was on the SQLModel-backed `snapshot.run_incremental`
-  scaffold (a no-op orchestrator that never executed real fetches).
-- Added `invest.jobs.trade_backfill` — populates the SQLModel `trades`
-  table from `data/portfolio.json:summary.all_trades`. Maps the 8
-  observed Chinese side strings (`普買/普賣/資買/資賣/櫃買/櫃賣/買進/賣出`)
-  onto the canonical `Side` enum (`CASH_BUY/CASH_SELL/MARGIN_BUY/MARGIN_SELL`),
-  with venue/currency carrying the TW-vs-Foreign and main-vs-OTC distinctions.
-- Idempotent re-run: clears prior `source='pdf'` rows and reinserts.
-  `source='overlay'` rows are never touched (same invariant as
-  `positions_daily`).
-- Smoke-tested against real `data/portfolio.json`: all 312 trades
-  mapped (0 skipped); idempotent re-run round-trips at 312 rows.
-- Added `scripts/backfill_trades.py` (thin shim invoking the backfill).
-- 23 new unit tests in `backend/tests/jobs/test_trade_backfill.py`
-  covering the side mapping, idempotency, overlay-row preservation,
-  and unknown-side leniency.
+The codebase is mid-migration from `PortfolioStore`-backed analytics
+(reading aggregated month-dicts out of `portfolio.json`) to
+`trades`-table-backed analytics (computing monthly aggregates from the
+SQLModel `trades` table on-the-fly).
 
-**Deferred to Phase 11.2+** (the *aggregator* — the hard part):
-- Rewrite analytics modules (`invest.analytics.{twr, xirr, ratios,
-  drawdown, concentration, attribution, tax_pnl, sectors}`) to compute
-  monthly aggregates from the `trades` table on-the-fly, replacing
-  PortfolioStore as the source of truth on the request path. Each
-  metric ships behind a byte-equality verifier (compare new output
-  against `PortfolioStore.summary[*]` for every month in the
-  production dataset) before flipping the corresponding router branch.
-- Wire price + FX repositories on top of the `prices` / `fx_daily`
-  SQLModel tables (the SQLModel scaffolds already exist; need population
-  and read-side verification against `DailyStore`).
-- Decommission `PortfolioStore` once all router branches are flipped.
-
-## Phase 10 cutover summary (2026-05-02)
-
-**Done**:
-- Verbatim-ported the entire transitional `app/` package into the
-  `invest.*` namespace under `backend/src/invest/`:
-  - `app/yfinance_client` → `invest.prices.yfinance_client`
-  - `app/price_sources`   → `invest.prices.sources`
-  - `app/shioaji_client`  → `invest.brokerage.shioaji_client`
-  - `app/trade_overlay`   → `invest.brokerage.trade_overlay`
-  - `app/reconcile`       → `invest.reconciliation.reconcile`
-  - `app/backfill_state`  → `invest.core.state`
-  - `app/backfill_runner` → `invest.jobs.backfill_runner` (1725 LOC)
-  - `app/daily_store`     → `invest.persistence.daily_store`
-  - `app/data_store`      → `invest.persistence.portfolio_store`
-  - `app/holdings_today`  → `invest.analytics.holdings_today`
-  - `app/analytics`       → `invest.analytics.monthly`
-  - `app/benchmarks`      → `invest.benchmarks`
-  - `scripts/snapshot_daily.run` → `invest.jobs.snapshot_workflow.run`
-- Rewrote `scripts/{backfill_daily,snapshot_daily,reconcile,
-  retry_failed_tasks,validate_data}.py` as thin shims pointing at
-  `invest.jobs.*` / `invest.persistence.*` / `invest.brokerage.*` /
-  `invest.reconciliation.*`.
-- Moved the top-level `tests/` directory (149 tests covering the legacy
-  modules) into `backend/tests/legacy/`, rewriting every `from app.X
-  import Y` import in bulk so coverage is preserved against the new
-  namespace.
-- Deleted the entire `app/` package and the top-level `tests/` directory.
-- Deleted the byte-equality parity tests in `backend/tests/analytics/`
-  (their job ended when `app/` was removed — the modules they pinned
-  parity against no longer exist).
-
-**Coexistence note**: The redesigned scaffolds in `invest.jobs.{backfill,
-snapshot,retry_failed}` and `invest.prices.{price_service,fx_provider}`
-and `invest.reconciliation.shioaji_audit` (a Trade-table / SQLModel /
-Repo-pattern design) coexist with the verbatim ports. The verbatim
-ports power production today; the redesigned scaffolds receive features
-as Phase 11+ lands.
-
-**Phase 11+ landed in Phase 11 (2026-05-02)** — see "Phase 11 cutover
-summary" above. The remaining `PortfolioStore` → analytics-on-trades
-migration is now Phase 11.2+.
+State of play:
+- **Source side done**: `invest.jobs.trade_backfill` populates `trades`
+  from `portfolio.json:summary.all_trades`. The overlay writes
+  `source='overlay'` rows; PDFs write `source='pdf'`. Both populated.
+- **Read side not flipped**: every router branch still reads
+  `PortfolioStore`. The redesigned scaffolds in `invest.jobs.{backfill,
+  snapshot,retry_failed}`, `invest.prices.{price_service,fx_provider}`,
+  and `invest.reconciliation.shioaji_audit` coexist with the verbatim
+  ports but are not on the request path.
+- **Migration recipe**: rewrite each analytics module
+  (`invest.analytics.{twr,xirr,ratios,drawdown,concentration,
+  attribution,tax_pnl,sectors}`) to consume `trades`, then ship behind
+  a byte-equality verifier comparing the new output against
+  `PortfolioStore.summary[*]` for every production month before flipping
+  the router branch. `PortfolioStore` retires once every branch is
+  flipped.
 
 ## Files NOT to commit
 

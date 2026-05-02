@@ -4,6 +4,7 @@ import { EM_DASH, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintLine } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -89,17 +90,6 @@ interface FreshnessResponse {
   stale_days?: number;
 }
 
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
 const fmtPct = (n: number | null | undefined, digits = 2): string => {
   if (n === null || n === undefined) return EM_DASH;
   const sign = n > 0 ? "+" : "";
@@ -110,11 +100,6 @@ const fmtSignedTwd = (n: number | null | undefined): string => {
   if (n === null || n === undefined) return EM_DASH;
   const sign = n > 0 ? "+" : "";
   return `${sign}${twd(n)}`;
-};
-
-const setText = (id: string, text: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = text;
 };
 
 const renderScaffold = (outlet: HTMLElement): void => {
@@ -389,6 +374,31 @@ const paintRisk = (data: RiskMetrics): void => {
   setText("risk-window-meta", `${data.n_days ?? 0} trading days`);
 };
 
+const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"] as const;
+
+const monthLength = (year: number, month: number): number =>
+  new Date(year, month, 0).getDate();
+
+const weekdayMon0 = (year: number, month: number, day: number): number => {
+  // JS Date is Sun=0..Sat=6; remap so Mon=0..Sun=6.
+  const dow = new Date(year, month - 1, day).getDay();
+  return (dow + 6) % 7;
+};
+
+const intensityToBg = (
+  ret: number,
+  maxAbs: number,
+): string => {
+  if (maxAbs <= 0) return "var(--bg-elev-2)";
+  const ratio = Math.min(1, Math.abs(ret) / maxAbs);
+  // Linear ramp: 0.2 floor (always slightly tinted) → 0.95 ceiling.
+  const alphaPct = ((0.2 + 0.75 * ratio) * 100).toFixed(1);
+  const token = ret >= 0 ? "--pos" : "--neg";
+  // color-mix lets us blend the design-token color with transparency
+  // without hardcoding hex values, so theme switches keep working.
+  return `color-mix(in oklab, var(${token}) ${alphaPct}%, transparent)`;
+};
+
 const paintCalendar = (data: CalendarResponse): void => {
   const root = document.getElementById("cal-months");
   if (!root) return;
@@ -402,9 +412,44 @@ const paintCalendar = (data: CalendarResponse): void => {
     root.appendChild(empty);
     return;
   }
+
+  const cellByDate = new Map<string, number>();
+  let maxAbs = 0;
+  for (const c of data.cells ?? []) {
+    cellByDate.set(c.date, c.return_pct);
+    if (Math.abs(c.return_pct) > maxAbs) maxAbs = Math.abs(c.return_pct);
+  }
+
   for (const m of data.months ?? []) {
     const card = el("div", { class: "cal-month" });
     card.appendChild(el("div", { class: "cal-month__title" }, m.label));
+
+    const grid = el("div", { class: "cal-month__grid" });
+    for (const w of WEEKDAYS) {
+      grid.appendChild(el("div", { class: "cal-month__weekday" }, w));
+    }
+    const leadingBlanks = weekdayMon0(m.year, m.month, 1);
+    for (let i = 0; i < leadingBlanks; i++) {
+      grid.appendChild(el("div", { class: "cal-cell cal-cell--empty" }));
+    }
+    const days = monthLength(m.year, m.month);
+    for (let d = 1; d <= days; d++) {
+      const iso = `${m.year}-${String(m.month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const ret = cellByDate.get(iso);
+      const cell =
+        ret === undefined
+          ? el("div", { class: "cal-cell cal-cell--no-data" }, String(d))
+          : el("div", { class: "cal-cell" }, String(d));
+      if (ret !== undefined) {
+        cell.style.background = intensityToBg(ret, maxAbs);
+        const sign = ret > 0 ? "+" : "";
+        cell.title = `${iso} · ${sign}${ret.toFixed(2)}%`;
+      } else {
+        cell.title = `${iso} · no trading data`;
+      }
+      grid.appendChild(cell);
+    }
+    card.appendChild(grid);
     root.appendChild(card);
   }
 };

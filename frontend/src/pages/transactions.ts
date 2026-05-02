@@ -7,6 +7,7 @@ import { EM_DASH, date as fmtDate, int, month as fmtMonth, num, pctAbs, tone, tw
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintBar } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -50,22 +51,6 @@ interface AggResponse {
   monthly: ReadonlyArray<Record<string, number | string>>;
   venues: ReadonlyArray<string>;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, t: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = t;
-};
 
 const td = (text: string, cls?: string): HTMLTableCellElement => {
   const c = document.createElement("td");
@@ -227,6 +212,23 @@ const defaultDownloadBlob = (
   URL.revokeObjectURL(url);
 };
 
+const sumByVenueSuffix = (
+  row: Record<string, number | string>,
+  suffix: string,
+  fallback: string,
+): number => {
+  const direct = row[fallback];
+  if (typeof direct === "number") return direct;
+  // Backend returns per-venue prefixed keys (e.g. TW_buy, Foreign_buy).
+  // Sum across every key that ends with `_<suffix>` so the chart reflects
+  // the total trading volume regardless of the venue split.
+  let total = 0;
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v === "number" && k.endsWith(`_${suffix}`)) total += v;
+  }
+  return total;
+};
+
 const paintTxCharts = (Chart: ChartCtor, agg: AggResponse): void => {
   const monthly = agg.monthly ?? [];
   const labels = monthly.map((r) => String(r.month ?? ""));
@@ -235,13 +237,13 @@ const paintTxCharts = (Chart: ChartCtor, agg: AggResponse): void => {
     datasets: [
       {
         label: "Buys (TWD)",
-        data: monthly.map((r) => Number(r.buy_twd ?? 0)),
+        data: monthly.map((r) => sumByVenueSuffix(r, "buy", "buy_twd")),
         color: cssVar("--c1") || palette()[0],
         stack: "vol",
       },
       {
         label: "Sells (TWD)",
-        data: monthly.map((r) => Number(r.sell_twd ?? 0)),
+        data: monthly.map((r) => sumByVenueSuffix(r, "sell", "sell_twd")),
         color: cssVar("--c3") || palette()[2],
         stack: "vol",
       },
@@ -252,13 +254,13 @@ const paintTxCharts = (Chart: ChartCtor, agg: AggResponse): void => {
     datasets: [
       {
         label: "Fees (TWD)",
-        data: monthly.map((r) => Number(r.fees_twd ?? 0)),
+        data: monthly.map((r) => sumByVenueSuffix(r, "fees", "fees_twd")),
         color: cssVar("--c5") || palette()[4],
         stack: "cost",
       },
       {
         label: "Tax (TWD)",
-        data: monthly.map((r) => Number(r.tax_twd ?? 0)),
+        data: monthly.map((r) => sumByVenueSuffix(r, "tax", "tax_twd")),
         color: cssVar("--c7") || palette()[6],
         stack: "cost",
       },
