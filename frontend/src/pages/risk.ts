@@ -1,5 +1,4 @@
-// /risk — drawdown curve, concentration, leverage. Phase 8 Cycle 62.
-// Charts deferred to Cycle 66.
+// /risk — drawdown curve, concentration, leverage.
 
 import { EM_DASH, pct, pctAbs, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";

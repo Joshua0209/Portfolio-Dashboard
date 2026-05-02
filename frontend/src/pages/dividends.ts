@@ -1,6 +1,5 @@
 // /dividends — monthly stacked income, top payers, total-return-on-cost,
-// rebates, full distribution log. Phase 8 Cycle 64.
-// Charts deferred to Cycle 66.
+// rebates, full distribution log.
 
 import { mountDataTable } from "../components/DataTable";
 import { EM_DASH, date as fmtDate, month as fmtMonth, num, twd } from "../lib/format";

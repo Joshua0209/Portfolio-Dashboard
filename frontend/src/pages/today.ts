@@ -1,9 +1,4 @@
-// /today — tactical view: hero, period strip, drawdown, risk, calendar,
-// movers. Phase 8 Cycle 59 port of templates/today.html + pages/today.js.
-//
-// Charts (#equity-sparkline, #dd-chart) and the calendar cell paint are
-// scaffolded but not wired — Cycle 66 sweeps Chart.js + heatmap colors
-// in one pass.
+// /today — tactical view: hero, period strip, drawdown, risk, calendar, movers.
 
 import { EM_DASH, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
@@ -438,6 +433,10 @@ const wireRefresh = (deps: MountDeps, reload: () => Promise<void>): void => {
     btn.disabled = true;
     status.textContent = "Refreshing…";
     try {
+      // X-Admin-Token: deferred — no runtime config mechanism exists yet to
+      // surface the server-side ADMIN_TOKEN to the frontend without a build-time
+      // env var system. When that infrastructure exists, read the token from
+      // localStorage.getItem('adminToken') and inject it as a request header.
       const body = await deps.fetchJson("/api/admin/refresh", { method: "POST" });
       if (body.ok === false) {
         throw new Error(body.error ?? "refresh failed");
