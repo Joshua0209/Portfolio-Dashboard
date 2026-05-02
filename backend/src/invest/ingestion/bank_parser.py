@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass
 from datetime import date as _date_t
 from decimal import Decimal
+from typing import Optional
 
 _NUM = r"-?[\d,]+(?:\.\d+)?"
 
@@ -84,39 +85,32 @@ def _parse_date(s: str) -> _date_t:
 
 
 def categorize(summary: str) -> str:
-    """Keyword-based classifier. Order matters — see module docstring.
-
-    All keyword checks operate on the uppercased summary.  Chinese
-    keywords are case-invariant (no lowercase CJK), so folding to
-    uppercase is a no-op for them but guards against mixed-ASCII
-    summaries (e.g. 'ACH' vs 'ach').  The bare '轉帳' check compares
-    the uppercased strip against '轉帳' for the same reason.
-    """
+    """Keyword-based classifier. Order matters — see module docstring."""
     s = summary.upper()
     if "ACH" in s:
         return "tw_dividend"
-    if "國外股息" in s or "海外股息" in s:
+    if "國外股息" in summary or "海外股息" in summary:
         return "foreign_dividend"
-    if "股票款" in s or "預扣股款" in s:
+    if "股票款" in summary or "預扣股款" in summary:
         return "stock_settle_tw"
-    if "折讓款" in s:
+    if "折讓款" in summary:
         return "rebate"
-    if "股款交割" in s:
+    if "股款交割" in summary:
         return "stock_settle_fx"
-    if "手機換匯" in s:
+    if "手機換匯" in summary:
         return "fx_convert"
-    if "薪資" in s:
+    if "薪資" in summary:
         return "salary"
-    if "利息存入" in s:
+    if "利息存入" in summary:
         return "interest"
-    if "手機轉帳" in s or "跨行轉帳" in s:
+    if "手機轉帳" in summary or "跨行轉帳" in summary:
         return "transfer"
-    if s.strip() == "轉帳":
+    if summary.strip() == "轉帳":
         return "stock_settle_tw"  # bare 轉帳 = refund of 預扣股款 (edge)
     return "other"
 
 
-def parse_bank_tx_line(line: str) -> ParsedBankTx | None:
+def parse_bank_tx_line(line: str) -> Optional[ParsedBankTx]:
     """Parse a tx line into ParsedBankTx with placeholder fields for
     signed_amount / category / ccy.
 
@@ -177,9 +171,9 @@ def parse_bank_text(text: str) -> ParsedBankStatement:
 
     tx_twd: list[ParsedBankTx] = []
     tx_foreign: list[ParsedBankTx] = []
-    current_acct: str | None = None  # "TWD" | "FOREIGN"
-    current_ccy: str | None = None
-    prev_balance: dict[str, Decimal | None] = {"TWD": None, "FOREIGN": None}
+    current_acct: Optional[str] = None  # "TWD" | "FOREIGN"
+    current_ccy: Optional[str] = None
+    prev_balance: dict[str, Optional[Decimal]] = {"TWD": None, "FOREIGN": None}
 
     for raw in text.splitlines():
         line = raw.strip()

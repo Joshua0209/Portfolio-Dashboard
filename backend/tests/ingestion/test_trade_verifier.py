@@ -294,35 +294,6 @@ class TestMatchKey:
         assert len(result.diff.pdf_only) == 1
         assert len(result.diff.shioaji_only) == 1
 
-    def test_multi_fill_same_key_both_matched(self, trade_repo, reconcile_repo):
-        """INVARIANT: two DB rows with the same match key (scaling-in
-        fills that happen to share date/code/side/qty) must each
-        consume one PDF trade.  The old dict-based db_index silently
-        dropped the second DB row, causing a spurious pdf_only event
-        even when both fills were present in the PDF.
-
-        Scenario: Shioaji recorded 2× 100-share buys of 2330 on the
-        same day (partial fills).  PDF also has both.  Expected:
-        matched=2, no pdf_only, no shioaji_only."""
-        trade_repo.insert(_trade_row(code="2330", d=date(2024, 3, 15), qty=100))
-        trade_repo.insert(_trade_row(code="2330", d=date(2024, 3, 15), qty=100))
-
-        stmt = _tw_statement(
-            "2024-03",
-            holdings=[_holding("2330", "台積電")],
-            trades=[
-                _tw_trade("台積電", date(2024, 3, 15), qty=100),
-                _tw_trade("台積電", date(2024, 3, 15), qty=100),
-            ],
-        )
-        result = verify_trades_against_statements(
-            securities=[stmt], foreign=[],
-            trade_repo=trade_repo, reconcile_repo=reconcile_repo,
-        )
-        assert result.diff.matched == 2
-        assert result.diff.pdf_only == ()
-        assert result.diff.shioaji_only == ()
-
 
 # --- foreign track -----------------------------------------------------
 

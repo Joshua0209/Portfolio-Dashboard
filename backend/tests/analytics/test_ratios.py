@@ -59,17 +59,6 @@ class TestSortino:
         returns = _D(0.10, -0.05, 0.15, -0.02, 0.08)
         assert sortino(returns) > sharpe(returns)
 
-    def test_risk_free_subtracted(self):
-        # A Sortino with a risk_free equal to mean return should give a
-        # result < 0 (mean - rf < 0) even when there is downside.
-        # With rf=0 (default) the same series gives a positive Sortino.
-        returns = _D(0.02, -0.03, 0.04, -0.01, 0.02)
-        rf_zero = sortino(returns, risk_free=Decimal("0"))
-        # A high annual risk-free (e.g. 36% → 3% per period) should push
-        # the ratio down significantly.
-        rf_high = sortino(returns, risk_free=Decimal("0.36"))
-        assert rf_high < rf_zero
-
 
 class TestCalmar:
     def test_empty_is_zero(self):

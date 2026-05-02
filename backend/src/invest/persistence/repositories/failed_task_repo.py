@@ -1,7 +1,9 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 from sqlmodel import Session, func, select
-from invest.persistence._utils import utcnow
 from invest.persistence.models.failed_task import FailedTask
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 class FailedTaskRepo:
     def __init__(self, session: Session):
         self.session = session
@@ -37,13 +39,13 @@ class FailedTaskRepo:
             return
         task.attempts += 1
         task.error = error
-        task.last_failed_at = utcnow()
+        task.last_failed_at = _utcnow()
         self.session.add(task)
         self.session.commit()
     def mark_resolved(self, task_id: int) -> None:
         task = self.session.get(FailedTask, task_id)
         if task is None:
             return
-        task.resolved_at = utcnow()
+        task.resolved_at = _utcnow()
         self.session.add(task)
         self.session.commit()

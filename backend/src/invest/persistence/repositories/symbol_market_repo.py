@@ -1,9 +1,13 @@
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Session
 
-from invest.persistence._utils import utcnow
 from invest.persistence.models.symbol_market import SymbolMarket
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class SymbolMarketRepo:
@@ -16,7 +20,7 @@ class SymbolMarketRepo:
         existing = self.session.get(SymbolMarket, record.symbol)
         if existing is not None:
             existing.market = record.market
-            existing.last_verified_at = utcnow()
+            existing.last_verified_at = _utcnow()
             self.session.add(existing)
             self.session.commit()
             self.session.refresh(existing)

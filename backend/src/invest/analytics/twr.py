@@ -27,12 +27,7 @@ def _weight(
     if period_days == 0:
         return _HALF
     elapsed = Decimal((flow_date - period_start).days)
-    raw = (period_days - elapsed) / period_days
-    if raw < _ZERO:
-        return _ZERO
-    if raw > _ONE:
-        return _ONE
-    return raw
+    return (period_days - elapsed) / period_days
 def modified_dietz(
     start_equity: Money,
     end_equity: Money,

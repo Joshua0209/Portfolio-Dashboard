@@ -9,9 +9,10 @@ on the first that opens the file.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 
-def decrypt_pdf(src: Path, dst: Path, passwords: list[str]) -> str | None:
+def decrypt_pdf(src: Path, dst: Path, passwords: list[str]) -> Optional[str]:
     """Try each password in order; save decrypted copy on first hit.
 
     Returns the matching password (for logging — the caller can

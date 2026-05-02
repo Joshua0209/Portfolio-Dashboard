@@ -65,12 +65,7 @@ def load_overrides(path: Path) -> dict[str, str]:
     """
     if not path.exists():
         return {}
-    try:
-        raw = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Malformed JSON in override file {path}: {exc}"
-        ) from exc
+    raw = json.loads(path.read_text())
     out: dict[str, str] = {}
     for k, v in raw.items():
         if k.startswith("_") or not v:
@@ -122,7 +117,6 @@ def resolve_tw_code(trade_name: str, name_to_code: dict[str, str]) -> str:
     if len(n) < _PREFIX_MATCH_FLOOR:
         return ""
     for holding_name, code in name_to_code.items():
-        ratio_ok = len(holding_name) / len(n) < _PREFIX_MATCH_RATIO_CAP
-        if holding_name.startswith(n) and ratio_ok:
+        if holding_name.startswith(n) and len(holding_name) / len(n) < _PREFIX_MATCH_RATIO_CAP:
             return code
     return ""
