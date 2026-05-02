@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.swp
+node_modules/
+.worktrees/
+.claude/
+
+# Sensitive — never commit
+sinopac_pdfs/
+data/
+credentials.json
+token.json
+.env
+
+# Sinopac CA certificate bundle (PKCS#12). Contains both the public cert
+# AND the encrypted private key Sinopac uses to sign trade-authorization
+# requests. Even with the password protection, never commit — leaking
+# cert+password = full trading authority on the linked brokerage account.
+*.pfx
+
+# Daily layer: SQLite cache (regenerable from portfolio.json + APIs in ~30–60s)
+# WAL mode keeps -wal/-shm sidecars next to the main file; cover all three.
+data/dashboard.db
+data/dashboard.db-wal
+data/dashboard.db-shm
+
+# Rotating log output from Flask (created on first request)
+logs/

@@ -1,0 +1,103 @@
+/* Design tokens — single source of truth for color/typography/spacing.
+   Override per theme via [data-theme="..."] selectors. */
+
+:root,
+[data-theme="dark"] {
+  /* Surfaces */
+  --bg: #0c0d10;
+  --bg-elev: #14161b;
+  --bg-elev-2: #1a1d24;
+  --bg-soft: #0f1115;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+
+  /* Text */
+  --text: #e8e9ec;
+  --text-soft: #aab0bc;
+  --text-mute: #6b7280;
+  --text-faint: #4b5260;
+
+  /* Accents */
+  --accent: #d4a45c;
+  --accent-soft: #e6c187;
+  --accent-bg: rgba(212, 164, 92, 0.12);
+
+  /* Semantic */
+  --pos: #4ec9a0;
+  --pos-soft: #6ddcb6;
+  --pos-bg: rgba(78, 201, 160, 0.12);
+  --neg: #e26d6d;
+  --neg-soft: #f08c8c;
+  --neg-bg: rgba(226, 109, 109, 0.12);
+  --warn: #d8a44c;
+  --info: #5c9bd1;
+
+  /* Chart palette */
+  --c1: #d4a45c;
+  --c2: #5c9bd1;
+  --c3: #b78cd1;
+  --c4: #4ec9a0;
+  --c5: #e26d6d;
+  --c6: #e0c66c;
+  --c7: #6dd8d3;
+  --c8: #c4855e;
+
+  /* Typography */
+  --font-sans: "Inter", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-display: "Inter Display", "Inter", system-ui, sans-serif;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+
+  /* Radii */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+
+  /* Shadows */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sh-2: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --sh-3: 0 12px 32px rgba(0, 0, 0, 0.5);
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --d-fast: 120ms;
+  --d-norm: 220ms;
+  --d-slow: 380ms;
+}
+
+[data-theme="light"] {
+  --bg: #f7f6f1;
+  --bg-elev: #ffffff;
+  --bg-elev-2: #ffffff;
+  --bg-soft: #fbfaf6;
+  --line: rgba(20, 22, 28, 0.08);
+  --line-strong: rgba(20, 22, 28, 0.16);
+
+  --text: #14161c;
+  --text-soft: #4a505c;
+  --text-mute: #707684;
+  --text-faint: #9aa0ac;
+
+  --accent: #a47532;
+  --accent-soft: #c19350;
+  --accent-bg: rgba(164, 117, 50, 0.1);
+
+  --pos: #2c8d6e;
+  --pos-soft: #4caa8a;
+  --pos-bg: rgba(44, 141, 110, 0.12);
+  --neg: #b94a4a;
+  --neg-soft: #d06868;
+  --neg-bg: rgba(185, 74, 74, 0.1);
+  --warn: #b48b3a;
+  --info: #3d78ae;
+}

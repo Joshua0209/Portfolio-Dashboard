@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Cashflows · Sinopac Portfolio{% endblock %}
+{% block heading %}Cashflows{% endblock %}
+{% block subtitle %}Capital injected into the portfolio vs. equity actually compounded.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-3 section">
+  <div class="kpi">
+    <span class="kpi-label">Real equity<span tabindex="0" class="info-icon" data-info="Today's actual portfolio value: TW stocks + foreign stocks + bank cash, all in NTD. The number you'd see if you sold everything right now."></span></span>
+    <span class="kpi-value" id="kpi-real">—</span>
+    <span class="kpi-sub">today</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Counterfactual<span tabindex="0" class="info-icon" data-info="What your bank balance would be in the alternative reality where you never invested any of your salary or savings into stocks. = Today's TWD bank + every NTD you actually moved into the broker. Think 'do-nothing' baseline."></span></span>
+    <span class="kpi-value" id="kpi-cf">—</span>
+    <span class="kpi-sub">if never invested</span>
+  </div>
+  <div class="kpi kpi-hero">
+    <span class="kpi-label">Net profit<span tabindex="0" class="info-icon" data-info="Real equity − Counterfactual. The honest answer to 'did investing actually beat doing nothing?' Positive = yes. The % shows it as a return on the capital you committed."></span></span>
+    <span class="kpi-value" id="kpi-profit">—</span>
+    <span class="kpi-sub" id="kpi-profit-pct">—</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Real vs counterfactual<span tabindex="0" class="info-icon" data-info="Solid line = your real equity over time. Dashed line = the counterfactual (cumulative deposits, no investing). The vertical gap between them at any point = your value-add from investing at that moment."></span></h3>
+      <span class="card-sub">cumulative external flows = "what your money would be doing nothing"</span>
+    </div>
+    <div class="chart-box h-320"><canvas id="chart-cf"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly flows<span tabindex="0" class="info-icon" data-info="Three views of the same month. 'Venue split' shows trades by TW vs Foreign with buys negative and sells positive. 'Gross in vs out' counts every bank movement tagged to broker activity (settlements, dividends, FX). 'External deposits' is just the money you actively moved in from outside (peer transfers + salary) — closest to 'how much new capital did I add?'"></span></h3>
+      <div class="toolbar" style="margin: 0;">
+        <select id="flow-view" class="select">
+          <option value="venue">Venue split (buys − / sells +)</option>
+          <option value="gross">Gross in vs out</option>
+          <option value="external">Net broker flow</option>
+          <option value="deposits">External deposits</option>
+        </select>
+      </div>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
+    <div class="text-mute text-tiny" id="flow-hint" style="padding-top: 8px;"></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Cumulative breakdown<span tabindex="0" class="info-icon" data-info="A summary of every cash category over your full history: stock buys/sells, dividends in, FX conversions, salary deposits, etc. Tells you what your bank ledger would look like as one giant grouped invoice."></span></h3>
+      <span class="card-sub">where capital came from / went</span>
+    </div>
+    <div id="breakdown-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Bank ledger<span tabindex="0" class="info-icon" data-info="Raw bank-statement transactions, latest first. The source data feeding everything else on this page. Filter by account (TWD vs foreign USD/HKD), category, or month, and search the memo text. Useful when you need to verify a specific dividend, fee, or settlement."></span></h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="bank-table">
+        <thead><tr>
+          <th class="sortable" data-key="month">Month</th>
+          <th class="sortable" data-key="date">Date</th>
+          <th class="sortable" data-key="account">Account</th>
+          <th class="sortable" data-key="category">Category</th>
+          <th>Memo</th>
+          <th class="sortable" data-key="ccy">Ccy</th>
+          <th class="num sortable" data-key="amount">Amount</th>
+          <th class="num sortable" data-key="amount_twd">Amount (TWD)</th>
+          <th class="num sortable" data-key="balance">Balance</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/cashflows.js') }}"></script>
+{% endblock %}

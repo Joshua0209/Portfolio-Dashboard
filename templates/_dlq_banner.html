@@ -1,0 +1,28 @@
+{# templates/_dlq_banner.html
+
+   Global DLQ alert banner. Rendered on every page via base.html. Hidden
+   by default; the inline script polls /api/admin/failed-tasks once on
+   DOMContentLoaded and unhides itself when at least one external fetch
+   (TW prices / foreign prices / FX) has failed and is still unresolved.
+
+   Why this matters: when the DLQ has open rows, the daily store may be
+   missing prices for one or more tickers — equity_twd on /today and
+   the snapshot KPI can silently understate the real number (most often
+   foreign positions, since yfinance is the flakiest dependency).
+
+   No dismiss control: the banner clears itself automatically once the
+   DLQ is drained (POST /api/admin/retry-failed succeeds, or the next
+   scheduled snapshot fetches the missing data). Hiding a real "data
+   is incomplete" warning would be a footgun.
+#}
+<aside id="dlq-banner" class="banner banner--warn" role="alert" hidden>
+  <div class="banner__body">
+    <strong>Daily data may be incomplete.</strong>
+    <span id="dlq-banner-text"></span>
+  </div>
+  <div class="banner__actions">
+    <a href="/today#developer-tools">Retry now</a>
+  </div>
+</aside>
+
+<script src="{{ url_for('static', filename='js/dlq-banner.js') }}"></script>

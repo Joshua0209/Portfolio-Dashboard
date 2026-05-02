@@ -1,0 +1,10 @@
+Flask>=3.1
+pdfplumber>=0.11
+pikepdf>=10.0
+google-api-python-client>=2.0
+google-auth-oauthlib>=1.0
+yfinance>=0.2
+python-dotenv>=1.0
+requests>=2.31
+shioaji>=1.2
+pytest>=8.0

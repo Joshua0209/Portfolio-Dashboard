@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Performance · Sinopac Portfolio{% endblock %}
+{% block heading %}Performance{% endblock %}
+{% block subtitle %}Time-weighted vs money-weighted returns, drawdown, and rolling windows.{% endblock %}
+
+{% block page_actions %}
+<label class="text-mute text-tiny" style="display:flex; align-items:center; gap: 8px;">
+  TWR method
+  <span tabindex="0" class="info-icon" data-info="How the formula treats the timing of your deposits/withdrawals within a month. Day-weighted (default) uses each trade's actual date — most accurate. Mid-month assumes flows happen on day 15 (legacy / industry shortcut). End-of-month assumes flows happen on the last day (most conservative — never inflates a month's return because of a late-month withdrawal). Toggle to compare; you'll usually see day-weighted closer to your intuition."></span>
+  <select id="twr-method" class="select" style="padding: 4px 8px; font-size: 12px;">
+    <option value="day_weighted">Day-weighted (recommended)</option>
+    <option value="mid_month">Mid-month (legacy)</option>
+    <option value="eom">End-of-month flows</option>
+  </select>
+</label>
+{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi">
+    <span class="kpi-label">TWR (cumulative)<span tabindex="0" class="info-icon" data-info="Time-Weighted Return — sum of every monthly return, compounded together. Ignores when you put money in. This is the apples-to-apples number to compare against an index like 0050 or VOO."></span></span>
+    <span class="kpi-value" id="kpi-twr">—</span>
+    <span class="kpi-sub" id="kpi-twr-sub">deposit-neutral</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">CAGR<span tabindex="0" class="info-icon" data-info="Compound Annual Growth Rate — what your TWR would be if you stretched it to a full year. With less than 12 months of data this is extrapolated and can look unrealistically high; treat as a rough indicator until you have 1+ year of history."></span></span>
+    <span class="kpi-value" id="kpi-cagr">—</span>
+    <span class="kpi-sub">annualized TWR</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">XIRR<span tabindex="0" class="info-icon" data-info="The actual annual rate your NTD earned, accounting for when you deposited each chunk. Money you deposited recently has had less time to grow, so XIRR is usually lower than CAGR for active investors who keep adding."></span></span>
+    <span class="kpi-value" id="kpi-xirr">—</span>
+    <span class="kpi-sub">money-weighted</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Hit rate<span tabindex="0" class="info-icon" data-info="What % of months ended green. Higher = more consistent. 50% is coin-flip; 65%+ suggests skill (over a long enough sample)."></span></span>
+    <span class="kpi-value" id="kpi-hit">—</span>
+    <span class="kpi-sub" id="kpi-hit-sub">positive months</span>
+  </div>
+</div>
+
+<div class="card-grid cards-4 section">
+  <div class="kpi">
+    <span class="kpi-label">Annualized volatility<span tabindex="0" class="info-icon" data-info="How wildly your returns swing in a typical year. Under 10% = calm (bond-like). 15-25% = normal stock portfolio. Over 40% = wild ride. Higher vol means bigger ups AND bigger downs."></span></span>
+    <span class="kpi-value" id="kpi-vol">—</span>
+    <span class="kpi-sub">σ × √12</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Sharpe (rf=0)<span tabindex="0" class="info-icon" data-info="Average excess return ÷ total volatility, annualized. Are you being paid for the risk you're taking? Reference bands (annualized): &lt; 0.5 poor · 0.5–1.0 sub-par · 1.0–2.0 good · 2.0–3.0 great · &gt; 3.0 elite or thin sample. The S&amp;P 500's long-run Sharpe is ~0.4–0.6; a hedge-fund target is typically &gt; 1."></span></span>
+    <span class="kpi-value" id="kpi-sharpe">—</span>
+    <span class="kpi-sub" id="kpi-sharpe-sub">return per unit of risk</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Sortino<span tabindex="0" class="info-icon" data-info="Like Sharpe, but only counts DOWN-month volatility — big up months don't get penalized. Higher = better. Reference bands (annualized): &lt; 1.0 weak / risky · 1.0–2.0 acceptable · 2.0–3.0 good · 3.0–5.0 excellent · &gt; 5.0 elite or thin sample. As a rough rule, Sortino runs ~1.3–1.5× a portfolio's Sharpe in normal conditions. With few negative months it can blow up — treat extreme values with skepticism."></span></span>
+    <span class="kpi-value" id="kpi-sortino">—</span>
+    <span class="kpi-sub" id="kpi-sortino-sub">downside-risk adjusted</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Calmar<span tabindex="0" class="info-icon" data-info="CAGR ÷ |max drawdown|. Reward per unit of worst pain. Reference bands: &lt; 0.5 weak · 0.5–1.0 acceptable · 1.0–3.0 strong · &gt; 3.0 exceptional. Capped to ≫10 because tiny drawdowns blow this up — common with &lt; 12 months of data."></span></span>
+    <span class="kpi-value" id="kpi-calmar">—</span>
+    <span class="kpi-sub" id="kpi-calmar-sub">CAGR ÷ |max drawdown|</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Cumulative TWR vs equity<span tabindex="0" class="info-icon" data-info="Solid line = your account's NTD value over time. Dashed line = your TWR (deposit-neutral). The gap between them is mostly capital you've added. When the dashed line rises, you're earning return; when only the solid rises, you're just feeding the account."></span></h3>
+    </div>
+    <div class="chart-box h-320"><canvas id="chart-cum"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly returns<span tabindex="0" class="info-icon" data-info="Each bar is one month's TWR. Green = up, red = down. The pattern shows your consistency: lots of small green = steady; mixed bag = volatile; big red bars = bad streaks worth investigating."></span></h3>
+      <span class="card-sub" id="month-stats">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-monthly"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Drawdown<span tabindex="0" class="info-icon" data-info="How far below your prior all-time-high you were at any point. 0% = at a new high. -10% = you'd be 10% better off if you'd sold at the previous peak. The deepest dip = your max drawdown — the worst stretch you've lived through."></span></h3>
+      <span class="card-sub" id="dd-max">—</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-dd"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Rolling returns<span tabindex="0" class="info-icon" data-info="What you'd have earned if you bought at any month and held for 3, 6, or 12 months. Smoothed view of your recent trend — useful to see if your performance is improving or fading."></span></h3>
+      <span class="card-sub">3M / 6M / 12M compounded</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-rolling"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Attribution: TW · Foreign · FX<span tabindex="0" class="info-icon" data-info="Where each month's profit came from. TW = Taiwan stocks price moves. Foreign = US stock price moves (in USD). FX = pure NTD/USD exchange-rate effect on your USD holdings — a NTD weakening boosts this even if your stocks didn't move."></span></h3>
+      <span class="card-sub">cumulative P&amp;L decomposition</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-attr"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Drawdown episodes<span tabindex="0" class="info-icon" data-info="Each row is one peak-to-trough-to-recovery cycle. Depth = how bad it got; DD months = how long the slide lasted; Recovery = how long until you reclaimed the previous high. 'Open' = still underwater."></span></h3>
+      <span class="card-sub">peak → trough → recovery</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="dd-table">
+        <thead><tr>
+          <th>Peak</th><th>Trough</th><th class="num">Depth</th>
+          <th class="num">DD months</th><th class="num">Recovery</th><th>Status</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Attribution totals (TWD)<span tabindex="0" class="info-icon" data-info="Cumulative P&L from each source over your full history. Helps you see whether your money was actually made on TW stocks, US stocks, or just from the NTD/USD rate moving. The dashboard takes care to separate these three sources so you don't credit currency luck as stock-picking skill."></span></h3>
+      <span class="card-sub" id="attr-totals-sub">stacked composition · total at top</span>
+    </div>
+    <div class="chart-box h-260"><canvas id="chart-attr-totals"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid" style="grid-template-columns: 1.4fr 1fr;">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Per-ticker contribution map<span tabindex="0" class="info-icon" data-info="Treemap: each rectangle is one ticker, sized by |total P&L contribution to the portfolio| (realized + dividends + unrealized). Green = net contributor, red = net detractor. The big squares — wherever the portfolio P&L came from (or got eaten). Click to drill into the ticker page."></span></h3>
+      <span class="card-sub" id="contrib-sub">size = |total P&L| · color = sign</span>
+    </div>
+    <div class="chart-box h-360"><canvas id="contrib-treemap"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Concentration of P&L<span tabindex="0" class="info-icon" data-info="What share of your gains came from your top-N contributors? If 80% of your profit came from 3 names, you have concentration risk on the *upside* — a few stocks are doing all the work. The top-3 / top-5 / top-10 numbers tell you exactly how dependent the portfolio is on its winners."></span></h3>
+      <span class="card-sub">how dependent are you on a few names?</span>
+    </div>
+    <div id="contrib-stats" class="flex-col gap-3 p-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Per-ticker P&L breakdown<span tabindex="0" class="info-icon" data-info="Realized + dividends + unrealized per ticker, sortable. The 'Contribution' column is share of total portfolio P&L — 25% means this single ticker delivered a quarter of all profit (or loss) so far. Use the search to drill into one name."></span></h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="contrib-table">
+        <thead><tr>
+          <th class="sortable" data-key="code">Code</th>
+          <th class="sortable" data-key="name">Name</th>
+          <th class="sortable" data-key="venue">Venue</th>
+          <th class="num sortable" data-key="realized_pnl_twd">Realized</th>
+          <th class="num sortable" data-key="dividends_twd">Dividends</th>
+          <th class="num sortable" data-key="unrealized_pnl_twd">Unrealized</th>
+          <th class="num sortable" data-key="total_pnl_twd">Total P&amp;L</th>
+          <th class="num sortable" data-key="contribution_share">Contribution</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly detail<span tabindex="0" class="info-icon" data-info="Row-by-row breakdown of each month. V_start = equity at start. Flow F = net deposit/withdrawal during month. Weighted flow = how much the TWR formula 'weights' the flow as if invested for fraction of the period (depends on TWR method above). Equity = end-of-month value. Period return = TWR for that month. Cum TWR = compounded TWR-to-date. Drawdown = how far below prior peak."></span></h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="months-table">
+        <thead><tr>
+          <th class="sortable" data-key="sort_key">Month</th>
+          <th class="num sortable" data-key="v_start">V_start</th>
+          <th class="num sortable" data-key="external_flow">Flow F</th>
+          <th class="num sortable" data-key="weighted_flow">Wt. flow</th>
+          <th class="num sortable" data-key="equity_twd">Equity</th>
+          <th class="num sortable" data-key="period_return">Period return</th>
+          <th class="num sortable" data-key="cum_twr">Cum TWR</th>
+          <th class="num sortable" data-key="drawdown">Drawdown</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/performance.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Today | Investment Dashboard{% endblock %}
+{% block heading %}Today{% endblock %}
+{% block subtitle %}
+  Tactical view of the most recent trading session.
+{% endblock %}
+
+{% block page_actions %}
+  <button id="refresh-btn" class="btn btn--primary" type="button">
+    Refresh now
+  </button>
+  <span id="refresh-status" class="meta"></span>
+{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="hero__title">
+    <h2 id="data-date-heading">…</h2>
+    <p id="wallclock-context" class="hero__subtitle" hidden></p>
+  </div>
+  <div class="hero__kpis">
+    <div class="kpi">
+      <span class="kpi__label">Equity (TWD)</span>
+      <span class="kpi__value" id="equity-twd">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi__label">Δ vs prior session</span>
+      <span class="kpi__value" id="delta-twd">—</span>
+      <span class="kpi__sub" id="delta-pct">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi__label">Positions</span>
+      <span class="kpi__value" id="n-positions">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi__label">USD/TWD</span>
+      <span class="kpi__value" id="fx-usd-twd">—</span>
+    </div>
+  </div>
+  <div class="hero__chart">
+    <canvas id="equity-sparkline"></canvas>
+  </div>
+  <div class="period-strip" id="period-strip">
+    <div class="period-strip__cell"><span class="period-strip__label">MTD</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+    <div class="period-strip__cell"><span class="period-strip__label">QTD</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+    <div class="period-strip__cell"><span class="period-strip__label">YTD</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+    <div class="period-strip__cell"><span class="period-strip__label">Inception</span><span class="period-strip__value">—</span><span class="period-strip__sub">—</span></div>
+  </div>
+  <div class="hero__freshness">
+    <span class="freshness-dot" id="freshness-dot"></span>
+    <span id="freshness-text">…</span>
+  </div>
+</section>
+
+<section class="analyst-grid">
+  <div class="drawdown-card">
+    <div class="drawdown-card__header">
+      <h3 class="drawdown-card__title">Underwater equity<span tabindex="0" class="info-icon" data-info="How far below the all-time peak you are right now, plotted as a percentage. 0% = at a new high; -10% = sitting 10% below your best moment. The trough of the curve is your worst drawdown to date. A long flat line near 0% means you're in a calm uptrend; a deep V means you took a hit and recovered."></span></h3>
+      <span class="drawdown-card__current" id="dd-current">—</span>
+    </div>
+    <div class="drawdown-card__chart">
+      <canvas id="dd-chart"></canvas>
+    </div>
+    <p class="text-sm text-mute" id="dd-detail">—</p>
+  </div>
+
+  <div class="risk-tile">
+    <div class="risk-tile__header">
+      <h3 class="risk-tile__title">Risk &amp; return</h3>
+      <span class="risk-tile__sub" id="risk-window-meta">—</span>
+    </div>
+    <div class="risk-tile__grid">
+      <div class="risk-stat">
+        <span class="risk-stat__label">Annualized return</span>
+        <span class="risk-stat__value" id="risk-ann-return">—</span>
+        <span class="risk-stat__detail" id="risk-best-day">—</span>
+      </div>
+      <div class="risk-stat">
+        <span class="risk-stat__label">Annualized vol</span>
+        <span class="risk-stat__value" id="risk-ann-vol">—</span>
+        <span class="risk-stat__detail" id="risk-rolling-vol">—</span>
+      </div>
+      <div class="risk-stat">
+        <span class="risk-stat__label">Sharpe</span>
+        <span class="risk-stat__value" id="risk-sharpe">—</span>
+        <span class="risk-stat__detail" id="risk-sortino">—</span>
+      </div>
+      <div class="risk-stat">
+        <span class="risk-stat__label">Max drawdown</span>
+        <span class="risk-stat__value" id="risk-max-dd">—</span>
+        <span class="risk-stat__detail" id="risk-hit-rate">—</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cal-heatmap">
+  <div class="cal-heatmap__header">
+    <h3 class="cal-heatmap__title">Daily return calendar</h3>
+    <span class="cal-heatmap__legend">
+      <span class="text-mute">−2%</span>
+      <span class="cal-heatmap__legend-bar"></span>
+      <span class="text-mute">+2%</span>
+    </span>
+  </div>
+  <div class="cal-heatmap__months" id="cal-months"></div>
+</section>
+
+<section class="movers">
+  <h3>Top movers</h3>
+  <div class="movers__split">
+    <div>
+      <h4>Gainers</h4>
+      <ul id="movers-up" class="data-list"></ul>
+    </div>
+    <div>
+      <h4>Decliners</h4>
+      <ul id="movers-down" class="data-list"></ul>
+    </div>
+  </div>
+</section>
+
+{% include "_developer_tools.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/today.js') }}"></script>
+{% endblock %}

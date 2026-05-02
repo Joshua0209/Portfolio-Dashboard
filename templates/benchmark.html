@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Benchmark · Sinopac Portfolio{% endblock %}
+{% block heading %}Benchmark{% endblock %}
+{% block subtitle %}Compare your TWR against passive index portfolios and naive single-name picks. Benchmark returns are price-only in each instrument's home currency (TWD for TW, USD for US) — your portfolio TWR is in TWD with FX swings already included.{% endblock %}
+
+{% block content %}
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Pick comparators<span tabindex="0" class="info-icon" data-info="Tick the boxes to overlay one or more reference portfolios on your TWR. The 'passive' rows (0050 / S&P 500) are the baseline a Wall Street analyst would compare you against. 'Mega-cap' picks show what a naive 'just-buy-the-hot-name' strategy would have done. 60/40 shows what a textbook balanced portfolio would have done."></span></h3>
+      <span class="card-sub">Select one or more strategies to overlay against your portfolio.</span>
+    </div>
+    <div class="card-grid cards-2" style="padding: 0;">
+      <div>
+        <div class="text-mute text-tiny" style="margin-bottom: 6px; letter-spacing: 0.12em; text-transform: uppercase;">TW market</div>
+        <div id="strategy-list-tw" class="flex-col gap-2"></div>
+      </div>
+      <div>
+        <div class="text-mute text-tiny" style="margin-bottom: 6px; letter-spacing: 0.12em; text-transform: uppercase;">US market</div>
+        <div id="strategy-list-us" class="flex-col gap-2"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Cumulative TWR — you vs benchmarks<span tabindex="0" class="info-icon" data-info="Solid line = your portfolio's TWR over time, starting at 0% on month 1. Dashed lines = each selected benchmark's TWR over the same window. If you're above the dashed line you're beating that benchmark; if below, you're lagging. The gap at the right edge is the headline 'alpha' of your active management."></span></h3>
+      <span class="card-sub" id="cum-hint">All curves start at 0% on the first month of your portfolio.</span>
+    </div>
+    <div class="chart-box h-360"><canvas id="chart-cum"></canvas></div>
+  </div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Risk-adjusted comparison<span tabindex="0" class="info-icon" data-info="Each dot plots one portfolio at (volatility, return). Higher and to the LEFT is better — same return for less risk, or more return for the same risk. If your dot sits below the benchmark line you took on extra risk for less reward."></span></h3>
+      <span class="card-sub">Higher and to the left is better — more return per unit of vol</span>
+    </div>
+    <div class="chart-box h-280"><canvas id="chart-scatter"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Side-by-side stats<span tabindex="0" class="info-icon" data-info="The TL;DR table. 'Excess vs you' is your TWR minus theirs — positive means you outperformed that benchmark, negative means it beat you. Sharpe and Sortino numbers should be read alongside the per-page tooltips for what counts as 'good'."></span></h3>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="stats-table">
+        <thead><tr>
+          <th>Portfolio</th>
+          <th class="num">TWR</th>
+          <th class="num">Vol (ann.)</th>
+          <th class="num">Max DD</th>
+          <th class="num">Sharpe</th>
+          <th class="num">Sortino</th>
+          <th class="num">Excess vs you</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Monthly return comparison<span tabindex="0" class="info-icon" data-info="Side-by-side monthly returns. Helpful for spotting the month where the gap opened up — was it one bad pick, one bad month, or a steady drift? Look for benchmark months where you went the other way."></span></h3>
+      <span class="card-sub">Where did the gap open up?</span>
+    </div>
+    <div class="chart-box h-320"><canvas id="chart-monthly"></canvas></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/benchmark.js') }}"></script>
+{% endblock %}

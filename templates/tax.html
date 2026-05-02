@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Tax / P&amp;L · Sinopac Portfolio{% endblock %}
+{% block heading %}Tax &amp; P&amp;L</span>{% endblock %}
+{% block subtitle %}Realized P&amp;L (FIFO basis), dividends, unrealized — with holding period and win rate.{% endblock %}
+
+{% block content %}
+<div class="card-grid cards-4 section">
+  <div class="kpi"><span class="kpi-label">Realized (FIFO)<span tabindex="0" class="info-icon" data-info="Profit you've LOCKED IN by selling. Uses FIFO — First-In-First-Out — meaning each sell is matched against your oldest open buy lots. This is the TW tax basis convention. Already-sold gains, after fees and tax."></span></span><span class="kpi-value" id="kpi-real">—</span><span class="kpi-sub" id="kpi-real-sub">closed lots</span></div>
+  <div class="kpi"><span class="kpi-label">Dividends<span tabindex="0" class="info-icon" data-info="All dividend cash you've received, in NTD. In TW, listed-stock dividends under NT$20K/year are tax-free for individuals; dividends over that are subject to separate tax."></span></span><span class="kpi-value" id="kpi-div">—</span><span class="kpi-sub">cash distributions</span></div>
+  <div class="kpi"><span class="kpi-label">Unrealized<span tabindex="0" class="info-icon" data-info="Paper gain/loss on open positions you haven't sold yet. Becomes 'realized' only when you sell — so it doesn't count toward tax until then."></span></span><span class="kpi-value" id="kpi-unreal">—</span><span class="kpi-sub">open positions</span></div>
+  <div class="kpi"><span class="kpi-label">Total return<span tabindex="0" class="info-icon" data-info="Realized + Dividends + Unrealized. Your true bottom line if you sold everything today and counted all cash you've ever received."></span></span><span class="kpi-value" id="kpi-total">—</span><span class="kpi-sub" id="kpi-total-sub">realized + div + unrealized</span></div>
+</div>
+
+<div class="card-grid cards-3 section">
+  <div class="kpi"><span class="kpi-label">Win rate (closed)<span tabindex="0" class="info-icon" data-info="% of FULLY closed positions (all shares sold) that ended profitable. Above 60% is solid. Doesn't include open positions — so a long-term winner you haven't sold yet doesn't count here."></span></span><span class="kpi-value" id="kpi-win">—</span><span class="kpi-sub" id="kpi-win-sub">winners / total</span></div>
+  <div class="kpi"><span class="kpi-label">Avg holding<span tabindex="0" class="info-icon" data-info="Average days between buying a lot and selling it. Short = day-trader / swing-trader. Medium (weeks-months) = active investor. Long (months+) = buy-and-hold. Affects tax treatment in some markets."></span></span><span class="kpi-value" id="kpi-hold">—</span><span class="kpi-sub">days from buy to sell</span></div>
+  <div class="kpi"><span class="kpi-label">Fees + taxes<span tabindex="0" class="info-icon" data-info="Total broker commissions + securities transaction tax paid across every trade. Compare to gross profit — if friction is eating a big % of profits, slow down the trading."></span></span><span class="kpi-value" id="kpi-cost">—</span><span class="kpi-sub" id="kpi-cost-sub">friction</span></div>
+</div>
+
+<div class="section card-grid cards-2">
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Top realized winners<span tabindex="0" class="info-icon" data-info="Your 5 most profitable closed positions, ranked by realized P&L. Click to drill into the trade history for that ticker."></span></h3></div>
+    <div id="winners-list" class="flex-col gap-2"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Top realized losers<span tabindex="0" class="info-icon" data-info="Your 5 worst closed positions. Useful for post-mortem: what went wrong? Sized too big? Held too long? Bad thesis? Pattern across losers tells you about your weaknesses."></span></h3></div>
+    <div id="losers-list" class="flex-col gap-2"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Per-ticker P&amp;L<span tabindex="0" class="info-icon" data-info="Full table per ticker: how much you sold, what's still open, FIFO realized, dividends collected, mark-to-market unrealized, total return, win rate (per-trade), and average holding days. Filter to closed/open/winners/losers. Export CSV for tax filing."></span></h3>
+      <button id="export-tax" class="btn">Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="tax-table">
+        <thead><tr>
+          <th class="sortable" data-key="code">Code</th>
+          <th class="sortable" data-key="name">Name</th>
+          <th class="sortable" data-key="venue">Venue</th>
+          <th class="num sortable" data-key="sell_qty">Sell qty</th>
+          <th class="num sortable" data-key="open_qty">Open qty</th>
+          <th class="num sortable" data-key="cost_of_sold_twd">Cost of sold</th>
+          <th class="num sortable" data-key="sell_proceeds_twd">Proceeds</th>
+          <th class="num sortable" data-key="realized_pnl_twd">Realized (FIFO)</th>
+          <th class="num sortable" data-key="dividends_twd">Dividends</th>
+          <th class="num sortable" data-key="unrealized_pnl_twd">Unrealized</th>
+          <th class="num sortable" data-key="total_pnl_twd">Total return</th>
+          <th class="num sortable" data-key="win_rate">Win rate</th>
+          <th class="num sortable" data-key="avg_holding_days">Hold (d)</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/pages/tax.js') }}"></script>
+{% endblock %}
