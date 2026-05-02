@@ -1,9 +1,4 @@
-// /today — tactical view: hero, period strip, drawdown, risk, calendar,
-// movers. Phase 8 Cycle 59 port of templates/today.html + pages/today.js.
-//
-// Charts (#equity-sparkline, #dd-chart) and the calendar cell paint are
-// scaffolded but not wired — Cycle 66 sweeps Chart.js + heatmap colors
-// in one pass.
+// /today — tactical view: hero, period strip, drawdown, risk, calendar, movers.
 
 import { EM_DASH, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
@@ -407,7 +402,6 @@ const paintCalendar = (data: CalendarResponse): void => {
     root.appendChild(empty);
     return;
   }
-  // Cell paint deferred to Cycle 66.
   for (const m of data.months ?? []) {
     const card = el("div", { class: "cal-month" });
     card.appendChild(el("div", { class: "cal-month__title" }, m.label));
