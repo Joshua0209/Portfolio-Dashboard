@@ -47,6 +47,8 @@ from sqlmodel import Session, select
 from invest.http.deps import get_session, require_admin
 from invest.http.envelope import error, success
 from invest.persistence.models.portfolio_daily import PortfolioDaily
+from invest.jobs import retry_failed, snapshot
+from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 
 read_router = APIRouter()
@@ -188,25 +190,61 @@ def today_reconcile(session: Session = Depends(get_session)) -> dict[str, Any]:
 
 @admin_router.get("/api/admin/failed-tasks")
 def admin_failed_tasks(session: Session = Depends(get_session)) -> dict[str, Any]:
-    return success({"tasks": [], "count": 0})
+    repo = FailedTaskRepo(session)
+    open_tasks = repo.find_open()
+    serialized = [
+        {
+            "id": t.id,
+            "task_type": t.task_type,
+            "payload": t.payload,
+            "error": t.error,
+            "attempts": t.attempts,
+            "first_failed_at": t.first_failed_at.isoformat(),
+            "last_failed_at": t.last_failed_at.isoformat(),
+        }
+        for t in open_tasks
+    ]
+    return success({"tasks": serialized, "count": len(serialized)})
 
 
 @admin_router.post(
     "/api/admin/refresh", dependencies=[Depends(require_admin)],
 )
 def admin_refresh(session: Session = Depends(get_session)) -> dict[str, Any]:
-    return success({
-        "new_dates": 0,
-        "new_rows": 0,
-        "skipped_reason": "snapshot_not_installed",
-    })
+    # Real fetch orchestration is wired at Cycle 51+. Until the
+    # snapshot fetcher pipeline lands, the orchestrator is a no-op
+    # so refresh acts like a "compute daily layer from rows already
+    # in the DB" — same observable shape as the Phase 6 stub when
+    # the daily layer is empty.
+    today = _date.today()
+    summary = snapshot.run_incremental(
+        session,
+        today=today,
+        fetch_orchestrator=lambda s, start, end: None,
+    )
+    return success(summary)
 
 
 @admin_router.post(
     "/api/admin/retry-failed", dependencies=[Depends(require_admin)],
 )
 def admin_retry_failed(session: Session = Depends(get_session)) -> dict[str, Any]:
-    return success({"resolved": 0, "still_failing": 0})
+    # Resolver is intentionally a "nothing to retry" no-op until the
+    # Phase 2 services are wired into a real per-task resolver. This
+    # keeps the envelope honest: if the DLQ is empty, both counters
+    # are 0; if it has rows, every row will count as still_failing
+    # (no false positives for "resolved").
+    def not_yet_wired_resolver(task):
+        def _retry():
+            raise NotImplementedError(
+                "admin retry resolver not yet wired up — run "
+                "scripts/retry_failed.py with a real PriceClient/"
+                "FxClient instead"
+            )
+        return _retry
+
+    summary = retry_failed.run(session, not_yet_wired_resolver)
+    return success(summary)
 
 
 @admin_router.post(
