@@ -167,11 +167,17 @@ def _build_pdf_metadata(last: dict) -> dict[str, dict]:
 
 
 def _default_meta(code: str, position_type: str | None) -> dict:
-    """Best-effort metadata for an overlay-only ticker with no PDF history."""
+    """Best-effort metadata for an overlay-only ticker with no PDF history.
+
+    TW codes are numeric strings (e.g. "2330"); foreign codes start with
+    an alpha char (e.g. "AAPL"). Guard against the empty-string edge case
+    from parser gaps — an empty code is unknown, not TW or Foreign.
+    """
+    is_tw = bool(code) and not code[0].isalpha()
     return {
-        "venue": "TW" if not code[0].isalpha() else "Foreign",
+        "venue": "TW" if is_tw else "Foreign",
         "ccy": "TWD",
-        "name": code,
+        "name": code or "?",
         "avg_cost": 0.0,
         "type": position_type or "現股",
     }

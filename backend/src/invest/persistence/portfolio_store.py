@@ -58,7 +58,11 @@ class PortfolioStore:
     def _maybe_reload(self) -> None:
         if not self._path.exists():
             return
-        mtime = self._path.stat().st_mtime
+        try:
+            mtime = self._path.stat().st_mtime
+        except OSError:
+            # File disappeared between exists() and stat() — transient; skip.
+            return
         if mtime != self._mtime:
             with self._lock:
                 # Double-checked under the lock — another thread may

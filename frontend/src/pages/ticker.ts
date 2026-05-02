@@ -1,6 +1,4 @@
-// /ticker/:code drill-down — header, KPIs, position+pnl chart slots,
-// trades + dividends DataTables. Phase 8 Cycle 65.
-// Charts deferred to Cycle 66.
+// /ticker/:code drill-down — header, KPIs, position+pnl chart, trades + dividends DataTables.
 
 import { mountDataTable } from "../components/DataTable";
 import { EM_DASH, date as fmtDate, int, month as fmtMonth, num, pct, tone, twd } from "../lib/format";

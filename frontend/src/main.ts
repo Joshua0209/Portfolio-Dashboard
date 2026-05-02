@@ -1,6 +1,4 @@
 // Entry point — boots theme, mounts shell, starts router.
-// Phase 8 Cycle 55. Pages are registered as stubs; later cycles fill in
-// the actual mount functions.
 
 import { Chart, registerables } from "chart.js";
 import { TreemapController, TreemapElement } from "chartjs-chart-treemap";

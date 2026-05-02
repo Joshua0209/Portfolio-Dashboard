@@ -1,7 +1,4 @@
-// /performance — TWR/XIRR/drawdown/rolling/attribution. Phase 8 Cycle 61.
-// Charts (cum, monthly, drawdown, rolling, attribution × 2, contrib treemap,
-// contrib stats list) deferred to Cycle 66. Tables, KPIs, method switcher,
-// and drawdown episodes ship here.
+// /performance — TWR/XIRR/drawdown/rolling/attribution.
 
 import { mountDataTable } from "../components/DataTable";
 import { EM_DASH, label, month, pct, pctAbs, tone, twd } from "../lib/format";
@@ -236,7 +233,6 @@ const renderScaffold = (outlet: HTMLElement): void => {
   renderKpiRow(outlet, KPI_ROW_1);
   renderKpiRow(outlet, KPI_ROW_2);
 
-  // Chart slots (paint deferred to Cycle 66)
   const charts1 = el("div", { class: "section" });
   const cumCard = el("div", { class: "card" });
   cumCard.appendChild(el("h3", { class: "card-title" }, "Cumulative TWR vs equity"));
