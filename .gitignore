@@ -28,3 +28,6 @@ data/dashboard.db-shm
 
 # Rotating log output from Flask (created on first request)
 logs/
+
+# Shioaji SDK log written by the broker client at import time
+backend/shioaji.log

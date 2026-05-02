@@ -178,7 +178,7 @@ class TestTransactions:
 
     def test_list_empty(self, client):
         d = _envelope(client.get("/api/transactions"))
-        assert d == [] or d == {"trades": [], "count": 0}
+        assert d == []
 
     def test_list_returns_trade_rows(self, client, engine):
         with Session(engine) as s:
@@ -231,6 +231,35 @@ class TestTransactions:
         assert d["totals"]["trades"] == 3
         # Both venues represented.
         assert set(d["venues"]) == {"TW", "Foreign"}
+
+    def test_list_filter_by_q_positive(self, client, engine):
+        """?q= matches rows whose code contains the query (case-insensitive)."""
+        with Session(engine) as s:
+            s.add(_trade(date(2026, 4, 10), code="2330"))
+            s.add(_trade(date(2026, 4, 11), code="2454"))
+            s.add(_trade(date(2026, 4, 12), code="AAPL"))
+            s.commit()
+        d = _envelope(client.get("/api/transactions?q=23"))
+        assert len(d) == 1
+        assert d[0]["code"] == "2330"
+
+    def test_list_filter_by_q_case_insensitive(self, client, engine):
+        """?q= is case-insensitive so 'aapl' matches code 'AAPL'."""
+        with Session(engine) as s:
+            s.add(_trade(date(2026, 4, 10), code="AAPL"))
+            s.add(_trade(date(2026, 4, 11), code="2330"))
+            s.commit()
+        d = _envelope(client.get("/api/transactions?q=aapl"))
+        assert len(d) == 1
+        assert d[0]["code"] == "AAPL"
+
+    def test_list_filter_by_q_negative(self, client, engine):
+        """?q= with no matching code returns an empty list."""
+        with Session(engine) as s:
+            s.add(_trade(date(2026, 4, 10), code="2330"))
+            s.commit()
+        d = _envelope(client.get("/api/transactions?q=ZZZNOMATCH"))
+        assert d == []
 
 
 # --- /api/dividends ------------------------------------------------------

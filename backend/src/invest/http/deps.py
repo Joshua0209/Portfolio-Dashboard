@@ -17,6 +17,7 @@ the override side-steps this entirely.
 from __future__ import annotations
 
 import os
+import threading
 from typing import Iterator
 
 from fastapi import Header, HTTPException, status
@@ -27,6 +28,9 @@ from invest.core.config import get_settings
 
 
 _engine: Engine | None = None
+# Guard against two concurrent requests both racing through the `is None`
+# check before the engine is fully initialised (double-checked locking).
+_engine_lock = threading.Lock()
 
 
 def _get_engine() -> Engine:
@@ -35,14 +39,17 @@ def _get_engine() -> Engine:
     thread-safe under SQLModel's default settings."""
     global _engine
     if _engine is None:
-        s = get_settings()
-        _engine = create_engine(
-            f"sqlite:///{s.daily_db_path}",
-            connect_args={"timeout": 5},
-        )
-        with _engine.begin() as conn:
-            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-            conn.exec_driver_sql("PRAGMA busy_timeout=5000")
+        with _engine_lock:
+            if _engine is None:  # re-check after acquiring the lock
+                s = get_settings()
+                _engine = create_engine(
+                    f"sqlite:///{s.daily_db_path}",
+                    # busy_timeout PRAGMA below replaces the pysqlite
+                    # connect_args timeout — keep one mechanism only.
+                )
+                with _engine.begin() as conn:
+                    conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+                    conn.exec_driver_sql("PRAGMA busy_timeout=5000")
     return _engine
 
 

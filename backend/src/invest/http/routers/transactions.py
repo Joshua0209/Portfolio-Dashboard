@@ -6,12 +6,17 @@ holdings which depend on the analytics aggregator). Field encoding
 uses the new schema's shape (numeric Side, Decimal price, ISO date) —
 Phase 8 frontend regenerates types from OpenAPI to match.
 
-Filters: ?code, ?venue, ?source, ?month=YYYY-MM (legacy parity).
+Filters: ?code, ?venue, ?source, ?month=YYYY-MM, ?q (legacy parity).
 Sort: descending by date, then by id (stable within same date).
 
 Aggregates today are limited to trade COUNT and per-(month, venue)
 counts. Full TWD totals require currency-converted gross_twd which the
 schema doesn't carry — Phase 7 wires the converter.
+
+Note on ?side=: the legacy endpoint accepted a Chinese-string side
+filter (e.g. "現買"). The new schema encodes Side as an integer enum.
+A ?side= filter is deferred until Phase 8 when the frontend migrates to
+the new OpenAPI types — adding it before then would be dead weight.
 """
 from __future__ import annotations
 
@@ -56,6 +61,7 @@ def list_transactions(
     venue: str | None = Query(default=None),
     source: str | None = Query(default=None),
     month: str | None = Query(default=None),
+    q: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     rows = _all_trades(session)
@@ -67,6 +73,9 @@ def list_transactions(
         rows = [r for r in rows if r.source == source]
     if month:
         rows = [r for r in rows if r.date.strftime("%Y-%m") == month]
+    if q:
+        q_lower = q.lower()
+        rows = [r for r in rows if q_lower in (r.code or "").lower()]
     rows.sort(key=lambda r: (r.date, r.id or 0), reverse=True)
     return success([_serialize(r) for r in rows])
 
