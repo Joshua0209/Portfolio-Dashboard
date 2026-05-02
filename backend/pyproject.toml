@@ -11,6 +11,10 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+pdf = [
+    "pdfplumber>=0.10",
+    "pikepdf>=8.0",
+]
 
 [build-system]
 requires = ["hatchling"]
