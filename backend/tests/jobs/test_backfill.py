@@ -24,10 +24,11 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from invest.core import state as state_module
-from invest.jobs import backfill
+from invest.jobs import _positions, backfill
 from invest.persistence.models.portfolio_daily import PortfolioDaily
 from invest.persistence.models.price import Price
 from invest.persistence.models.trade import Trade
@@ -45,7 +46,14 @@ def _reset_state():
 
 @pytest.fixture
 def engine():
-    e = create_engine("sqlite:///:memory:")
+    # StaticPool shares the in-memory DB across every Session opened
+    # against this engine — required when the worker thread's session
+    # must see tables created on the test thread's session.
+    e = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     SQLModel.metadata.create_all(e)
     return e
 
@@ -120,21 +128,28 @@ class TestRunFullBackfillState:
         assert snap["state"] == "FAILED"
         assert "yfinance unreachable" in snap["error"]
 
-    def test_marks_failed_on_build_daily_exception(self, session):
-        # Build_daily can raise if the schema is broken (e.g. session
-        # closed mid-run). The state machine must still flip to FAILED.
-        def orchestrator(s, start, end):
-            s.close()  # provokes a downstream error in build_daily
+    def test_marks_failed_on_build_daily_exception(
+        self, session, monkeypatch
+    ):
+        # If build_daily itself raises (e.g. corrupt schema), the
+        # state machine must still flip to FAILED rather than leaving
+        # the daily-state stuck on INITIALIZING.
+        def boom(*args, **kwargs):
+            raise RuntimeError("schema corrupt")
 
-        with pytest.raises(Exception):
+        monkeypatch.setattr(_positions, "build_daily", boom)
+
+        with pytest.raises(RuntimeError, match="schema corrupt"):
             backfill.run_full_backfill(
                 session,
                 start=date(2026, 1, 1),
                 end=date(2026, 1, 1),
-                fetch_orchestrator=orchestrator,
+                fetch_orchestrator=lambda s, start, end: None,
             )
 
-        assert state_module.get().snapshot()["state"] == "FAILED"
+        snap = state_module.get().snapshot()
+        assert snap["state"] == "FAILED"
+        assert "schema corrupt" in snap["error"]
 
 
 class TestRunFullBackfillOrchestrator:
