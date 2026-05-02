@@ -48,6 +48,20 @@ class TestSectorOf:
         assert sector_of("", "TW") == "Unknown"
         assert sector_of("", "US") == "Unknown"
 
+    def test_hk_venue_returns_hk_equity_other(self):
+        """HK venue has no curated dict yet; must fall to HK bucket,
+        not silently bleed into US Equity (other)."""
+        assert sector_of("0700", "HK") == "HK Equity (other)"
+
+    def test_jp_venue_returns_jp_equity_other(self):
+        """JP venue similarly must use its own fallback bucket."""
+        assert sector_of("7203", "JP") == "JP Equity (other)"
+
+    def test_unknown_venue_returns_unknown(self):
+        """A venue not in the enum (e.g. 'SG', 'EU') returns 'Unknown'
+        rather than leaking into a US or TW bucket."""
+        assert sector_of("1234", "SG") == "Unknown"
+
 
 # --- sector_breakdown ----------------------------------------------------
 

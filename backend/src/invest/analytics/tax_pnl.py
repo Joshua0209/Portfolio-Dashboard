@@ -7,7 +7,7 @@ silently skipped — Position v1 raises NotImplementedError on those,
 so we filter upstream rather than crash the page.
 """
 from decimal import Decimal
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable
 from invest.domain.money import Money
 from invest.domain.position import Position
 from invest.domain.trade import Side, Trade

@@ -2,7 +2,12 @@
 Each takes a list of period returns (Decimal) and produces an
 annualized Decimal scalar.
   Sharpe : (mean - rf_per_period) / stdev_all  * sqrt(periods/year)
-  Sortino: (mean - rf_per_period) / stdev_negs * sqrt(periods/year)
+  Sortino: (mean - rf_per_period) / downside_stdev * sqrt(periods/year)
+           downside_stdev uses the semi-variance with a full-period
+           denominator (Estrada 2006): sum(neg_r^2) / (n-1), where n is
+           the total number of periods, not just the count of negative
+           periods. This avoids inflation of the ratio in series with few
+           loss periods.
   Calmar : annualized_return / |max_drawdown|
 Convention: when the denominator would be zero (constant returns,
 no downside, no drawdown) the function returns 0 instead of raising

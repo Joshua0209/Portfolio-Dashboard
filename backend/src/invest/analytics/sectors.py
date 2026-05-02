@@ -12,8 +12,6 @@ _TW_SECTOR_HINTS and _US_SECTOR_HINTS. No tests pin individual
 entries — those drift over time and the right place to catch
 staleness is review, not unit tests.
 """
-from __future__ import annotations
-
 from collections import defaultdict
 from typing import Any
 
@@ -64,12 +62,25 @@ def sector_of(code: str, venue: str) -> str:
 
     Empty code returns 'Unknown' (data-quality flag, not a venue
     bucket — an empty code shouldn't skew TW or US weights).
+
+    Venue fallbacks:
+      TW  -> 'TW Equity (other)'   (for unmapped TW tickers)
+      US  -> 'US Equity (other)'   (for unmapped US tickers)
+      HK  -> 'HK Equity (other)'
+      JP  -> 'JP Equity (other)'
+      any other venue -> 'Unknown'
     """
     if not code:
         return "Unknown"
     if venue == "TW":
         return _TW_SECTOR_HINTS.get(code, "TW Equity (other)")
-    return _US_SECTOR_HINTS.get(code.upper(), "US Equity (other)")
+    if venue == "US":
+        return _US_SECTOR_HINTS.get(code.upper(), "US Equity (other)")
+    if venue == "HK":
+        return "HK Equity (other)"
+    if venue == "JP":
+        return "JP Equity (other)"
+    return "Unknown"
 
 
 def sector_breakdown(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:

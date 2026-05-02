@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Dict
 from invest.domain.money import Money
 _ZERO = Decimal("0")
-_ONE = Decimal("1")
 def fx_attribution(
     start_value_local: Money,
     end_value_local: Money,
