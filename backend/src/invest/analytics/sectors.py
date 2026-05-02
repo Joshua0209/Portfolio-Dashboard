@@ -69,14 +69,7 @@ def sector_of(code: str, venue: str) -> str:
         return "Unknown"
     if venue == "TW":
         return _TW_SECTOR_HINTS.get(code, "TW Equity (other)")
-    if venue == "US":
-        return _US_SECTOR_HINTS.get(code.upper(), "US Equity (other)")
-    if venue in ("HK", "JP", "SG", "EU"):
-        return f"{venue} Equity (other)"
-    # Unknown venue — return Unknown rather than leaking into a US bucket.
-    if venue:
-        return f"{venue} Equity (other)"
-    return "Unknown"
+    return _US_SECTOR_HINTS.get(code.upper(), "US Equity (other)")
 
 
 def sector_breakdown(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -35,7 +35,6 @@ class FailedTaskRepo:
         stmt = (
             select(FailedTask)
             .where(FailedTask.task_type == task_type)
-            # json_extract is SQLite-specific; for Postgres use payload["target"] operator
             .where(sa_func.json_extract(FailedTask.payload, "$.target") == target)
             .where(FailedTask.resolved_at.is_(None))
             .order_by(FailedTask.id)

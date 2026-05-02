@@ -38,9 +38,10 @@ def engine():
 
 
 @pytest.fixture
-def client(engine):
+def client(engine, fake_portfolio, fake_daily):
     from invest.app import create_app
     from invest.http.deps import get_session
+    from .conftest import install_store_overrides
 
     app = create_app()
 
@@ -49,6 +50,7 @@ def client(engine):
             yield s
 
     app.dependency_overrides[get_session] = _override
+    install_store_overrides(app, portfolio=fake_portfolio, daily=fake_daily)
     return TestClient(app)
 
 
@@ -91,15 +93,18 @@ class TestPerformance:
         # FastAPI Query enum / Literal type validation produces 422.
         assert r.status_code == 422
 
-    def test_rolling_empty_list(self, client):
+    def test_rolling_empty_envelope(self, client):
         d = _data(client.get("/api/performance/rolling"))
-        assert d == [] or d == {"rows": []}
+        # Legacy returns rolling_3m/6m/12m/sharpe_6m keyed dict, even on empty.
+        # Empty months → empty lists in each rolling key.
+        assert d.get("rolling_3m", []) == []
+        assert d.get("rolling_6m", []) == []
+        assert d.get("rolling_12m", []) == []
 
-    def test_attribution_empty_envelope(self, client):
+    def test_attribution_empty_returns_list(self, client):
         d = _data(client.get("/api/performance/attribution"))
-        # Legacy shape: by_venue + by_ccy buckets even on empty.
-        assert "by_venue" in d
-        assert "by_ccy" in d
+        # Legacy: empty months → envelope([]) — literal empty list.
+        assert d == []
 
 
 # --- /api/risk -----------------------------------------------------------
@@ -133,6 +138,6 @@ class TestCashflows:
 
     def test_bank_empty_envelope(self, client):
         d = _data(client.get("/api/cashflows/bank"))
-        # Legacy: ledger rows + monthly + totals.
-        assert isinstance(d, dict)
-        assert d.get("ledger", []) == []
+        # Legacy returns a flat list of bank ledger rows (one per tx).
+        # Empty months → empty list.
+        assert d == []

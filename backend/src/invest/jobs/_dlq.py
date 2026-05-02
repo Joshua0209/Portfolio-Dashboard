@@ -100,8 +100,7 @@ def record_failure(
     if existing is not None:
         repo.bump_attempt(existing.id, error)
         refreshed = repo.find_by_id(existing.id)
-        if refreshed is None:
-            raise RuntimeError(f"FailedTask {existing.id} vanished after bump_attempt")
+        assert refreshed is not None  # we just looked it up
         return refreshed
     payload = {**payload_extra, "target": target}
     return repo.insert(

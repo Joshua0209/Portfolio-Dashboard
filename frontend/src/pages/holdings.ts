@@ -265,6 +265,8 @@ const renderRow = (r: Holding): HTMLTableCellElement[] => [
 const csvCell = (v: unknown): string => {
   if (v === null || v === undefined) return "";
   const s = String(v);
+  // Prefix formula-injection chars (=, +, -, @, tab, CR) so spreadsheets
+  // do not interpret the cell as a formula.
   const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
   if (safe.includes(",") || safe.includes('"') || safe.includes("\n")) {
     return `"${safe.replace(/"/g, '""')}"`;

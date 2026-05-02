@@ -29,5 +29,8 @@ data/dashboard.db-shm
 # Rotating log output from Flask (created on first request)
 logs/
 
-# Shioaji SDK log written by the broker client at import time
-backend/shioaji.log
+# Shioaji SDK creates shioaji.log in the process CWD on import (see
+# probe scripts that exercise the live API). Drops at repo root and
+# under backend/ depending on where pytest / scripts are invoked.
+shioaji.log
+**/shioaji.log

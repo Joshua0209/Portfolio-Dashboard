@@ -20,7 +20,10 @@ non-admin endpoint wants /_probe it's available.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from sqlmodel import SQLModel
 
 from invest.http.routers.benchmarks import router as benchmarks_router
 from invest.http.routers.cashflows import router as cashflows_router
@@ -41,8 +44,31 @@ from invest.http.routers.today import (
 from invest.http.routers.transactions import router as transactions_router
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Bootstrap schema on first start. create_all is non-destructive —
+    # it only creates missing tables, never alters existing ones.
+    # During the Phase 0→9 transition the new backend points at its own
+    # DAILY_DB_PATH (see .env) so it doesn't collide with the legacy
+    # dashboard.db schema. Phase 0's Alembic plan supersedes this once set up.
+    from invest.http.deps import _get_engine
+    from invest.persistence.models import (  # noqa: F401  (register tables)
+        failed_task,
+        fx_rate,
+        portfolio_daily,
+        position_daily,
+        price,
+        reconcile_event,
+        symbol_market,
+        trade,
+    )
+
+    SQLModel.metadata.create_all(_get_engine())
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="invest backend", version="0.1.0")
+    app = FastAPI(title="invest backend", version="0.1.0", lifespan=_lifespan)
 
     app.include_router(health_router)
     app.include_router(summary_router)
@@ -61,3 +87,10 @@ def create_app() -> FastAPI:
     app.include_router(daily_router)
 
     return app
+
+
+# Module-level instance so `uvicorn invest.app:app` works without --factory.
+# create_app() is environment-clean (no DB I/O at construction), so importing
+# this module is safe in tests too — the lifespan hook is the seam where
+# DB I/O happens, and it only fires on real app startup, not on import.
+app = create_app()

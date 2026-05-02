@@ -261,6 +261,177 @@ def main() -> None:
                     for j, leg in enumerate(legs):
                         print(f"      leg[{j}] {safe_attrs(leg, detail_attrs)}")
 
+        # --- Step 7: 406 fix attempts (only if H account exists) ----------
+        # Tests the four hypotheses in PLAN-refactor-shioaji-canonical.md §3,
+        # in order of safety. Each step short-circuits on success.
+        h_fix_succeeded = False
+        if h_account is not None:
+            hr("STEP 7a: H-account introspection (zero-cost, no broker calls)")
+            try:
+                from shioaji.account import _ACCTTYPE  # type: ignore[attr-defined]
+            except ImportError:
+                _ACCTTYPE = {}
+            print(f"  type(h_account):       {type(h_account).__name__}")
+            print(f"  account_type:          {h_account.account_type!r}")
+            print(f"  account_type.value:    "
+                  f"{getattr(h_account.account_type, 'value', '<n/a>')}")
+            print(f"  signed:                {getattr(h_account, 'signed', '<missing>')}")
+            print(f"  person_id:             "
+                  f"{getattr(h_account, 'person_id', '<missing>')}")
+            print(f"  broker_id:             "
+                  f"{getattr(h_account, 'broker_id', '<missing>')}")
+            print(f"  account_id:            "
+                  f"{getattr(h_account, 'account_id', '<missing>')}")
+            try:
+                astyped = h_account.astype()
+                print(f"  astype():              "
+                      f"{type(astyped).__name__} (no _ACCTTYPE['H'] entry → "
+                      f"falls back to base class)")
+            except Exception as exc:
+                print(f"  astype() ERROR:        {type(exc).__name__}: {exc}")
+            print(f"  _ACCTTYPE has 'H':     {'H' in _ACCTTYPE}")
+            signed = bool(getattr(h_account, "signed", False))
+            print()
+            if not signed:
+                print("  ⚠  signed=False → broker-side foreign API enrollment is")
+                print("     missing. This is hypothesis #2 from PLAN §3 and the")
+                print("     fix is in the SinoPac portal, not in code. The")
+                print("     remaining 7b/7c/7d probes will likely all fail with")
+                print("     401/403 even if the SDK dispatch is fixed.")
+            else:
+                print("  ✓  signed=True → broker has enrolled foreign API. The")
+                print("     406 is then either an SDK class-dispatch issue (7b)")
+                print("     or a session-account-context issue (7c) or a CA-cert")
+                print("     requirement (7d).")
+
+            # --- 7b: cast H account to a StockAccount-typed wrapper -------
+            hr("STEP 7b: cast H → StockAccount-typed (Solace dispatch test)")
+            print("  Hypothesis: the C++ Solace transport keys on the typed")
+            print("  account class. Account(account_type=H) has no typed")
+            print("  wrapper, so it falls into a default route the server")
+            print("  rejects. If we forge a StockAccount with H's id fields,")
+            print("  the dispatch picks the /stocks/positions route — server")
+            print("  may then accept or reject based on the account_id alone.")
+            try:
+                from shioaji.account import StockAccount as _StockAccount
+                forged = _StockAccount(
+                    person_id=h_account.person_id,
+                    broker_id=h_account.broker_id,
+                    account_id=h_account.account_id,
+                    signed=getattr(h_account, "signed", False),
+                    username=getattr(h_account, "username", ""),
+                )
+                # Note: StockAccount sets account_type=AccountType.Stock by
+                # default, overriding H. Override back so we can compare.
+                print(f"  forged: {forged!r}")
+                try:
+                    forged_pos = api.list_positions(forged)
+                    print(f"  list_positions(forged_S): {len(forged_pos)} rows")
+                    for i, pos in enumerate(forged_pos[:5]):
+                        print(f"    [{i}] {safe_attrs(pos, pos_attrs)}")
+                    if forged_pos:
+                        h_fix_succeeded = True
+                        print("  ✓✓ FIX FOUND: forge as StockAccount works.")
+                except Exception as exc:
+                    print(f"  list_positions(forged_S) ERROR: "
+                          f"{type(exc).__name__}: {exc}")
+            except Exception as exc:
+                print(f"  forge ERROR: {type(exc).__name__}: {exc}")
+
+            # --- 7c: set_default_account swap (with try/finally restore) --
+            if not h_fix_succeeded:
+                hr("STEP 7c: set_default_account(h_account) swap + retry")
+                print("  Hypothesis: the Solace layer reads `default_stock_account`")
+                print("  from session state, not the explicit `account=` kwarg.")
+                print("  Swap, retry, then RESTORE — never leave the session in")
+                print("  a corrupted state.")
+                snapshot_default = None
+                try:
+                    snapshot_default = getattr(
+                        api._solace, "default_stock_account", None
+                    )
+                    print(f"  snapshot default_stock_account: {snapshot_default!r}")
+                    try:
+                        api.set_default_account(h_account)
+                        print(f"  swapped → default_stock_account: "
+                              f"{api._solace.default_stock_account!r}")
+                    except Exception as exc:
+                        print(f"  set_default_account ERROR: "
+                              f"{type(exc).__name__}: {exc}")
+                        raise
+                    try:
+                        swapped_pos = api.list_positions(h_account)
+                        print(f"  list_positions(h, default-swapped): "
+                              f"{len(swapped_pos)} rows")
+                        for i, pos in enumerate(swapped_pos[:5]):
+                            print(f"    [{i}] {safe_attrs(pos, pos_attrs)}")
+                        if swapped_pos:
+                            h_fix_succeeded = True
+                            print("  ✓✓ FIX FOUND: default-account swap works.")
+                            print("  Caveat: production must do the same swap")
+                            print("  every read, with try/finally restore.")
+                    except Exception as exc:
+                        print(f"  list_positions(h) ERROR: "
+                              f"{type(exc).__name__}: {exc}")
+                finally:
+                    if snapshot_default is not None:
+                        try:
+                            api._solace.default_stock_account = snapshot_default
+                            api.stock_account = snapshot_default
+                            print(f"  RESTORED default_stock_account: "
+                                  f"{api._solace.default_stock_account!r}")
+                        except Exception as exc:
+                            print(f"  RESTORE ERROR: "
+                                  f"{type(exc).__name__}: {exc}")
+
+            # --- 7d: activate_ca and retry --------------------------------
+            # NOT permitted in shioaji_client.py (static-grep guard) but OK
+            # in this throwaway probe script. If this is the fix, plan §3
+            # mandates a separate opt-in foreign_client.py module.
+            if not h_fix_succeeded:
+                hr("STEP 7d: activate_ca + retry (probe-only — not the client)")
+                ca_path = os.environ.get("SINOPAC_CA_CERT_PATH", "")
+                ca_passwd = os.environ.get("SINOPAC_CA_PASSWORD", "")
+                if not (ca_path and ca_passwd):
+                    print("  SKIPPED — SINOPAC_CA_CERT_PATH / "
+                          "SINOPAC_CA_PASSWORD not set")
+                else:
+                    print(f"  ca_path: {ca_path}")
+                    try:
+                        ok = api.activate_ca(  # noqa: probe-only
+                            ca_path=ca_path, ca_passwd=ca_passwd,
+                        )
+                        print(f"  activate_ca returned: {ok!r}")
+                    except Exception as exc:
+                        print(f"  activate_ca ERROR: "
+                              f"{type(exc).__name__}: {exc}")
+                        ok = False
+                    if ok:
+                        try:
+                            ca_pos = api.list_positions(h_account)
+                            print(f"  list_positions(h, post-CA): "
+                                  f"{len(ca_pos)} rows")
+                            for i, pos in enumerate(ca_pos[:5]):
+                                print(f"    [{i}] {safe_attrs(pos, pos_attrs)}")
+                            if ca_pos:
+                                h_fix_succeeded = True
+                                print("  ✓✓ FIX FOUND: foreign reads need CA.")
+                                print("  Plan §3 mandates a SEPARATE opt-in")
+                                print("  foreign_client.py — must NOT enable")
+                                print("  activate_ca on the read-only client.")
+                        except Exception as exc:
+                            print(f"  list_positions(h, post-CA) ERROR: "
+                                  f"{type(exc).__name__}: {exc}")
+
+            hr("STEP 7 SUMMARY")
+            if h_fix_succeeded:
+                print("  ✓ At least one fix path returned rows. See logs above.")
+            else:
+                print("  ✗ All four hypotheses failed. Foreign stays PDF-canonical.")
+                print("  This is the existing PLAN §3 fallback — no code change")
+                print("  needed; foreign trades are already written by")
+                print("  ingestion/trade_seeder with source='pdf-foreign'.")
+
         # --- Decision summary --------------------------------------------
         hr("DECISION SUMMARY")
         print("Path A is locked in for TW (Step 3 confirmed buy-leg recovery).")
