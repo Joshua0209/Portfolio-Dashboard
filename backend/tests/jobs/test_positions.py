@@ -386,26 +386,40 @@ class TestBuildDailyMixed:
 
 
 class TestBuildDailyForwardFill:
-    def test_price_forward_filled_across_priceless_day(self, session):
+    def test_price_forward_filled_for_symbol_missing_on_some_priced_days(
+        self, session
+    ):
+        # Forward-fill handles per-symbol gaps within priced_dates: if
+        # ANY symbol has a Price row on day d, d is iterated; symbols
+        # silent that day inherit their last-known close. If NO symbol
+        # has a price on d, the day is not iterated at all (legacy
+        # semantics — equity curve is undefined on truly-priceless days).
         d1, d2, d3 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
         _add_trade(
             session, d=d1, code="2330", side=CASH_BUY,
             qty=100, price=Decimal("500"),
         )
+        _add_trade(
+            session, d=d1, code="2317", side=CASH_BUY,
+            qty=200, price=Decimal("100"),
+        )
+        # 2330 priced d1 and d3; silent on d2.
         _add_price(session, d=d1, symbol="2330", close=Decimal("500"))
-        # No price on d2; price returns on d3.
         _add_price(session, d=d3, symbol="2330", close=Decimal("520"))
+        # 2317 priced every day — keeps d2 in priced_dates.
+        _add_price(session, d=d1, symbol="2317", close=Decimal("100"))
+        _add_price(session, d=d2, symbol="2317", close=Decimal("101"))
+        _add_price(session, d=d3, symbol="2317", close=Decimal("102"))
 
         _positions.build_daily(session, start=d1, end=d3)
 
-        positions = (
-            session.query(PositionDaily).order_by(PositionDaily.date).all()
-        )
-        # All three days have a position row — d2 forward-filled at 500.
-        assert len(positions) == 3
-        assert positions[0].close == Decimal("500")
-        assert positions[1].close == Decimal("500")  # forward-filled
-        assert positions[2].close == Decimal("520")
+        rows_2330 = session.query(PositionDaily).filter_by(code="2330").all()
+        # 2330 has a row on every priced day, with d2 close forward-filled.
+        assert len(rows_2330) == 3
+        rows_2330_sorted = sorted(rows_2330, key=lambda r: r.date)
+        assert rows_2330_sorted[0].close == Decimal("500")
+        assert rows_2330_sorted[1].close == Decimal("500")  # forward-filled
+        assert rows_2330_sorted[2].close == Decimal("520")
 
     def test_fx_forward_filled_across_weekend(self, session):
         d_fri, d_mon = date(2026, 1, 9), date(2026, 1, 12)
