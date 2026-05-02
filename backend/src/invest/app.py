@@ -22,7 +22,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from invest.http.routers.benchmarks import router as benchmarks_router
 from invest.http.routers.cashflows import router as cashflows_router
+from invest.http.routers.daily import router as daily_router
 from invest.http.routers.dividends import router as dividends_router
 from invest.http.routers.fx import router as fx_router
 from invest.http.routers.health import router as health_router
@@ -55,5 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(cashflows_router)
     app.include_router(today_read_router)
     app.include_router(today_admin_router)
+    app.include_router(benchmarks_router)
+    app.include_router(daily_router)
 
     return app
