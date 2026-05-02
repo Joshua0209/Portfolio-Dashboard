@@ -173,6 +173,33 @@ class TestDayWeightedMethod:
         assert abs(r - expected) < Decimal("1E-10")
 
 
+class TestDayWeightedOutOfBounds:
+    """_weight must clamp to [0, 1] for flow dates outside the period."""
+
+    def test_flow_after_period_end_clamps_to_zero_weight(self):
+        # A flow dated after period_end gives negative weight without
+        # clamping. Clamping ensures it contributes to the numerator
+        # (net flows) but gets zero weight in the denominator — same as eom.
+        r = modified_dietz(
+            start_equity=Money(Decimal("1000000"), "TWD"),
+            end_equity=Money(Decimal("1200000"), "TWD"),
+            cashflows=[
+                Cashflow(
+                    date=date(2026, 6, 5),  # after period_end 2026-05-31
+                    amount=Money(Decimal("100000"), "TWD"),
+                    kind=CashflowKind.DEPOSIT,
+                )
+            ],
+            method="day_weighted",
+            period_start=date(2026, 5, 1),
+            period_end=date(2026, 5, 31),
+        )
+        # weight clamped to 0: denominator = 1M + 0 = 1M
+        # numerator = 1.2M - 1M - 100K = 100K
+        # r = 100K / 1M = 0.10 (same as eom)
+        assert r == Decimal("0.10")
+
+
 class TestInvalidMethod:
     def test_unknown_method_raises(self):
         with pytest.raises(ValueError, match="unknown method"):

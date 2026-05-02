@@ -27,7 +27,15 @@ def _weight(
     if period_days == 0:
         return _HALF
     elapsed = Decimal((flow_date - period_start).days)
-    return (period_days - elapsed) / period_days
+    raw = (period_days - elapsed) / period_days
+    # Clamp to [0, 1]: a flow outside the period window (late settlement
+    # or data error) must not produce a negative or >1 weight, which
+    # would corrupt the Modified Dietz denominator.
+    if raw < _ZERO:
+        return _ZERO
+    if raw > _ONE:
+        return _ONE
+    return raw
 def modified_dietz(
     start_equity: Money,
     end_equity: Money,

@@ -2,8 +2,12 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from sqlmodel import Session, select
 from invest.persistence.models.reconcile_event import ReconcileEvent
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
 class ReconcileRepo:
     def __init__(self, session: Session):
         self.session = session
