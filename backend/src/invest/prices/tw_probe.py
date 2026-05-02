@@ -47,7 +47,11 @@ def fetch_tw_with_probe(
         if cached.market == "unknown":
             # Negative cache: both suffixes already probed empty.
             return []
-        suffix = _SUFFIX_BY_VERDICT[cached.market]
+        suffix = _SUFFIX_BY_VERDICT.get(cached.market)
+        if suffix is None:
+            # Unrecognised verdict in cache (should not happen; treat as
+            # unknown so we return [] rather than raising KeyError).
+            return []
         return client.fetch_prices(f"{bare_symbol}{suffix}", start, end)
 
     # Cache miss: probe .TW first, .TWO second.

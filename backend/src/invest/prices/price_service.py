@@ -84,7 +84,7 @@ def fetch_and_store(
     if currency == "TWD" and market_repo is None:
         raise ValueError(
             "currency='TWD' requires market_repo for the .TW/.TWO probe; "
-            "pass an SymbolMarketRepo or use a non-TWD currency"
+            "pass a SymbolMarketRepo or use a non-TWD currency"
         )
 
     try:

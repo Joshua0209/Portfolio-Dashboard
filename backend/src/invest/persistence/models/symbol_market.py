@@ -1,10 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlmodel import Field, SQLModel
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from invest.persistence._utils import utcnow
 
 
 class SymbolMarket(SQLModel, table=True):
@@ -23,5 +21,5 @@ class SymbolMarket(SQLModel, table=True):
 
     symbol: str = Field(primary_key=True)
     market: str
-    resolved_at: datetime = Field(default_factory=_utcnow)
-    last_verified_at: datetime = Field(default_factory=_utcnow)
+    resolved_at: datetime = Field(default_factory=utcnow)
+    last_verified_at: datetime = Field(default_factory=utcnow)
