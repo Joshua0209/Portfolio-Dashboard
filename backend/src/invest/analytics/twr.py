@@ -28,12 +28,6 @@ def _weight(
         return _HALF
     elapsed = Decimal((flow_date - period_start).days)
     raw = (period_days - elapsed) / period_days
-    # Clamp to [0, 1]: a flow_date outside [period_start, period_end]
-    # would otherwise produce a weight < 0 (after period_end) or > 1
-    # (before period_start), both of which silently corrupt the
-    # denominator.  Clamping is the more defensive choice here —
-    # invalid dates still contribute to the numerator (they affect
-    # net flows) but carry a bounded weight.
     if raw < _ZERO:
         return _ZERO
     if raw > _ONE:

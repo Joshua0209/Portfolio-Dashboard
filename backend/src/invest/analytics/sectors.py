@@ -1,12 +1,9 @@
 """Sector classifier (heuristic, no external API).
-
 Hand-curated lookup dicts mapping bare ticker codes to sector
 labels for the /risk and /holdings concentration views. Two pure
 functions:
-
   sector_of(code, venue)       -> str
   sector_breakdown(holdings)   -> list of per-sector aggregates
-
 The dicts here are a verbatim port of app/analytics.py's
 _TW_SECTOR_HINTS and _US_SECTOR_HINTS. No tests pin individual
 entries — those drift over time and the right place to catch
@@ -14,8 +11,6 @@ staleness is review, not unit tests.
 """
 from collections import defaultdict
 from typing import Any
-
-
 _TW_SECTOR_HINTS: dict[str, str] = {
     "0050": "ETF (TW broad)", "00631L": "ETF (TW leveraged)",
     "0051": "ETF (TW mid-cap)", "0056": "ETF (high dividend)",
@@ -35,7 +30,6 @@ _TW_SECTOR_HINTS: dict[str, str] = {
     "2360": "Semiconductors", "2376": "Hardware/EMS", "2369": "Optics",
     "3035": "Semiconductors",
 }
-
 _US_SECTOR_HINTS: dict[str, str] = {
     "NVDA": "Semiconductors", "AMD": "Semiconductors", "AVGO": "Semiconductors",
     "TSM": "Semiconductors", "INTC": "Semiconductors", "MU": "Semiconductors",
@@ -55,14 +49,10 @@ _US_SECTOR_HINTS: dict[str, str] = {
     "CRWD": "Software", "NET": "Software",
     "DDOG": "Software", "SNOW": "Software", "PLTR": "Software",
 }
-
-
 def sector_of(code: str, venue: str) -> str:
     """Classify a single ticker into a sector label.
-
     Empty code returns 'Unknown' (data-quality flag, not a venue
     bucket — an empty code shouldn't skew TW or US weights).
-
     Venue fallbacks:
       TW  -> 'TW Equity (other)'   (for unmapped TW tickers)
       US  -> 'US Equity (other)'   (for unmapped US tickers)
@@ -81,17 +71,12 @@ def sector_of(code: str, venue: str) -> str:
     if venue == "JP":
         return "JP Equity (other)"
     return "Unknown"
-
-
 def sector_breakdown(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Aggregate per-holding market values into per-sector totals.
-
     Each holding dict needs `code`, `venue`, `mkt_value_twd`. Missing
     or None mkt_value_twd is treated as 0.
-
     Returns a list sorted descending by `value_twd`, each entry:
       {sector, value_twd, count, weight}
-
     weight = value_twd / total_value, or 0 if total_value is 0
     (avoids ZeroDivisionError on cold-start backfill).
     """
@@ -105,7 +90,6 @@ def sector_breakdown(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         by_sector[sec]["value"] += v
         by_sector[sec]["count"] += 1
         total += v
-
     out: list[dict[str, Any]] = []
     for sec, agg in by_sector.items():
         out.append(
