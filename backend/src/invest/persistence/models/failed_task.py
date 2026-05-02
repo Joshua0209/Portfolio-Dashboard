@@ -1,12 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlmodel import Field, SQLModel
 from sqlalchemy import Column, JSON
+from sqlmodel import Field, SQLModel
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from invest.persistence._utils import utcnow
 
 
 class FailedTask(SQLModel, table=True):
@@ -17,6 +15,6 @@ class FailedTask(SQLModel, table=True):
     payload: Dict[str, Any] = Field(sa_column=Column(JSON))
     error: str
     attempts: int = Field(default=1)
-    first_failed_at: datetime = Field(default_factory=_utcnow)
-    last_failed_at: datetime = Field(default_factory=_utcnow)
+    first_failed_at: datetime = Field(default_factory=utcnow)
+    last_failed_at: datetime = Field(default_factory=utcnow)
     resolved_at: Optional[datetime] = Field(default=None, index=True)

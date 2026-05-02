@@ -13,6 +13,11 @@ class TradeMapper:
 
     Lives on the persistence side per Clean Architecture: this module
     imports both layers, but the domain itself never imports persistence.
+
+    Round-trip note: to_domain always wraps fee/tax/rebate as Money, even
+    when the DB stores 0. A domain Trade with fee=None round-trips back as
+    fee=Money(Decimal("0"), ccy). After loading from the database, test
+    for no-cost with `fee.amount == 0`, not `fee is None`.
     """
 
     @staticmethod

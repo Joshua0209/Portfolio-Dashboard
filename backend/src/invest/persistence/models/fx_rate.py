@@ -1,13 +1,11 @@
-from datetime import date as _date, datetime, timezone
+from datetime import date as _date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlmodel import Field, SQLModel
 from sqlalchemy import UniqueConstraint
+from sqlmodel import Field, SQLModel
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from invest.persistence._utils import utcnow
 
 
 class FxRate(SQLModel, table=True):
@@ -22,4 +20,4 @@ class FxRate(SQLModel, table=True):
     quote: str = Field(max_length=3, index=True)
     rate: Decimal = Field(max_digits=18, decimal_places=8)
     source: str = Field(index=True)
-    ingested_at: datetime = Field(default_factory=_utcnow)
+    ingested_at: datetime = Field(default_factory=utcnow)

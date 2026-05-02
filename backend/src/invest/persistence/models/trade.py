@@ -1,12 +1,10 @@
-from datetime import date as _date, datetime, timezone
+from datetime import date as _date, datetime
 from decimal import Decimal
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from invest.persistence._utils import utcnow
 
 
 class Trade(SQLModel, table=True):
@@ -24,4 +22,4 @@ class Trade(SQLModel, table=True):
     rebate: Decimal = Field(default=Decimal("0"), max_digits=18, decimal_places=4)
     source: str = Field(index=True)
     venue: str = Field(index=True)
-    ingested_at: datetime = Field(default_factory=_utcnow)
+    ingested_at: datetime = Field(default_factory=utcnow)
