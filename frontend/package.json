@@ -1,0 +1,29 @@
+{
+  "name": "invest-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "gen:api": "openapi-typescript openapi.json -o src/lib/api-types.ts"
+  },
+  "dependencies": {
+    "chart.js": "4.4.6",
+    "chartjs-adapter-date-fns": "3.0.0",
+    "chartjs-chart-treemap": "3.1.0",
+    "date-fns": "3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "happy-dom": "15.11.7",
+    "openapi-typescript": "7.4.4",
+    "typescript": "5.7.2",
+    "vite": "6.0.3",
+    "vitest": "2.1.8"
+  }
+}
