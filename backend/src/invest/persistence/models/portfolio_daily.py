@@ -2,6 +2,7 @@ from datetime import date as _date, datetime
 from decimal import Decimal
 from sqlmodel import Field, SQLModel
 from invest.persistence._utils import utcnow
+
 class PortfolioDaily(SQLModel, table=True):
     """One aggregated portfolio snapshot per day.
     PK is date alone (no source column in the key), unlike PositionDaily

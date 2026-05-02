@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 from invest.persistence._utils import utcnow
+
 class PositionDaily(SQLModel, table=True):
     __tablename__ = "positions_daily"
     __table_args__ = (
