@@ -5,26 +5,11 @@ import { dirname, resolve } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FRONTEND = resolve(HERE, "..");
-const REPO = resolve(FRONTEND, "..");
 
 describe("Phase 8 Cycle 52 — frontend scaffolding", () => {
-  it("tokens.css is copied verbatim from static/", () => {
-    const legacy = readFileSync(resolve(REPO, "static/css/tokens.css"), "utf8");
-    const current = readFileSync(
-      resolve(FRONTEND, "src/styles/tokens.css"),
-      "utf8",
-    );
-    expect(current).toBe(legacy);
-  });
-
-  it("app.css is copied verbatim from static/", () => {
-    const legacy = readFileSync(resolve(REPO, "static/css/app.css"), "utf8");
-    const current = readFileSync(
-      resolve(FRONTEND, "src/styles/app.css"),
-      "utf8",
-    );
-    expect(current).toBe(legacy);
-  });
+  // Note: the legacy static/ sync tests (tokens.css, app.css) were removed
+  // in Phase 12 cutover — static/ was deleted; styles now live only in
+  // frontend/src/styles/ and are no longer mirrored from a Flask static dir.
 
   it("index.html links the design-system stylesheets", () => {
     const html = readFileSync(resolve(FRONTEND, "index.html"), "utf8");
