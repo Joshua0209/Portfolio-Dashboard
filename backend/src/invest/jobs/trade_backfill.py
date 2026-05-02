@@ -26,14 +26,19 @@ run - a parser regression that introduces a 9th string shouldn't block
 the operator from getting the rest of the trades into the table.
 """
 from __future__ import annotations
+
 import logging
 from datetime import date
 from decimal import Decimal
 from typing import Any
+
 from sqlmodel import Session, delete, select
+
 from invest.domain.trade import Side
 from invest.persistence.models.trade import Trade
+
 log = logging.getLogger(__name__)
+
 _SIDE_MAP: dict[str, Side] = {
     "普買": Side.CASH_BUY,
     "普賣": Side.CASH_SELL,
@@ -44,6 +49,8 @@ _SIDE_MAP: dict[str, Side] = {
     "買進": Side.CASH_BUY,
     "賣出": Side.CASH_SELL,
 }
+
+
 def side_from_string(s: str) -> Side:
     """Strict mapping: raises on unknown strings.
     Callers that want lenient handling (e.g. the run() backfill) catch
@@ -55,11 +62,15 @@ def side_from_string(s: str) -> Side:
         return _SIDE_MAP[s]
     except KeyError as e:
         raise ValueError(f"unknown side: {s!r}") from e
+
+
 def _parse_date(s: str) -> date:
     """Accept YYYY-MM-DD and YYYY/MM/DD - the parser emits both."""
     sep = "-" if "-" in s else "/"
     y, m, d = (int(p) for p in s.split(sep))
     return date(y, m, d)
+
+
 def _build_row(t: dict) -> Trade:
     """Project one all_trades dict into a Trade ORM instance.
     Raises ValueError on unknown side strings (caller's responsibility
@@ -79,6 +90,8 @@ def _build_row(t: dict) -> Trade:
         source="pdf",
         venue=str(t.get("venue") or "TW"),
     )
+
+
 def run(session: Session, portfolio: dict) -> dict[str, Any]:
     """Backfill the trades table from portfolio['summary']['all_trades'].
     Returns a summary dict:

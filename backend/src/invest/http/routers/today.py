@@ -61,6 +61,7 @@ from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 
 _TRADING_DAYS_PER_YEAR = 252
+_ONE_DAY = timedelta(days=1)
 
 read_router = APIRouter()
 admin_router = APIRouter()
@@ -116,12 +117,11 @@ def _period_anchors(today: _date) -> dict[str, _date]:
     *before* the period started. Anchor equity is the last row whose
     date is <= cutoff — i.e., the close before the period began.
     """
-    one_day = timedelta(days=1)
     qtr_first_month = ((today.month - 1) // 3) * 3 + 1
     return {
-        "MTD": _date(today.year, today.month, 1) - one_day,
-        "QTD": _date(today.year, qtr_first_month, 1) - one_day,
-        "YTD": _date(today.year, 1, 1) - one_day,
+        "MTD": _date(today.year, today.month, 1) - _ONE_DAY,
+        "QTD": _date(today.year, qtr_first_month, 1) - _ONE_DAY,
+        "YTD": _date(today.year, 1, 1) - _ONE_DAY,
     }
 
 
@@ -144,6 +144,12 @@ def _compute_period_windows(curve: list[dict[str, Any]]) -> list[dict[str, Any]]
 def _last_row_on_or_before(
     curve: list[dict[str, Any]], cutoff: _date
 ) -> dict[str, Any] | None:
+    """Return the last row whose date <= cutoff, or None.
+
+    Requires curve to be sorted ascending by date (as returned by
+    DailyStore.get_equity_curve). The early break relies on this order —
+    a descending or unsorted curve would produce a silently wrong result.
+    """
     target = cutoff.isoformat()
     candidate: dict[str, Any] | None = None
     for row in curve:
@@ -249,7 +255,13 @@ def _compute_calendar(curve: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _compute_movers(daily) -> list[dict[str, Any]]:
     """Latest two distinct dates from positions_daily — per-symbol
-    market-value % change between them."""
+    market-value % change between them.
+
+    TODO: this function bypasses DailyStore's named-method interface and
+    issues raw SQL via connect_ro directly. Migrate to a
+    DailyStore.get_movers() method so schema changes don't silently break
+    this router branch.
+    """
     if not hasattr(daily, "connect_ro"):
         return []
     with daily.connect_ro() as conn:

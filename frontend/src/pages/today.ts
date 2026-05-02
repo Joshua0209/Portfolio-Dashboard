@@ -392,11 +392,11 @@ const intensityToBg = (
   if (maxAbs <= 0) return "var(--bg-elev-2)";
   const ratio = Math.min(1, Math.abs(ret) / maxAbs);
   // Linear ramp: 0.2 floor (always slightly tinted) → 0.95 ceiling.
-  const alpha = (0.2 + 0.75 * ratio).toFixed(3);
+  const alphaPct = ((0.2 + 0.75 * ratio) * 100).toFixed(1);
   const token = ret >= 0 ? "--pos" : "--neg";
   // color-mix lets us blend the design-token color with transparency
   // without hardcoding hex values, so theme switches keep working.
-  return `color-mix(in oklab, var(${token}) ${(parseFloat(alpha) * 100).toFixed(1)}%, transparent)`;
+  return `color-mix(in oklab, var(${token}) ${alphaPct}%, transparent)`;
 };
 
 const paintCalendar = (data: CalendarResponse): void => {
