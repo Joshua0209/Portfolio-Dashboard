@@ -117,16 +117,11 @@ def build_daily(
 
     Returns the row counts written.
     """
-    # Trades before `start` still affect qty in the window — pull all.
-    earlier_trades = list(
-        session.exec(select(Trade).where(Trade.date < start)).all()
+    # Pull all trades up to end in a single query; trades before `start`
+    # still affect qty in the window so we cannot filter to [start, end] only.
+    all_trades = list(
+        session.exec(select(Trade).where(Trade.date <= end)).all()
     )
-    in_window_trades = list(
-        session.exec(
-            select(Trade).where(Trade.date >= start, Trade.date <= end)
-        ).all()
-    )
-    all_trades = earlier_trades + in_window_trades
 
     priced_rows = list(
         session.exec(
@@ -170,14 +165,15 @@ def build_daily(
 
     qty_map = qty_trajectory(all_trades, priced_dates)
 
+    # Pre-group qty_map by date to avoid O(n×m) scan inside the date loop.
+    by_date: dict[_date, dict[str, int]] = {}
+    for (d_key, code), q in qty_map.items():
+        by_date.setdefault(d_key, {})[code] = q
+
     n_positions = 0
     n_portfolio = 0
     for d in priced_dates:
-        held = {
-            code: q
-            for (date_key, code), q in qty_map.items()
-            if date_key == d and q > 0
-        }
+        held = {code: q for code, q in by_date.get(d, {}).items() if q > 0}
         if not held:
             continue
 

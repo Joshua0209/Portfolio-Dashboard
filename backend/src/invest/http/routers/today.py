@@ -211,11 +211,9 @@ def admin_failed_tasks(session: Session = Depends(get_session)) -> dict[str, Any
     "/api/admin/refresh", dependencies=[Depends(require_admin)],
 )
 def admin_refresh(session: Session = Depends(get_session)) -> dict[str, Any]:
-    # Real fetch orchestration is wired at Cycle 51+. Until the
-    # snapshot fetcher pipeline lands, the orchestrator is a no-op
-    # so refresh acts like a "compute daily layer from rows already
-    # in the DB" — same observable shape as the Phase 6 stub when
-    # the daily layer is empty.
+    # When the daily layer is empty, snapshot returns a skip envelope;
+    # the user must call backfill first. This endpoint gap-fills from
+    # last_known_date → today when the daily layer already has rows.
     today = _date.today()
     summary = snapshot.run_incremental(
         session,
