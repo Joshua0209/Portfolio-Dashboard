@@ -8,6 +8,7 @@
 // the visual parity check in Phase 9 passes by construction.
 
 import { toggleTheme } from "../lib/theme";
+import { el } from "../lib/dom";
 
 interface NavEntry {
   href: string;
@@ -73,17 +74,6 @@ export interface Shell {
   setActivePage: (page: string | null) => void;
   outlet: HTMLElement;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 
 const renderNav = (): HTMLElement => {
   const nav = el("nav", { class: "nav" });

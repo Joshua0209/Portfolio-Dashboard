@@ -143,7 +143,7 @@ is unset.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `SINOPAC_PDF_PASSWORDS` | for `decrypt_pdfs.py` | Comma-separated unlock candidates; the decrypter tries each per file. |
-| `SINOPAC_API_KEY` | optional | Read-only Shioaji credential. When set, the daily layer overlays post-PDF trades. Never used to place orders — `app/shioaji_client.py` does not import any order/CA symbols. **Must be present before the backend starts** — editing `.env` while uvicorn is running has no effect on the running process. |
+| `SINOPAC_API_KEY` | optional | Read-only Shioaji credential. When set, the daily layer overlays post-PDF trades. Never used to place orders — `invest.brokerage.shioaji_client` does not import any order/CA symbols. **Must be present before the backend starts** — editing `.env` while uvicorn is running has no effect on the running process. |
 | `SINOPAC_SECRET_KEY` | optional | Pair of `SINOPAC_API_KEY`. Same restart caveat. |
 | `SINOPAC_CA_CERT_PATH` | unused (read-only contract) | Absolute path to the PKCS#12 `.pfx` certificate. **Documented but not consumed today.** Keep the file gitignored via `*.pfx`. |
 | `SINOPAC_CA_PASSWORD` | unused (read-only contract) | Unlock password for the `.pfx`. |
@@ -255,9 +255,9 @@ PDF month-end. If today falls inside the latest PDF month,
 `compute_gap_window` returns `None` and the merge is a clean no-op
 (logged as `skipped: reason=no_gap`).
 
-**Three complementary read surfaces (Phase 11 Path A).** The overlay
-no longer relies on `api.list_trades()` alone. The shioaji 1.3.x SDK
-exposes three methods, all read-only, all pulled by `trade_overlay.merge()`:
+**Three complementary read surfaces.** The overlay does not rely on
+`api.list_trades()` alone. The shioaji 1.3.x SDK exposes three methods,
+all read-only, all pulled by `trade_overlay.merge()`:
 
 | Surface | Window | What you see |
 |---|---|---|
@@ -330,20 +330,20 @@ investment/
 │   │   ├── persistence/
 │   │   │   ├── portfolio_store.py  # JSON-backed monthly aggregate (mtime-watched)
 │   │   │   ├── daily_store.py    # SQLite WAL wrapper
-│   │   │   ├── models/           # SQLModel ORM tables (Phase 10+)
+│   │   │   ├── models/           # SQLModel ORM tables (trades + price/fx scaffolds)
 │   │   │   └── repositories/
 │   │   ├── analytics/
-│   │   │   ├── monthly.py        # Verbatim port of legacy app/analytics.py
+│   │   │   ├── monthly.py        # PortfolioStore-backed (canonical today)
 │   │   │   ├── holdings_today.py # Warm/cold reprice resolver
-│   │   │   └── {twr,xirr,ratios,drawdown,…}.py  # Phase 10+ Trade-typed inputs
+│   │   │   └── {twr,xirr,ratios,drawdown,…}.py  # trades-backed (in-progress)
 │   │   ├── benchmarks.py         # yfinance fetcher + STRATEGIES
 │   │   ├── domain/               # Money, Trade, Side, Venue, Position
 │   │   ├── prices/               # yfinance + FX provider
 │   │   ├── brokerage/            # Read-only Shioaji client
 │   │   ├── ingestion/            # PDF parsing
 │   │   ├── reconciliation/       # Audit events
-│   │   └── jobs/                 # backfill / snapshot / verify_month
-│   └── tests/                    # 755 tests (pytest)
+│   │   └── jobs/                 # backfill / snapshot / trade_backfill / verify_month
+│   └── tests/                    # ~870 tests (pytest); legacy/ holds the 149 ports
 │
 ├── frontend/                     # Vite + TS SPA (port 5173)
 │   ├── package.json
@@ -355,31 +355,16 @@ investment/
 │       ├── pages/                # one per route
 │       └── styles/{tokens,app}.css
 │
-├── scripts/                      # Pipeline CLI shims (still import legacy app/)
+├── scripts/                      # Thin shims importing invest.jobs.* / invest.persistence.*
 │   ├── download_sinopac_pdfs.py  # Gmail → sinopac_pdfs/
 │   ├── decrypt_pdfs.py           # Env-based password unlock
 │   ├── parse_statements.py       # PDFs → data/portfolio.json
 │   ├── backfill_daily.py         # CLI cold-start backfill
+│   ├── backfill_trades.py        # PDF → SQLModel trades table
 │   ├── snapshot_daily.py         # Incremental refresh
 │   ├── reconcile.py              # CLI mirror of POST /api/admin/reconcile
 │   ├── retry_failed_tasks.py     # CLI mirror of POST /api/admin/retry-failed
 │   └── validate_data.py          # Sanity checks
-│
-├── app/                          # ⚠ Transitional library (Phase 10 deletes)
-│   ├── analytics.py              # ↔ backend/.../analytics/monthly.py (parity-locked)
-│   ├── holdings_today.py         # ↔ backend/.../analytics/holdings_today.py
-│   ├── data_store.py             # ↔ backend/.../persistence/portfolio_store.py
-│   ├── daily_store.py            # ↔ backend/.../persistence/daily_store.py
-│   ├── benchmarks.py             # ↔ backend/.../benchmarks.py
-│   ├── backfill_runner.py        # 1725 LOC — biggest open Phase 10 port
-│   ├── backfill_state.py
-│   ├── price_sources.py
-│   ├── shioaji_client.py         # Read-only (static-grep guard)
-│   ├── trade_overlay.py
-│   ├── reconcile.py
-│   └── yfinance_client.py
-│
-├── tests/                        # Legacy tests (149) — covers retained app/ modules
 │
 ├── data/                         # gitignored — actual portfolio data
 │   ├── portfolio.json            # Parsed dataset consumed by the backend (canonical)
@@ -429,9 +414,9 @@ parameter. When the daily SQLite layer has rows, the body switches to a
 daily-shape payload (per-day rows keyed by `date` instead of monthly rows
 keyed by `month`) and adds `"resolution": "daily"` to the envelope.
 When the daily layer is empty, the parameter is ignored and the monthly
-shape is returned — pages that opt in via `static/js/api.js` therefore
-render correctly even before the cold-start backfill finishes. Currently
-honoured by `/api/summary`, `/api/holdings/timeline`, `/api/performance/*`,
+shape is returned — pages that opt in via `frontend/src/lib/api.ts`
+therefore render correctly even before the cold-start backfill finishes.
+Currently honoured by `/api/summary`, `/api/holdings/timeline`, `/api/performance/*`,
 `/api/risk`, `/api/fx`, `/api/cashflows/monthly`, and
 `/api/benchmarks/compare` (overlay only — strategy curves stay monthly).
 
@@ -467,9 +452,10 @@ POST /api/admin/reconcile/<event_id>/dismiss
 ```
 
 While the daily layer is still warming up, daily/today endpoints return
-HTTP 202 with a `progress` payload instead of 500. The frontend (`static/js/api.js`)
-retries with exponential backoff; on `FAILED` the response is HTTP 503 with
-the error string, and the warming banner deep-links to `/today#developer-tools`.
+HTTP 202 with a `progress` payload instead of 500. The frontend
+(`frontend/src/lib/api.ts`) retries with exponential backoff; on `FAILED`
+the response is HTTP 503 with the error string, and the warming banner
+deep-links to `/today#developer-tools`.
 
 ---
 
@@ -489,8 +475,8 @@ the error string, and the warming banner deep-links to `/today#developer-tools`.
 - **Foreign FX** — only USD positions are TWD-converted right now. If you
   hold HKD or JPY, extend the conversion loop in `scripts/parse_statements.py`.
 - **Sector mapping** is heuristic, not API-backed. See the `_TW_SECTOR_HINTS`
-  and `_US_SECTOR_HINTS` dicts in `app/analytics.py`. Unmapped tickers fall
-  through to "TW Equity (other)" / "US Equity (other)".
+  and `_US_SECTOR_HINTS` dicts in `backend/src/invest/analytics/monthly.py`.
+  Unmapped tickers fall through to "TW Equity (other)" / "US Equity (other)".
 - **Benchmarks need yfinance.** First run hits the network; subsequent runs
   use the 7-day cache in `data/benchmarks.json`.
 - **No auth on read endpoints.** The server is bound to `127.0.0.1` by
@@ -509,15 +495,18 @@ the error string, and the warming banner deep-links to `/today#developer-tools`.
 
 To add a new metric:
 
-1. Implement it in `app/analytics.py` (pure-Python, no I/O — keep it testable).
-2. Surface it in the relevant blueprint under `app/api/`.
-3. Wire a chart or KPI tile in `templates/<page>.html` and the matching
-   `static/js/pages/<page>.js`.
-4. Add an `info-icon` next to the title with a one-sentence rookie-friendly
-   explanation (`<span tabindex="0" class="info-icon" data-info="..."></span>`).
+1. Implement it in `backend/src/invest/analytics/` (pure-Python, no I/O —
+   keep it testable). The current canonical module is `monthly.py`; the
+   per-metric `{twr,xirr,ratios,…}.py` files are the in-progress
+   trades-backed replacements.
+2. Surface it in the relevant router under `backend/src/invest/http/routers/`.
+3. Add a typed client method in `frontend/src/lib/api.ts`, then wire a
+   chart or KPI tile in `frontend/src/pages/<page>.ts` using the existing
+   `components/` (`KpiCard`, `DataTable`, `Sparkline`, …).
+4. Add a help entry in `frontend/src/lib/help.ts` so the page's `ⓘ` icon
+   surfaces a one-sentence explanation.
 
-To add a new statement type, see the dispatch in `scripts/parse_statements.py:main`
-and the "Adding a new statement type" section of `CLAUDE.md`.
+To add a new statement type, see the dispatch in `scripts/parse_statements.py:main`.
 
 ---
 

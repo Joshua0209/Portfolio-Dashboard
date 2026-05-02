@@ -3,6 +3,7 @@
 import { mountDataTable } from "../components/DataTable";
 import type { DataTableHandle } from "../components/DataTable";
 import { EM_DASH, int, pctAbs, tone, twd } from "../lib/format";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -51,22 +52,6 @@ interface TaxResponse {
   totals: TaxTotals;
   by_ticker: TaxRow[];
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, t: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = t;
-};
 
 const setColored = (id: string, txt: string, val: number | null | undefined): void => {
   const node = document.getElementById(id);

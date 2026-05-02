@@ -6,6 +6,7 @@ import { EM_DASH, date as fmtDate, month as fmtMonth, num, pct, tone, twd } from
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintBar, paintLine } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -16,13 +17,19 @@ export interface MountDeps {
   Chart?: ChartCtor;
 }
 
+type CumulativeFlow = { label: string; value: number };
+
 interface CashflowsCum {
   real_now_twd?: number;
   counterfactual_twd?: number;
   profit_twd?: number;
   real_curve?: ReadonlyArray<{ month: string; value: number }>;
   counterfactual_curve?: ReadonlyArray<{ month: string; value: number }>;
-  cumulative_flows?: ReadonlyArray<{ label: string; value: number }>;
+  // Backend canonical shape is a flat dict (`{stock_buy_twd: 12345, ...}`);
+  // legacy/test fixtures may also send `[{label, value}]`. Both accepted.
+  cumulative_flows?:
+    | ReadonlyArray<CumulativeFlow>
+    | Record<string, number>;
   cumulative?: ReadonlyArray<{
     month: string;
     real_curve?: number;
@@ -30,11 +37,43 @@ interface CashflowsCum {
   }>;
 }
 
+const FLOW_LABELS: Record<string, string> = {
+  stock_buy_twd: "Stock buys",
+  stock_sell_twd: "Stock sells",
+  rebate_in_twd: "Rebates in",
+  tw_dividend_in_twd: "TW dividends in",
+  fx_to_usd_twd: "FX → USD",
+  fx_to_twd_twd: "FX → TWD",
+  salary_in_twd: "Salary in",
+  transfer_net_twd: "Transfers (net)",
+  interest_in_twd: "Interest in",
+};
+
+const humanizeFlowKey = (key: string): string => {
+  if (FLOW_LABELS[key]) return FLOW_LABELS[key];
+  const trimmed = key.replace(/_twd$/, "").replace(/_/g, " ");
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+};
+
+const normalizeCumulativeFlows = (
+  raw: CashflowsCum["cumulative_flows"],
+): ReadonlyArray<CumulativeFlow> => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  return Object.entries(raw)
+    .filter(([, v]) => typeof v === "number")
+    .map(([k, v]) => ({ label: humanizeFlowKey(k), value: v as number }));
+};
+
 interface MonthlyRow {
   month?: string;
   inflow_twd?: number;
   outflow_twd?: number;
   net_twd?: number;
+  // Legacy field names also accepted from the canonical backend shape.
+  gross_in?: number;
+  gross_out?: number;
+  external_flow?: number;
 }
 
 interface BankRow {
@@ -51,22 +90,6 @@ interface BankRow {
   balance?: number;
   _haystack?: string;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, t: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = t;
-};
 
 const td = (text: string, cls?: string): HTMLTableCellElement => {
   const c = document.createElement("td");
@@ -294,13 +317,13 @@ const paintCfCharts = (
     datasets: [
       {
         label: "Inflow",
-        data: monthly.map((m) => m.inflow_twd ?? 0),
+        data: monthly.map((m) => m.inflow_twd ?? m.gross_in ?? 0),
         color: cssVar("--c1") || palette()[0],
         stack: "flow",
       },
       {
         label: "Outflow",
-        data: monthly.map((m) => -(m.outflow_twd ?? 0)),
+        data: monthly.map((m) => -(m.outflow_twd ?? m.gross_out ?? 0)),
         color: cssVar("--c3") || palette()[2],
         stack: "flow",
       },
@@ -334,7 +357,7 @@ export const mountCashflows = async (
         : [];
 
     renderKpis(cf);
-    renderBreakdown(cf.cumulative_flows ?? []);
+    renderBreakdown(normalizeCumulativeFlows(cf.cumulative_flows));
     renderBank(bank ?? []);
     if (deps.Chart) paintCfCharts(deps.Chart, cf, monthly);
   } catch (err) {

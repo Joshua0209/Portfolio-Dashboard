@@ -12,6 +12,7 @@ import { EM_DASH, date, int, month, num, pct, tone, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintDoughnut, paintLine } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -70,17 +71,6 @@ interface Transaction {
   price?: number;
   net_twd?: number;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
 
 const renderScaffold = (outlet: HTMLElement): void => {
   while (outlet.firstChild) outlet.removeChild(outlet.firstChild);
@@ -213,11 +203,6 @@ const renderScaffold = (outlet: HTMLElement): void => {
   activityCard.appendChild(tableWrap);
   activitySection.appendChild(activityCard);
   outlet.appendChild(activitySection);
-};
-
-const setText = (id: string, text: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = text;
 };
 
 const setKpiWithTone = (

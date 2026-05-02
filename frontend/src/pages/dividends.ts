@@ -7,6 +7,7 @@ import { EM_DASH, date as fmtDate, month as fmtMonth, num, twd } from "../lib/fo
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintBar } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -41,22 +42,6 @@ interface DividendsResponse {
     amount_local?: number; amount_twd?: number;
   }>;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, t: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = t;
-};
 
 const td = (text: string, cls?: string): HTMLTableCellElement => {
   const c = document.createElement("td");

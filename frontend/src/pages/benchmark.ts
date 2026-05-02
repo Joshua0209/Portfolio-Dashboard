@@ -5,6 +5,7 @@ import { EM_DASH, pct, pctAbs, tone } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintBar, paintLine, paintScatter } from "../lib/paint";
+import { el } from "../lib/dom";
 
 const STORAGE_KEY = "benchmark.selected.v1";
 const DEFAULT_KEYS: ReadonlyArray<string> = ["tw_passive", "us_passive"];
@@ -63,17 +64,6 @@ interface CompareResponse {
   months?: ReadonlyArray<string>;
   portfolio_daily_curve?: ReadonlyArray<{ date: string; cum_return: number }>;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
 
 const td = (text: string, cls?: string): HTMLTableCellElement => {
   const c = document.createElement("td");
@@ -238,32 +228,66 @@ const renderStatsTable = (data: CompareResponse): void => {
   }
 };
 
-const paintBenchmarkCharts = (Chart: ChartCtor, data: CompareResponse): void => {
-  const pal = palette();
-  const series = [
+interface CurvePoint {
+  month: string;
+  period_return?: number | null;
+  cum_return?: number | null;
+}
+
+interface SeriesEntry {
+  key: string;
+  name: string;
+  curve: ReadonlyArray<CurvePoint>;
+  stats: Record<string, unknown>;
+  color: string;
+}
+
+const buildSeries = (data: CompareResponse, pal: ReadonlyArray<string>): SeriesEntry[] => {
+  const monthlyToCurve = (
+    monthly: ReadonlyArray<MonthlyTwrPoint> | undefined,
+  ): ReadonlyArray<CurvePoint> =>
+    (monthly ?? []).map((p) => ({
+      month: p.month,
+      period_return: p.twr_pct == null ? null : p.twr_pct / 100,
+      cum_return: p.cum_twr_pct == null ? null : p.cum_twr_pct / 100,
+    }));
+
+  const portfolio = data.portfolio ?? { name: "Portfolio" };
+  const portfolioCurve =
+    (portfolio as { curve?: ReadonlyArray<CurvePoint> }).curve
+    ?? monthlyToCurve(portfolio.monthly);
+
+  return [
     {
       key: "portfolio",
-      name: data.portfolio?.name ?? "Portfolio",
-      monthly: data.portfolio?.monthly ?? [],
-      stats: data.portfolio,
+      name: portfolio.name ?? "Portfolio",
+      curve: portfolioCurve,
+      stats: (portfolio.stats ?? portfolio) as Record<string, unknown>,
       color: cssVar("--accent") || pal[0],
     },
     ...data.strategies.map((s, i) => ({
       key: s.key,
       name: s.name,
-      monthly: s.monthly ?? [],
-      stats: s,
+      curve:
+        (s as { curve?: ReadonlyArray<CurvePoint> }).curve
+        ?? monthlyToCurve(s.monthly),
+      stats: (s.stats ?? s) as Record<string, unknown>,
       color: pal[(i + 1) % pal.length] || "#888",
     })),
   ];
+};
+
+const paintBenchmarkCharts = (Chart: ChartCtor, data: CompareResponse): void => {
+  const pal = palette();
+  const series = buildSeries(data, pal);
 
   // Cumulative TWR overlay — one line per series.
-  const labels = series[0]?.monthly.map((p) => p.month) ?? [];
+  const labels = series[0]?.curve.map((p) => p.month) ?? [];
   paintLine(Chart, "chart-cum", {
     labels,
     datasets: series.map((s) => ({
       label: s.name,
-      data: s.monthly.map((p) => p.cum_twr_pct ?? 0),
+      data: s.curve.map((p) => (p.cum_return ?? 0) * 100),
       color: s.color,
       fill: false,
     })),
@@ -274,24 +298,23 @@ const paintBenchmarkCharts = (Chart: ChartCtor, data: CompareResponse): void => 
     labels,
     datasets: series.map((s) => ({
       label: s.name,
-      data: s.monthly.map((p) => p.twr_pct ?? 0),
+      data: s.curve.map((p) => (p.period_return ?? 0) * 100),
       color: s.color,
     })),
   });
 
   // Risk-vs-return scatter (vol on x, CAGR on y). Falls back to Sharpe
   // when the new keys aren't present.
-  const points = series
-    .map((s) => {
-      const stats = s.stats ?? {};
-      const x = (stats as { vol?: number; annualized_volatility?: number }).vol
-        ?? (stats as { annualized_volatility?: number }).annualized_volatility
-        ?? 0;
-      const y = (stats as { cagr?: number; twr_total?: number }).cagr
-        ?? (stats as { twr_total?: number }).twr_total
-        ?? 0;
-      return { x: x * 100, y: y * 100, label: s.name };
-    });
+  const points = series.map((s) => {
+    const stats = s.stats;
+    const x = (stats.vol as number | undefined)
+      ?? (stats.annualized_volatility as number | undefined)
+      ?? 0;
+    const y = (stats.cagr as number | undefined)
+      ?? (stats.twr_total as number | undefined)
+      ?? 0;
+    return { x: x * 100, y: y * 100, label: s.name };
+  });
   paintScatter(
     Chart,
     "chart-scatter",
@@ -317,7 +340,7 @@ export const mountBenchmark = async (
   const refresh = async (): Promise<void> => {
     const keys = [...selected].join(",");
     const data = await deps.api.get<CompareResponse>(
-      `/api/benchmarks/compare?keys=${encodeURIComponent(keys)}`,
+      `/api/benchmarks/compare?strategies=${encodeURIComponent(keys)}`,
     );
     renderStatsTable(data);
     if (deps.Chart) paintBenchmarkCharts(deps.Chart, data);

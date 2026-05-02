@@ -8,6 +8,7 @@ import { EM_DASH, label, month, pct, pctAbs, tone, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintBar, paintLine, paintTreemap } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 const METHOD_STORAGE_KEY = "perf.twr.method.v1";
 
@@ -26,6 +27,37 @@ interface RollingRow {
   r6m?: number;
   r12m?: number;
 }
+
+interface RollingPoint {
+  month: string;
+  value: number | null;
+}
+
+interface RollingResponse {
+  rolling?: ReadonlyArray<RollingRow>;
+  rolling_3m?: ReadonlyArray<RollingPoint>;
+  rolling_6m?: ReadonlyArray<RollingPoint>;
+  rolling_12m?: ReadonlyArray<RollingPoint>;
+}
+
+const mergeRolling = (resp: RollingResponse): ReadonlyArray<RollingRow> => {
+  if (resp.rolling?.length) return resp.rolling;
+  const months = new Map<string, RollingRow>();
+  const ingest = (
+    points: ReadonlyArray<RollingPoint> | undefined,
+    key: "r3m" | "r6m" | "r12m",
+  ): void => {
+    for (const p of points ?? []) {
+      const row = months.get(p.month) ?? { month: p.month };
+      if (p.value !== null && p.value !== undefined) row[key] = p.value * 100;
+      months.set(p.month, row);
+    }
+  };
+  ingest(resp.rolling_3m, "r3m");
+  ingest(resp.rolling_6m, "r6m");
+  ingest(resp.rolling_12m, "r12m");
+  return [...months.values()].sort((a, b) => a.month.localeCompare(b.month));
+};
 
 interface AttributionResponse {
   monthly?: ReadonlyArray<{ month: string; tw_twd?: number; foreign_twd?: number; fx_twd?: number }>;
@@ -133,22 +165,6 @@ const bandLabel = (
 const capRatio = (v: number): string => {
   if (!Number.isFinite(v) || Math.abs(v) > 100) return v > 0 ? "≫ 10" : "≪ −10";
   return v.toFixed(2);
-};
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, v: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = v;
 };
 
 const setTextColor = (id: string, v: string, signal: number): void => {
@@ -525,7 +541,7 @@ const renderContribTable = (rows: ReadonlyArray<ContribRow>): void => {
 const paintPerfCharts = (
   Chart: ChartCtor,
   ts: TimeseriesResponse & TimeseriesNew,
-  rolling: { rolling?: ReadonlyArray<RollingRow> },
+  rolling: RollingResponse,
   attr: AttributionResponse,
 ): void => {
   // The new /api/performance/timeseries returns either `monthly` (legacy)
@@ -598,7 +614,7 @@ const paintPerfCharts = (
   });
 
   // Rolling 3/6/12 month
-  const rRows = rolling.rolling ?? [];
+  const rRows = mergeRolling(rolling);
   paintLine(Chart, "chart-rolling", {
     labels: rRows.map((r) => r.month),
     datasets: [
@@ -682,7 +698,7 @@ export const mountPerformance = async (
     const q = `?method=${encodeURIComponent(method)}`;
     const [ts, rolling, attr, tax] = await Promise.all([
       deps.api.get<TimeseriesResponse & TimeseriesNew>(`/api/performance/timeseries${q}`),
-      deps.api.get<{ rolling?: ReadonlyArray<RollingRow> }>(`/api/performance/rolling${q}`),
+      deps.api.get<RollingResponse>(`/api/performance/rolling${q}`),
       deps.api.get<AttributionResponse>(`/api/performance/attribution`),
       deps.api.get<TaxResponse>(`/api/tax`),
     ]);

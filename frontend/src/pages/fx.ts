@@ -5,6 +5,7 @@ import { EM_DASH, pct, pctAbs, tone, twd } from "../lib/format";
 import type { ChartCtor } from "../lib/charts";
 import { cssVar, palette } from "../lib/charts";
 import { paintBar, paintLine } from "../lib/paint";
+import { el, setText } from "../lib/dom";
 
 interface ApiLike {
   get<T = unknown>(path: string): Promise<T>;
@@ -36,22 +37,6 @@ interface FxResponse {
   currency_exposure?: ReadonlyArray<{ currency: string; value_twd: number }>;
   by_ccy_monthly?: ReadonlyArray<Record<string, number | string>>;
 }
-
-const el = (
-  tag: string,
-  attrs: Record<string, string> = {},
-  text?: string,
-): HTMLElement => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
-
-const setText = (id: string, t: string): void => {
-  const node = document.getElementById(id);
-  if (node) node.textContent = t;
-};
 
 const renderScaffold = (outlet: HTMLElement): void => {
   while (outlet.firstChild) outlet.removeChild(outlet.firstChild);
@@ -143,6 +128,21 @@ const showError = (outlet: HTMLElement, err: Error): void => {
   );
 };
 
+const deriveExposure = (
+  fx: FxResponse,
+): ReadonlyArray<{ currency: string; value_twd: number }> => {
+  if (fx.currency_exposure?.length) return fx.currency_exposure;
+  const monthly = fx.by_ccy_monthly ?? [];
+  if (!monthly.length) return [];
+  const last = monthly[monthly.length - 1];
+  return Object.entries(last)
+    .filter(([k, v]) => k !== "month" && typeof v === "number")
+    .map(([currency, value_twd]) => ({
+      currency,
+      value_twd: value_twd as number,
+    }));
+};
+
 const paintCharts = (Chart: ChartCtor, fx: FxResponse): void => {
   const rate = fx.rate_curve ?? [];
   if (rate.length) {
@@ -173,7 +173,7 @@ const paintCharts = (Chart: ChartCtor, fx: FxResponse): void => {
     options: { plugins: { legend: { display: false } } },
   });
 
-  const exposure = fx.currency_exposure ?? [];
+  const exposure = deriveExposure(fx);
   const pal = palette();
   paintBar(Chart, "chart-ccy", {
     labels: exposure.map((e) => e.currency),
