@@ -2,13 +2,14 @@
 
 A personal investment performance dashboard built on top of Sinopac (永豐金)
 monthly PDF statements. The pipeline turns encrypted statement PDFs into a
-single JSON dataset, which a Flask backend then serves to a 12-page,
-no-build-step dashboard. A second daily-resolution layer (yfinance prices
-and FX rates in a local SQLite cache) powers the `/today` tactical view
-and the equity-curve / sparkline visualizations on top of the monthly base.
+single JSON dataset, which a FastAPI backend on `:8001` then serves to a
+12-page Vite + TypeScript SPA on `:5173`. A second daily-resolution layer
+(yfinance prices and FX rates in a local SQLite cache) powers the `/today`
+tactical view and the equity-curve / sparkline visualizations on top of
+the monthly base.
 
 ```
-PDFs (Gmail) ──► decrypt ──► parse ──► data/portfolio.json ──► Flask + JS
+PDFs (Gmail) ──► decrypt ──► parse ──► data/portfolio.json ──► FastAPI + Vite/TS
 ```
 
 Everything runs locally. Nothing is sent to a remote service. The encrypted
@@ -80,12 +81,18 @@ If `data/portfolio.json` already exists and your `.venv/` is set up:
 ```bash
 cd path/to/investment
 source .venv/bin/activate
-python app.py
-# open http://127.0.0.1:8000
+
+# Backend on :8001
+PYTHONPATH=backend/src uvicorn invest.app:app --port 8001 &
+
+# Frontend on :5173 (proxies /api to :8001)
+cd frontend && npm install && npm run dev
+# open http://127.0.0.1:5173
 ```
 
-The Flask app watches `data/portfolio.json` mtime — re-running the parser
-while the server is up reloads data on the next request without a restart.
+The FastAPI backend watches `data/portfolio.json` mtime via the
+`PortfolioStore` singleton — re-running the parser while the server is
+up reloads data on the next request without a restart.
 
 ---
 
@@ -136,14 +143,14 @@ is unset.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `SINOPAC_PDF_PASSWORDS` | for `decrypt_pdfs.py` | Comma-separated unlock candidates; the decrypter tries each per file. |
-| `SINOPAC_API_KEY` | optional | Read-only Shioaji credential. When set, the daily layer overlays post-PDF trades. Never used to place orders — `app/shioaji_client.py` does not import any order/CA symbols. **Must be present before the Flask process starts** — editing `.env` while `app.py` is running has no effect on the running process. |
+| `SINOPAC_API_KEY` | optional | Read-only Shioaji credential. When set, the daily layer overlays post-PDF trades. Never used to place orders — `app/shioaji_client.py` does not import any order/CA symbols. **Must be present before the backend starts** — editing `.env` while uvicorn is running has no effect on the running process. |
 | `SINOPAC_SECRET_KEY` | optional | Pair of `SINOPAC_API_KEY`. Same restart caveat. |
-| `SINOPAC_CA_CERT_PATH` | unused (read-only contract) | Absolute path to the PKCS#12 `.pfx` certificate. **Documented but not consumed today.** The CA pair (`activate_ca`) only matters if/when trading is added in a separate module — the current `shioaji_client.py` is grep-guarded against `activate_ca`. Keep the file outside source control (gitignored via `*.pfx`). |
-| `SINOPAC_CA_PASSWORD` | unused (read-only contract) | Unlock password for the `.pfx`. Same status as `SINOPAC_CA_CERT_PATH`. |
-| `BACKFILL_ON_STARTUP` | optional, default `false` | When `true`, `create_app()` spawns the cold-start backfill in a daemon thread. The Flask debug-reloader is detected and the parent process is skipped to avoid double-spawning. |
-| `ADMIN_TOKEN` | optional, default unset | When set, every `POST /api/admin/*` request must echo the value back via the `X-Admin-Token` header or the server returns `401`. Off by default so the localhost workflow keeps working unauthenticated; opt in only when exposing the dashboard via tunnel / LAN / reverse proxy. |
+| `SINOPAC_CA_CERT_PATH` | unused (read-only contract) | Absolute path to the PKCS#12 `.pfx` certificate. **Documented but not consumed today.** Keep the file gitignored via `*.pfx`. |
+| `SINOPAC_CA_PASSWORD` | unused (read-only contract) | Unlock password for the `.pfx`. |
+| `BACKFILL_ON_STARTUP` | optional, default `false` | Reserved for future FastAPI lifespan-hook backfill. Today, run `python scripts/backfill_daily.py` manually for cold start. |
+| `ADMIN_TOKEN` | optional, default unset | When set, every `POST /api/admin/*` request must echo the value via `X-Admin-Token` or the server returns `401`. Off by default so the localhost workflow keeps working unauthenticated; opt in only when exposing the dashboard via tunnel / LAN / reverse proxy. |
 | `DAILY_DB_PATH` | optional | Override the default `data/dashboard.db` location (useful for tests). |
-| `FLASK_DEBUG` | optional | Standard Flask flag; required if you want hot-reload on `app.py`. |
+| `VITE_API_TARGET` | optional | Frontend dev-server proxy target. Defaults to `http://127.0.0.1:8001`. |
 
 ---
 
@@ -166,12 +173,13 @@ python scripts/decrypt_pdfs.py
 # 3. Parse → data/portfolio.json
 python scripts/parse_statements.py
 
-# 4. Start (or reload — it watches the JSON's mtime)
-python app.py
+# 4. Start (or reload — backend watches the JSON's mtime)
+PYTHONPATH=backend/src uvicorn invest.app:app --port 8001 &
+cd frontend && npm run dev   # serves on :5173, proxies /api to :8001
 ```
 
-If you already had `app.py` running, you don't need to restart — open any
-dashboard page and it will pick up the new data on the next API call.
+If you already had the backend running, you don't need to restart — open
+any dashboard page and it will pick up the new data on the next API call.
 
 ### Enabling the Shioaji overlay (optional)
 
@@ -209,8 +217,8 @@ skips the merge unless credentials are present.
    are **not** needed — the read-only client deliberately does not call
    `activate_ca`, and a static-grep test enforces that.
 
-**Restart Flask** so the new env is in the running process. Both
-`app.py` (via `app/__init__.py:_load_env`) and the CLI scripts
+**Restart the backend** so the new env is in the running process. Both
+the FastAPI process (via `dotenv` at startup) and the CLI scripts
 (`scripts/snapshot_daily.py`, `scripts/backfill_daily.py`,
 `scripts/reconcile.py`) load `.env` automatically with
 `override=False`, so a real shell-exported value still wins.
@@ -233,7 +241,7 @@ button — the overlay piggybacks on every refresh path. Pick one:
 ```bash
 # Should show "trade_overlay merged: trades=N dates_written=M ..."
 # If it says "skipped: reason=shioaji_unconfigured" the env didn't reach
-# the process — restart Flask in a shell that has the keys.
+# the process — restart the backend in a shell that has the keys.
 tail -50 logs/daily.log | grep trade_overlay
 
 # Overlay rows are tagged source='overlay'; PDF rows are never touched.
@@ -300,7 +308,7 @@ command instead:
 sqlite3 data/dashboard.db ".backup data/dashboard.db.bak"
 ```
 
-It is safe to run while Flask is up — the backup is an atomic, transactionally
+It is safe to run while the backend is up — the backup is an atomic, transactionally
 consistent copy taken through the same connection pool.
 
 ---
@@ -309,54 +317,72 @@ consistent copy taken through the same connection pool.
 
 ```
 investment/
-├── app.py                        # Flask entrypoint
-├── app/                          # Backend application package
-│   ├── __init__.py               # create_app(), routes, blueprint registration, layered health
-│   ├── data_store.py             # Mtime-cached portfolio.json loader
-│   ├── daily_store.py            # SQLite (WAL) wrapper around data/dashboard.db
-│   ├── analytics.py              # Drawdown, Sharpe, HHI, FX P&L, sectors, FIFO
-│   ├── benchmarks.py             # yfinance fetcher + cached strategy curves
-│   ├── filters.py                # Jinja currency/percent/date filters
-│   ├── backfill_runner.py        # Background daemon: cold-start fetch + DLQ wrapper
-│   ├── backfill_state.py         # READY/INITIALIZING/FAILED state machine + progress
-│   ├── price_sources.py          # TW (.TW/.TWO probe) + foreign yfinance router
-│   ├── yfinance_client.py        # yfinance HTTP wrapper (TW + foreign + FX)
-│   ├── shioaji_client.py         # Read-only Shioaji wrapper (no Order/CA imports)
-│   ├── trade_overlay.py          # Folds post-PDF Shioaji trades into the daily layer
-│   ├── reconcile.py              # PDF-vs-overlay trade diff per month (manual trigger)
-│   └── api/                      # 13 blueprints, all under /api/*
-│       ├── summary.py            # KPIs, equity curve, allocation
-│       ├── holdings.py           # Current/historical positions, sectors
-│       ├── performance.py        # TWR/XIRR/drawdown/rolling/attribution (3 methods)
-│       ├── transactions.py       # Trade log + monthly aggregates
-│       ├── cashflows.py          # Real vs counterfactual, bank ledger
-│       ├── dividends.py          # Distributions + rebates
-│       ├── risk.py               # Concentration, leverage, drawdown
-│       ├── fx.py                 # USD/TWD curve, FX P&L attribution
-│       ├── tax.py                # Realized + unrealized P&L by ticker
-│       ├── tickers.py            # Per-security drill-down
-│       ├── benchmarks.py         # Strategy comparison
-│       ├── daily.py              # Daily equity curve + per-symbol price history
-│       └── today.py              # /today widgets + /api/admin/* (refresh, DLQ, reconcile)
-├── scripts/                      # Pipeline (run from any CWD)
+├── backend/                      # FastAPI app (port 8001)
+│   ├── pyproject.toml
+│   ├── src/invest/
+│   │   ├── app.py                # FastAPI factory + lifespan
+│   │   ├── core/config.py        # Pydantic Settings (DAILY_DB_PATH, ADMIN_TOKEN)
+│   │   ├── http/
+│   │   │   ├── deps.py           # get_session / get_portfolio_store / get_daily_store
+│   │   │   ├── envelope.py       # {ok, data}
+│   │   │   ├── helpers.py        # bank_cash_twd / today_repriced_totals
+│   │   │   └── routers/          # 14 routers: health, summary, holdings, …
+│   │   ├── persistence/
+│   │   │   ├── portfolio_store.py  # JSON-backed monthly aggregate (mtime-watched)
+│   │   │   ├── daily_store.py    # SQLite WAL wrapper
+│   │   │   ├── models/           # SQLModel ORM tables (Phase 10+)
+│   │   │   └── repositories/
+│   │   ├── analytics/
+│   │   │   ├── monthly.py        # Verbatim port of legacy app/analytics.py
+│   │   │   ├── holdings_today.py # Warm/cold reprice resolver
+│   │   │   └── {twr,xirr,ratios,drawdown,…}.py  # Phase 10+ Trade-typed inputs
+│   │   ├── benchmarks.py         # yfinance fetcher + STRATEGIES
+│   │   ├── domain/               # Money, Trade, Side, Venue, Position
+│   │   ├── prices/               # yfinance + FX provider
+│   │   ├── brokerage/            # Read-only Shioaji client
+│   │   ├── ingestion/            # PDF parsing
+│   │   ├── reconciliation/       # Audit events
+│   │   └── jobs/                 # backfill / snapshot / verify_month
+│   └── tests/                    # 755 tests (pytest)
+│
+├── frontend/                     # Vite + TS SPA (port 5173)
+│   ├── package.json
+│   ├── vite.config.ts            # /api proxy → :8001 (override via VITE_API_TARGET)
+│   └── src/
+│       ├── main.ts
+│       ├── lib/                  # api, charts, format, paint, pagination, help
+│       ├── components/           # KpiCard, FreshnessDot, DataTable, Banner, Sparkline
+│       ├── pages/                # one per route
+│       └── styles/{tokens,app}.css
+│
+├── scripts/                      # Pipeline CLI shims (still import legacy app/)
 │   ├── download_sinopac_pdfs.py  # Gmail → sinopac_pdfs/
 │   ├── decrypt_pdfs.py           # Env-based password unlock
 │   ├── parse_statements.py       # PDFs → data/portfolio.json
-│   ├── backfill_daily.py         # CLI cold-start backfill of dashboard.db
-│   ├── snapshot_daily.py         # Incremental refresh (gap-fill since last_known_date)
+│   ├── backfill_daily.py         # CLI cold-start backfill
+│   ├── snapshot_daily.py         # Incremental refresh
 │   ├── reconcile.py              # CLI mirror of POST /api/admin/reconcile
 │   ├── retry_failed_tasks.py     # CLI mirror of POST /api/admin/retry-failed
-│   └── validate_data.py          # Sanity checks across portfolio.json + dashboard.db
-├── templates/                    # Jinja2 page templates (12 pages + 3 partials)
-│   ├── _developer_tools.html     # DLQ + reconcile accordion, included on /today
-│   ├── _dlq_banner.html          # Global "fetches failed" banner from base.html
-│   ├── _reconcile_banner.html    # Global PDF-vs-overlay banner from base.html
-├── static/                       # css/, js/ (vanilla; no build step)
-│   ├── css/{tokens,app}.css      # Design system tokens + components
-│   └── js/{api,charts,format,help,pagination,app,data-table,
-│       dlq-banner,reconcile-banner,freshness}.js + pages/*.js
+│   └── validate_data.py          # Sanity checks
+│
+├── app/                          # ⚠ Transitional library (Phase 10 deletes)
+│   ├── analytics.py              # ↔ backend/.../analytics/monthly.py (parity-locked)
+│   ├── holdings_today.py         # ↔ backend/.../analytics/holdings_today.py
+│   ├── data_store.py             # ↔ backend/.../persistence/portfolio_store.py
+│   ├── daily_store.py            # ↔ backend/.../persistence/daily_store.py
+│   ├── benchmarks.py             # ↔ backend/.../benchmarks.py
+│   ├── backfill_runner.py        # 1725 LOC — biggest open Phase 10 port
+│   ├── backfill_state.py
+│   ├── price_sources.py
+│   ├── shioaji_client.py         # Read-only (static-grep guard)
+│   ├── trade_overlay.py
+│   ├── reconcile.py
+│   └── yfinance_client.py
+│
+├── tests/                        # Legacy tests (149) — covers retained app/ modules
+│
 ├── data/                         # gitignored — actual portfolio data
-│   ├── portfolio.json            # Parsed dataset consumed by Flask (canonical)
+│   ├── portfolio.json            # Parsed dataset consumed by the backend (canonical)
 │   ├── tw_ticker_map.json        # Manual TW name → ticker overrides
 │   ├── benchmarks.json           # yfinance price cache (7-day TTL)
 │   └── dashboard.db              # Daily-resolution SQLite cache (WAL; regenerable)
@@ -468,7 +494,7 @@ the error string, and the warming banner deep-links to `/today#developer-tools`.
 - **Benchmarks need yfinance.** First run hits the network; subsequent runs
   use the 7-day cache in `data/benchmarks.json`.
 - **No auth on read endpoints.** The server is bound to `127.0.0.1` by
-  default. The Flask app does set conservative response headers
+  default. FastAPI sets conservative response headers via middleware
   (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
   `Referrer-Policy: strict-origin-when-cross-origin`, and a
   same-origin-only CSP) via `after_request`, and `POST /api/admin/*`

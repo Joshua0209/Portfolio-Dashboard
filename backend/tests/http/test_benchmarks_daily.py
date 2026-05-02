@@ -110,29 +110,36 @@ class TestDailyEquity:
         assert r.status_code == 202
         assert r.json()["data"]["state"] == "INITIALIZING"
 
-    def test_returns_200_when_ready(self, client, engine):
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+    def test_returns_200_when_ready(self, client, fake_daily):
+        # Phase 6.5: state-gate keys on DailyStore.last_known_date or
+        # equity_curve presence (both legacy signals).
+        fake_daily.equity_curve = [
+            {"date": "2026-04-30", "equity_twd": 1_000_000,
+             "n_positions": 5, "fx_usd_twd": 31.5, "has_overlay": False,
+             "cash_twd": 0},
+        ]
         r = client.get("/api/daily/equity")
         assert r.status_code == 200
         d = _data(r)
         assert "points" in d
         assert isinstance(d["points"], list)
 
-    def test_400_on_malformed_start(self, client, engine):
-        # State-machine pass first (so we get to validation, not 202).
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+    def test_400_on_malformed_start(self, client, fake_daily):
+        fake_daily.equity_curve = [
+            {"date": "2026-04-30", "equity_twd": 1_000_000,
+             "n_positions": 5, "fx_usd_twd": 31.5, "has_overlay": False,
+             "cash_twd": 0},
+        ]
         r = client.get("/api/daily/equity?start=2026-99-99")
         assert r.status_code == 400
         assert r.json()["ok"] is False
 
-    def test_400_on_malformed_end(self, client, engine):
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+    def test_400_on_malformed_end(self, client, fake_daily):
+        fake_daily.equity_curve = [
+            {"date": "2026-04-30", "equity_twd": 1_000_000,
+             "n_positions": 5, "fx_usd_twd": 31.5, "has_overlay": False,
+             "cash_twd": 0},
+        ]
         r = client.get("/api/daily/equity?end=not-a-date")
         assert r.status_code == 400
 
@@ -145,10 +152,12 @@ class TestDailyPrices:
         r = client.get("/api/daily/prices/2330")
         assert r.status_code == 202
 
-    def test_returns_200_when_ready(self, client, engine):
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+    def test_returns_200_when_ready(self, client, fake_daily):
+        fake_daily.equity_curve = [
+            {"date": "2026-04-30", "equity_twd": 1_000_000,
+             "n_positions": 5, "fx_usd_twd": 31.5, "has_overlay": False,
+             "cash_twd": 0},
+        ]
         r = client.get("/api/daily/prices/2330")
         assert r.status_code == 200
         d = _data(r)
@@ -156,9 +165,11 @@ class TestDailyPrices:
         assert isinstance(d["points"], list)
         assert isinstance(d["trades"], list)
 
-    def test_400_on_malformed_start(self, client, engine):
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+    def test_400_on_malformed_start(self, client, fake_daily):
+        fake_daily.equity_curve = [
+            {"date": "2026-04-30", "equity_twd": 1_000_000,
+             "n_positions": 5, "fx_usd_twd": 31.5, "has_overlay": False,
+             "cash_twd": 0},
+        ]
         r = client.get("/api/daily/prices/2330?start=2026-13-01")
         assert r.status_code == 400

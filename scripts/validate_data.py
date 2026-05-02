@@ -35,14 +35,17 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend" / "src"))
 
-from app.backfill_runner import (  # noqa: E402
+from invest.jobs.backfill_runner import (  # noqa: E402
     iter_foreign_symbols_with_metadata,
     iter_tw_symbols_with_metadata,
     month_end_iso,
 )
-from app.daily_store import BACKFILL_FLOOR_DEFAULT, DailyStore  # noqa: E402
+from invest.persistence.daily_store import (  # noqa: E402
+    BACKFILL_FLOOR_DEFAULT,
+    DailyStore,
+)
 
 log = logging.getLogger(__name__)
 

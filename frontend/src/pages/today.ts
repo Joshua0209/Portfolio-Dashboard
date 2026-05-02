@@ -402,7 +402,6 @@ const paintCalendar = (data: CalendarResponse): void => {
     root.appendChild(empty);
     return;
   }
-  // Cell paint deferred to Cycle 66.
   for (const m of data.months ?? []) {
     const card = el("div", { class: "cal-month" });
     card.appendChild(el("div", { class: "cal-month__title" }, m.label));

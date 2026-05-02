@@ -69,10 +69,29 @@ def engine():
 
 
 @pytest.fixture
-def client(engine, monkeypatch):
+def client(engine, monkeypatch, fake_portfolio, fake_daily):
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     from invest.app import create_app
     from invest.http.deps import get_session
+    from invest.jobs import snapshot_workflow
+    from .conftest import install_store_overrides
+
+    # Phase 11: /api/admin/refresh is wired to snapshot_workflow.run,
+    # which fetches yfinance + Shioaji on the real path. Stub it out
+    # in tests — endpoint contract here is "200 + envelope with
+    # new_rows or skipped_reason key".
+    monkeypatch.setattr(
+        snapshot_workflow,
+        "run",
+        lambda store, portfolio: {
+            "skipped_reason": "stubbed_in_test",
+            "new_rows": 0,
+            "new_dates": 0,
+            "overlay": {"overlay_trades": 0, "dates_written": 0,
+                        "skipped_reason": "no_gap"},
+            "window": None,
+        },
+    )
 
     app = create_app()
 
@@ -81,6 +100,7 @@ def client(engine, monkeypatch):
             yield s
 
     app.dependency_overrides[get_session] = _override
+    install_store_overrides(app, portfolio=fake_portfolio, daily=fake_daily)
     return TestClient(app)
 
 
@@ -112,16 +132,20 @@ class TestTodayReads:
         assert body["data"]["state"] == "INITIALIZING"
 
     def test_snapshot_returns_200_when_portfolio_daily_has_rows(
-        self, client, engine,
+        self, client, fake_daily,
     ):
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+        # Phase 6.5: today_snapshot reads from DailyStore.get_today_snapshot()
+        # (legacy schema). _FakeDaily.snapshot is the seam.
+        fake_daily.snapshot = {
+            "date": "2026-04-30",
+            "equity_twd": 1_000_000.0,
+            "fx_usd_twd": 31.5,
+            "n_positions": 5,
+            "has_overlay": False,
+        }
         r = client.get("/api/today/snapshot")
         assert r.status_code == 200
         d = _data(r)
-        # Phase 6 baseline returns the latest row's date + equity. Full
-        # delta-vs-prior + movers come in Phase 7.
         assert d.get("date") == "2026-04-30"
 
     def test_freshness_always_200_even_when_empty(self, client):

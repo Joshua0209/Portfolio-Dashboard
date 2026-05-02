@@ -1,4 +1,5 @@
 // /transactions — filterable trade log + monthly volume/fees charts.
+// Phase 8 Cycle 64. Charts deferred to Cycle 66.
 
 import { mountDataTable } from "../components/DataTable";
 import type { DataTableHandle } from "../components/DataTable";

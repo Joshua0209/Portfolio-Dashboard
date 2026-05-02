@@ -177,7 +177,7 @@ def _default_meta(code: str, position_type: str | None) -> dict:
     return {
         "venue": "TW" if is_tw else "Foreign",
         "ccy": "TWD",
-        "name": code or "?",
+        "name": code,
         "avg_cost": 0.0,
         "type": position_type or "現股",
     }

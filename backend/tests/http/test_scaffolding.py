@@ -72,11 +72,26 @@ def engine():
 
 
 @pytest.fixture
-def client(engine):
-    """FastAPI TestClient with get_session overridden to the in-memory
-    engine. Each test gets a fresh DB."""
+def client(engine, monkeypatch, fake_portfolio, fake_daily):
+    """FastAPI TestClient with all stores overridden — fresh empty DB +
+    empty PortfolioStore + empty DailyStore by default."""
     from invest.app import create_app
     from invest.http.deps import get_session
+    from invest.jobs import snapshot_workflow
+    from .conftest import install_store_overrides
+
+    # Phase 11: /api/admin/refresh now invokes snapshot_workflow.run
+    # (yfinance + Shioaji). Stub it in this fixture — these tests only
+    # exercise the require_admin gate and the envelope contract, not
+    # the workflow body itself.
+    monkeypatch.setattr(
+        snapshot_workflow,
+        "run",
+        lambda store, portfolio: {
+            "skipped_reason": "stubbed_in_test",
+            "new_rows": 0,
+        },
+    )
 
     app = create_app()
 
@@ -85,6 +100,7 @@ def client(engine):
             yield s
 
     app.dependency_overrides[get_session] = _override
+    install_store_overrides(app, portfolio=fake_portfolio, daily=fake_daily)
     return TestClient(app)
 
 
@@ -168,25 +184,30 @@ class TestHealth:
         assert body["daily_progress"] == {}
         assert body["daily_error"] is None
 
-    def test_months_loaded_counts_distinct_yyyy_mm(self, client, engine):
-        with Session(engine) as s:
-            s.add(_trade(date(2026, 1, 10)))
-            s.add(_trade(date(2026, 1, 20)))  # same month
-            s.add(_trade(date(2026, 2, 5)))
-            s.add(_trade(date(2026, 3, 5), code="2454"))
-            s.commit()
+    def test_months_loaded_counts_portfolio_months(self, client, fake_portfolio):
+        # Phase 6.5: months_loaded = len(PortfolioStore.months) (PDF
+        # aggregate); as_of = kpis.as_of from the parsed-PDF dataset.
+        fake_portfolio._raw = {
+            "months": [
+                {"month": "2026-01"},
+                {"month": "2026-02"},
+                {"month": "2026-03"},
+            ],
+            "summary": {"kpis": {"as_of": "2026-03-05"}},
+        }
         body = client.get("/api/health").json()["data"]
         assert body["months_loaded"] == 3
         assert body["as_of"] == "2026-03-05"
 
-    def test_ready_state_when_portfolio_daily_has_rows(
-        self, client, engine,
+    def test_ready_state_when_daily_store_has_meta(
+        self, client, fake_daily,
     ):
-        """daily_state = READY iff PortfolioDaily has at least one row.
-        Mirrors the legacy 'snapshot is not None' branch."""
-        with Session(engine) as s:
-            s.add(_portfolio_row(date(2026, 4, 30)))
-            s.commit()
+        """daily_state = READY iff DailyStore.last_known_date is set."""
+        fake_daily.last_known_date = "2026-04-30"
+        # _FakeDaily doesn't expose get_meta; add the method via attribute.
+        fake_daily.get_meta = lambda key: (
+            "2026-04-30" if key == "last_known_date" else None
+        )
         body = client.get("/api/health").json()["data"]
         assert body["daily_state"] == "READY"
         assert body["daily_last_known"] == "2026-04-30"

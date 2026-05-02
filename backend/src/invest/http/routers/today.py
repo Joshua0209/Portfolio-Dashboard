@@ -44,10 +44,15 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from invest.http.deps import get_session, require_admin
+from invest.http.deps import (
+    get_daily_store,
+    get_portfolio_store,
+    get_session,
+    require_admin,
+)
 from invest.http.envelope import error, success
 from invest.persistence.models.portfolio_daily import PortfolioDaily
-from invest.jobs import retry_failed, snapshot
+from invest.jobs import retry_failed, snapshot_workflow
 from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 
@@ -57,8 +62,21 @@ admin_router = APIRouter()
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
-def _max_pd_date(session: Session) -> _date | None:
-    return session.exec(select(func.max(PortfolioDaily.date))).one()
+def _max_pd_date(daily) -> _date | None:
+    """Latest date in the daily layer, or None when empty.
+
+    Uses the legacy DailyStore schema (data/dashboard.db has equity_twd,
+    not the SQLModel `equity` column). Returns date object or None to
+    match the legacy `snapshot is not None` semantics.
+    """
+    snap = daily.get_today_snapshot()
+    if not snap:
+        return None
+    try:
+        y, m, d = (int(p) for p in snap["date"].split("-"))
+        return _date(y, m, d)
+    except Exception:
+        return None
 
 
 def _initializing_response() -> JSONResponse:
@@ -83,54 +101,52 @@ def _today_in_tpe() -> str:
 
 
 @read_router.get("/api/today/snapshot")
-def today_snapshot(session: Session = Depends(get_session)) -> Any:
-    last_date = _max_pd_date(session)
-    if last_date is None:
+def today_snapshot(daily=Depends(get_daily_store)) -> Any:
+    snap = daily.get_today_snapshot()
+    if not snap:
         return _initializing_response()
-    row = session.exec(
-        select(PortfolioDaily).where(PortfolioDaily.date == last_date)
-    ).first()
     return success({
-        "date": last_date.isoformat(),
-        "equity_twd": float(row.equity) if row else 0,
-        "fx_usd_twd": None,
-        "n_positions": 0,
-        "has_overlay": False,
+        "date": snap["date"],
+        "equity_twd": float(snap.get("equity_twd") or 0),
+        "fx_usd_twd": snap.get("fx_usd_twd"),
+        "n_positions": int(snap.get("n_positions") or 0),
+        "has_overlay": bool(snap.get("has_overlay")),
         "delta": None,
     })
 
 
 @read_router.get("/api/today/movers")
-def today_movers(session: Session = Depends(get_session)) -> Any:
-    if _max_pd_date(session) is None:
+def today_movers(daily=Depends(get_daily_store)) -> Any:
+    if _max_pd_date(daily) is None:
         return _initializing_response()
     return success({"gainers": [], "decliners": []})
 
 
 @read_router.get("/api/today/sparkline")
-def today_sparkline(session: Session = Depends(get_session)) -> Any:
-    if _max_pd_date(session) is None:
+def today_sparkline(daily=Depends(get_daily_store)) -> Any:
+    if _max_pd_date(daily) is None:
         return _initializing_response()
-    return success({"points": []})
+    points = daily.get_equity_curve()[-30:] if hasattr(daily, "get_equity_curve") else []
+    return success({"points": points})
 
 
 @read_router.get("/api/today/period-returns")
-def today_period_returns(session: Session = Depends(get_session)) -> Any:
-    if _max_pd_date(session) is None:
+def today_period_returns(daily=Depends(get_daily_store)) -> Any:
+    if _max_pd_date(daily) is None:
         return _initializing_response()
     return success({"mtd": 0, "qtd": 0, "ytd": 0, "inception": 0})
 
 
 @read_router.get("/api/today/drawdown")
-def today_drawdown(session: Session = Depends(get_session)) -> Any:
-    if _max_pd_date(session) is None:
+def today_drawdown(daily=Depends(get_daily_store)) -> Any:
+    if _max_pd_date(daily) is None:
         return _initializing_response()
     return success({"curve": [], "max_drawdown": 0, "current_drawdown": 0})
 
 
 @read_router.get("/api/today/risk-metrics")
-def today_risk_metrics(session: Session = Depends(get_session)) -> Any:
-    if _max_pd_date(session) is None:
+def today_risk_metrics(daily=Depends(get_daily_store)) -> Any:
+    if _max_pd_date(daily) is None:
         return _initializing_response()
     return success({
         "annualized_return": 0,
@@ -142,15 +158,15 @@ def today_risk_metrics(session: Session = Depends(get_session)) -> Any:
 
 
 @read_router.get("/api/today/calendar")
-def today_calendar(session: Session = Depends(get_session)) -> Any:
-    if _max_pd_date(session) is None:
+def today_calendar(daily=Depends(get_daily_store)) -> Any:
+    if _max_pd_date(daily) is None:
         return _initializing_response()
     return success({"days": []})
 
 
 @read_router.get("/api/today/freshness")
-def today_freshness(session: Session = Depends(get_session)) -> dict[str, Any]:
-    last = _max_pd_date(session)
+def today_freshness(daily=Depends(get_daily_store)) -> dict[str, Any]:
+    last = _max_pd_date(daily)
     today_tpe = _today_in_tpe()
     if last is None:
         return success({
@@ -210,18 +226,18 @@ def admin_failed_tasks(session: Session = Depends(get_session)) -> dict[str, Any
 @admin_router.post(
     "/api/admin/refresh", dependencies=[Depends(require_admin)],
 )
-def admin_refresh(session: Session = Depends(get_session)) -> dict[str, Any]:
-    # Real fetch orchestration is wired at Cycle 51+. Until the
-    # snapshot fetcher pipeline lands, the orchestrator is a no-op
-    # so refresh acts like a "compute daily layer from rows already
-    # in the DB" — same observable shape as the Phase 6 stub when
-    # the daily layer is empty.
-    today = _date.today()
-    summary = snapshot.run_incremental(
-        session,
-        today=today,
-        fetch_orchestrator=lambda s, start, end: None,
-    )
+def admin_refresh(
+    daily=Depends(get_daily_store),
+    portfolio=Depends(get_portfolio_store),
+) -> dict[str, Any]:
+    # Phase 11 cutover: route the endpoint through the canonical
+    # production path (`invest.jobs.snapshot_workflow.run`), which
+    # backs `python scripts/snapshot_daily.py`. The previously wired
+    # `snapshot.run_incremental` was a SQLModel-backed scaffold for
+    # the future Trade-table aggregator and never executed real
+    # fetches. Tests monkeypatch `snapshot_workflow.run` to avoid
+    # network calls.
+    summary = snapshot_workflow.run(daily, portfolio.raw)
     return success(summary)
 
 

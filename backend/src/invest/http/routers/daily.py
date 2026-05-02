@@ -12,13 +12,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import func
-from sqlmodel import Session, select
 
-from invest.http.deps import get_daily_store, get_portfolio_store, get_session
+from invest.http.deps import get_daily_store, get_portfolio_store
 from invest.http.envelope import error, success
 from invest.persistence.daily_store import DailyStore
-from invest.persistence.models.portfolio_daily import PortfolioDaily
 from invest.persistence.portfolio_store import PortfolioStore
 
 
@@ -27,9 +24,16 @@ router = APIRouter()
 _ISO_DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 
 
-def _has_portfolio_daily(session: Session) -> bool:
-    last = session.scalar(select(func.max(PortfolioDaily.date)))
-    return last is not None
+def _has_data(daily: DailyStore) -> bool:
+    """READY when DailyStore meta has a last_known_date (the legacy
+    state-gate signal). Falls back to checking equity_curve for a
+    fresh DB without meta."""
+    try:
+        if daily.get_meta("last_known_date"):
+            return True
+        return bool(daily.get_equity_curve())
+    except Exception:
+        return False
 
 
 def _initializing() -> JSONResponse:
@@ -59,10 +63,9 @@ def _normalize_trade_date(d: str) -> str:
 def equity(
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
-    session: Session = Depends(get_session),
     daily: DailyStore = Depends(get_daily_store),
 ) -> Any:
-    if not _has_portfolio_daily(session):
+    if not _has_data(daily):
         return _initializing()
     bad = _check_iso(start, "start") or _check_iso(end, "end")
     if bad is not None:
@@ -81,11 +84,10 @@ def prices(
     symbol: str,
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
-    session: Session = Depends(get_session),
     daily: DailyStore = Depends(get_daily_store),
     s: PortfolioStore = Depends(get_portfolio_store),
 ) -> Any:
-    if not _has_portfolio_daily(session):
+    if not _has_data(daily):
         return _initializing()
     bad = _check_iso(start, "start") or _check_iso(end, "end")
     if bad is not None:

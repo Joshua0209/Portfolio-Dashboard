@@ -19,11 +19,12 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+_BACKEND_SRC = PROJECT_ROOT / "backend" / "src"
+if str(_BACKEND_SRC) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_SRC))
 
-from app import backfill_runner  # noqa: E402
-from app.daily_store import DailyStore  # noqa: E402
+from invest.jobs import backfill_runner  # noqa: E402
+from invest.persistence.daily_store import DailyStore  # noqa: E402
 
 log = logging.getLogger("retry_failed_tasks")
 
@@ -31,14 +32,14 @@ log = logging.getLogger("retry_failed_tasks")
 def build_resolver(store: DailyStore):
     """Return a resolver(row) -> callable for retry_open_tasks.
 
-    Mirrors app/api/today.py::_build_retry_resolver. We deliberately
-    duplicate the dispatch instead of importing the request-scoped one,
-    because the CLI must run without a Flask app context.
+    Mirrors the request-scoped resolver inside the FastAPI today router.
+    We deliberately duplicate the dispatch instead of importing it —
+    the CLI must run without a FastAPI app context.
 
     Each branch returns a callable that fetches AND persists — see
     retry_open_tasks docstring for the contract.
     """
-    from app import price_sources
+    from invest.prices import sources as price_sources
 
     def resolver(row):
         ttype = row["task_type"]

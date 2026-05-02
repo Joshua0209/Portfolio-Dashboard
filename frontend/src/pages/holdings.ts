@@ -268,10 +268,7 @@ const csvCell = (v: unknown): string => {
   // Prefix formula-injection chars (=, +, -, @, tab, CR) so spreadsheets
   // do not interpret the cell as a formula.
   const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-  if (safe.includes(",") || safe.includes('"') || safe.includes("\n")) {
-    return `"${safe.replace(/"/g, '""')}"`;
-  }
-  return safe;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
 
 const CSV_KEYS: ReadonlyArray<keyof Holding> = [
