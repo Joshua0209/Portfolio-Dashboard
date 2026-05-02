@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Optional
+from sqlalchemy import func as sa_func
 from sqlmodel import Session, func, select
 from invest.persistence.models.failed_task import FailedTask
 def _utcnow() -> datetime:
@@ -28,6 +29,17 @@ class FailedTaskRepo:
             .order_by(FailedTask.first_failed_at)
         )
         return list(self.session.exec(stmt).all())
+    def find_open_by_target(
+        self, task_type: str, target: str
+    ) -> Optional[FailedTask]:
+        stmt = (
+            select(FailedTask)
+            .where(FailedTask.task_type == task_type)
+            .where(sa_func.json_extract(FailedTask.payload, "$.target") == target)
+            .where(FailedTask.resolved_at.is_(None))
+            .order_by(FailedTask.id)
+        )
+        return self.session.exec(stmt).first()
     def count_open(self) -> int:
         stmt = select(func.count()).select_from(FailedTask).where(
             FailedTask.resolved_at.is_(None)
