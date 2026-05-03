@@ -13,6 +13,7 @@ properties:
 """
 from __future__ import annotations
 
+import logging
 from datetime import date as _date
 from decimal import Decimal
 from typing import Optional, Protocol
@@ -22,6 +23,7 @@ from invest.persistence.models.fx_rate import FxRate
 from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.fx_repo import FxRepo
 
+log = logging.getLogger(__name__)
 
 _TASK_TYPE = "fetch_fx"
 
@@ -67,6 +69,7 @@ def fetch_and_store_fx(
     try:
         rows = client.fetch_fx(ccy, iso, iso)
     except Exception as exc:
+        log.warning("fx_provider: %s->TWD on %s failed: %r", ccy, iso, exc)
         existing = _open_task_for(dlq, ccy)
         if existing is None:
             dlq.insert(
@@ -80,8 +83,13 @@ def fetch_and_store_fx(
 
     if not rows:
         if _has_prior_history(fx_repo, ccy):
+            log.debug("fx_provider: %s->TWD on %s empty (holiday)", ccy, iso)
             return None
         if _open_task_for(dlq, ccy) is None:
+            log.warning(
+                "fx_provider: %s->TWD on %s — no rows, no prior history "
+                "(possible exotic/unsupported currency)", ccy, iso,
+            )
             dlq.insert(
                 FailedTask(
                     task_type=_TASK_TYPE,
@@ -149,6 +157,10 @@ def fetch_and_store_range(
         rows = client.fetch_fx(ccy, start_iso, end_iso)
     except Exception as exc:
         # Outcome A: real failure. Always bump.
+        log.warning(
+            "fx_provider: %s->TWD [%s..%s] failed: %r",
+            ccy, start_iso, end_iso, exc,
+        )
         existing = _open_task_for(dlq, ccy)
         if existing is None:
             dlq.insert(
@@ -163,9 +175,18 @@ def fetch_and_store_range(
     if not rows:
         if _has_prior_history(fx_repo, ccy):
             # Outcome B: silent miss.
+            log.debug(
+                "fx_provider: %s->TWD [%s..%s] empty (holiday window)",
+                ccy, start_iso, end_iso,
+            )
             return 0
         # Outcome C: log once.
         if _open_task_for(dlq, ccy) is None:
+            log.warning(
+                "fx_provider: %s->TWD [%s..%s] — no rows, no prior history "
+                "(possible exotic/unsupported currency)",
+                ccy, start_iso, end_iso,
+            )
             dlq.insert(
                 FailedTask(
                     task_type=_TASK_TYPE,

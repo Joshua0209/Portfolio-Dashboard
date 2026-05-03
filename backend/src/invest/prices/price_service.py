@@ -15,6 +15,7 @@ indefinitely after a transient outage clears.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date as _date
 from decimal import Decimal
 from typing import Optional, Protocol
@@ -28,6 +29,7 @@ from invest.persistence.repositories.symbol_market_repo import (
 )
 from invest.prices.tw_probe import fetch_tw_with_probe, is_tw_warrant
 
+log = logging.getLogger(__name__)
 
 _TASK_TYPE = "fetch_price"
 
@@ -100,6 +102,10 @@ def fetch_and_store(
             rows = client.fetch_prices(symbol, iso, iso)
     except Exception as exc:
         # Outcome A: real failure. Always bump.
+        log.warning(
+            "price_service: %s on %s failed (%s): %r",
+            symbol, iso, currency, exc,
+        )
         existing = _open_task_for(dlq, symbol)
         if existing is None:
             dlq.insert(
@@ -115,17 +121,26 @@ def fetch_and_store(
         if _has_prior_history(price_repo, symbol):
             # Outcome B: silent miss. We've priced this symbol before,
             # so an empty result is almost always a holiday.
+            log.debug("price_service: %s on %s empty (holiday)", symbol, iso)
             return None
         if currency == "TWD" and is_tw_warrant(symbol):
             # Outcome B': Taiwan warrant (權證) with no trades is the
             # steady state, not a failure. Clear any DLQ row left over
             # from before warrants were recognized as expected-empty.
+            log.debug(
+                "price_service: %s on %s empty (TW warrant, expected)",
+                symbol, iso,
+            )
             existing = _open_task_for(dlq, symbol)
             if existing is not None:
                 dlq.mark_resolved(existing.id)
             return None
         # Outcome C: log once.
         if _open_task_for(dlq, symbol) is None:
+            log.warning(
+                "price_service: %s on %s — no rows, no prior history "
+                "(possible delist/unknown)", symbol, iso,
+            )
             dlq.insert(
                 FailedTask(
                     task_type=_TASK_TYPE,
@@ -220,6 +235,10 @@ def fetch_and_store_range(
             rows = client.fetch_prices(symbol, start_iso, end_iso)
     except Exception as exc:
         # Outcome A: real failure. Always bump.
+        log.warning(
+            "price_service: %s [%s..%s] failed (%s): %r",
+            symbol, start_iso, end_iso, currency, exc,
+        )
         existing = _open_task_for(dlq, symbol)
         if existing is None:
             dlq.insert(
@@ -234,17 +253,29 @@ def fetch_and_store_range(
     if not rows:
         if _has_prior_history(price_repo, symbol):
             # Outcome B: silent miss.
+            log.debug(
+                "price_service: %s [%s..%s] empty (holiday/no-trade window)",
+                symbol, start_iso, end_iso,
+            )
             return 0
         if currency == "TWD" and is_tw_warrant(symbol):
             # Outcome B': Taiwan warrant (權證) with no trades is the
             # steady state, not a failure. Clear any DLQ row left over
             # from before warrants were recognized as expected-empty.
+            log.debug(
+                "price_service: %s [%s..%s] empty (TW warrant, expected)",
+                symbol, start_iso, end_iso,
+            )
             existing = _open_task_for(dlq, symbol)
             if existing is not None:
                 dlq.mark_resolved(existing.id)
             return 0
         # Outcome C: log once.
         if _open_task_for(dlq, symbol) is None:
+            log.warning(
+                "price_service: %s [%s..%s] — no rows, no prior history "
+                "(possible delist/unknown)", symbol, start_iso, end_iso,
+            )
             dlq.insert(
                 FailedTask(
                     task_type=_TASK_TYPE,
