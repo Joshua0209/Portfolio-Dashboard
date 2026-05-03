@@ -15,6 +15,7 @@ indefinitely after a transient outage clears.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date as _date
 from decimal import Decimal
 from typing import Optional, Protocol
@@ -26,8 +27,9 @@ from invest.persistence.repositories.price_repo import PriceRepo
 from invest.persistence.repositories.symbol_market_repo import (
     SymbolMarketRepo,
 )
-from invest.prices.tw_probe import fetch_tw_with_probe
+from invest.prices.tw_probe import fetch_tw_with_probe, is_tw_warrant
 
+log = logging.getLogger(__name__)
 
 _TASK_TYPE = "fetch_price"
 
@@ -100,6 +102,10 @@ def fetch_and_store(
             rows = client.fetch_prices(symbol, iso, iso)
     except Exception as exc:
         # Outcome A: real failure. Always bump.
+        log.warning(
+            "price_service: %s on %s failed (%s): %r",
+            symbol, iso, currency, exc,
+        )
         existing = _open_task_for(dlq, symbol)
         if existing is None:
             dlq.insert(
@@ -115,9 +121,26 @@ def fetch_and_store(
         if _has_prior_history(price_repo, symbol):
             # Outcome B: silent miss. We've priced this symbol before,
             # so an empty result is almost always a holiday.
+            log.debug("price_service: %s on %s empty (holiday)", symbol, iso)
+            return None
+        if currency == "TWD" and is_tw_warrant(symbol):
+            # Outcome B': Taiwan warrant (權證) with no trades is the
+            # steady state, not a failure. Clear any DLQ row left over
+            # from before warrants were recognized as expected-empty.
+            log.debug(
+                "price_service: %s on %s empty (TW warrant, expected)",
+                symbol, iso,
+            )
+            existing = _open_task_for(dlq, symbol)
+            if existing is not None:
+                dlq.mark_resolved(existing.id)
             return None
         # Outcome C: log once.
         if _open_task_for(dlq, symbol) is None:
+            log.warning(
+                "price_service: %s on %s — no rows, no prior history "
+                "(possible delist/unknown)", symbol, iso,
+            )
             dlq.insert(
                 FailedTask(
                     task_type=_TASK_TYPE,
@@ -155,3 +178,141 @@ def fetch_and_store(
         dlq.mark_resolved(existing.id)
 
     return close
+
+
+def fetch_and_store_range(
+    symbol: str,
+    currency: str,
+    start: _date,
+    end: _date,
+    *,
+    price_repo: PriceRepo,
+    dlq: FailedTaskRepo,
+    client: PriceClient,
+    market_repo: Optional[SymbolMarketRepo] = None,
+) -> int:
+    """Fetch a date range for `symbol` and persist all rows via `price_repo`.
+
+    Returns the number of rows persisted (0 on miss/failure). DLQ rules
+    mirror :func:`fetch_and_store` but at the ``(symbol, range)``
+    granularity — one DLQ row per failed range, not per failed date:
+
+      Outcome A  exception                  -> insert/bump ONE DLQ row
+      Outcome B  empty, has prior history   -> silent miss
+      Outcome C  empty, no prior history    -> insert ONCE
+                                                (no auto-bump on repeat)
+      Non-empty -> persist + resolve any open DLQ row for the symbol
+
+    For ``currency='TWD'``, routes through invest.prices.tw_probe to pick
+    the right Yahoo suffix; requires ``market_repo`` so the verdict can
+    be cached.
+    """
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+    payload = {
+        "symbol": symbol,
+        "currency": currency,
+        "start": start_iso,
+        "end": end_iso,
+    }
+
+    if currency == "TWD" and market_repo is None:
+        raise ValueError(
+            "currency='TWD' requires market_repo for the .TW/.TWO probe; "
+            "pass an SymbolMarketRepo or use a non-TWD currency"
+        )
+
+    try:
+        if currency == "TWD":
+            rows = fetch_tw_with_probe(
+                symbol,
+                start_iso,
+                end_iso,
+                client=client,
+                market_repo=market_repo,
+            )
+        else:
+            rows = client.fetch_prices(symbol, start_iso, end_iso)
+    except Exception as exc:
+        # Outcome A: real failure. Always bump.
+        log.warning(
+            "price_service: %s [%s..%s] failed (%s): %r",
+            symbol, start_iso, end_iso, currency, exc,
+        )
+        existing = _open_task_for(dlq, symbol)
+        if existing is None:
+            dlq.insert(
+                FailedTask(
+                    task_type=_TASK_TYPE, payload=payload, error=repr(exc)
+                )
+            )
+        else:
+            dlq.bump_attempt(existing.id, repr(exc))
+        return 0
+
+    if not rows:
+        if _has_prior_history(price_repo, symbol):
+            # Outcome B: silent miss.
+            log.debug(
+                "price_service: %s [%s..%s] empty (holiday/no-trade window)",
+                symbol, start_iso, end_iso,
+            )
+            return 0
+        if currency == "TWD" and is_tw_warrant(symbol):
+            # Outcome B': Taiwan warrant (權證) with no trades is the
+            # steady state, not a failure. Clear any DLQ row left over
+            # from before warrants were recognized as expected-empty.
+            log.debug(
+                "price_service: %s [%s..%s] empty (TW warrant, expected)",
+                symbol, start_iso, end_iso,
+            )
+            existing = _open_task_for(dlq, symbol)
+            if existing is not None:
+                dlq.mark_resolved(existing.id)
+            return 0
+        # Outcome C: log once.
+        if _open_task_for(dlq, symbol) is None:
+            log.warning(
+                "price_service: %s [%s..%s] — no rows, no prior history "
+                "(possible delist/unknown)", symbol, start_iso, end_iso,
+            )
+            dlq.insert(
+                FailedTask(
+                    task_type=_TASK_TYPE,
+                    payload=payload,
+                    error=(
+                        f"no rows for {symbol} in [{start_iso}..{end_iso}]; "
+                        "symbol may be delisted or unknown to yfinance"
+                    ),
+                )
+            )
+        return 0
+
+    # Happy path: persist every returned row. ``date`` may arrive as a
+    # str (yfinance_client returns ISO strings) or as a date object — be
+    # defensive on the boundary.
+    persisted = 0
+    for row in rows:
+        raw_date = row.get("date")
+        if isinstance(raw_date, _date):
+            on_date = raw_date
+        else:
+            on_date = _date.fromisoformat(str(raw_date))
+        close = Decimal(str(row["close"]))
+        price_repo.upsert(
+            Price(
+                date=on_date,
+                symbol=symbol,
+                close=close,
+                currency=currency,
+                source="yfinance",
+            )
+        )
+        persisted += 1
+
+    # Recovery: resolve any open DLQ row for this symbol.
+    existing = _open_task_for(dlq, symbol)
+    if existing is not None:
+        dlq.mark_resolved(existing.id)
+
+    return persisted

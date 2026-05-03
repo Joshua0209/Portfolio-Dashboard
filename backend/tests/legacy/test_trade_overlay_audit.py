@@ -3,14 +3,19 @@
 Documents the originally-planned STRICT firing rule. As of 2026-05-01
 the strict rule was retired — it produced 8 false positives on 8 closed
 pairs because SDK FIFO leg counts and PDF all-time buy counts are
-structurally apples-to-oranges. ``trade_overlay._audit_policy`` now
-returns None unconditionally (silent), so these firing tests are
-``pytest.skip``-ped.
+structurally apples-to-oranges.
 
-These tests stay in the codebase as scenario documentation: when you
-fill in ``_audit_policy`` with option A (broker self-sanity) or option
-B (PDF coverage gap) per the function's TODO, un-skip the tests
-applicable to your chosen policy.
+Phase 14.5 (2026-05-03) moved the audit hook out of
+``brokerage/trade_overlay.py`` and into
+``reconciliation/shioaji_audit.py`` (Option B — PDF coverage gap by
+``(date, qty)`` keys). ``trade_overlay.merge()`` no longer fires
+reconcile events on the write path; the audit runs as a post-overlay
+step inside ``jobs.snapshot.run``.
+
+These tests stay in the codebase as scenario documentation for the
+originally-planned strict rule. They are ``pytest.skip``-ped because
+the strict rule is permanently abandoned. The lone active test
+asserts merge() stays silent — a regression guard for the extraction.
 """
 from __future__ import annotations
 
@@ -24,8 +29,9 @@ from invest.persistence.daily_store import DailyStore
 from invest.reconciliation import reconcile
 
 _POLICY_SILENT_REASON = (
-    "trade_overlay._audit_policy currently returns None unconditionally "
-    "(silent). Un-skip when implementing option A/B/C."
+    "Strict count-mismatch rule permanently abandoned (false-positive "
+    "surge 2026-05-01). Extracted audit policy lives in "
+    "reconciliation/shioaji_audit.audit_realized_pairs (Option B)."
 )
 
 
@@ -36,7 +42,7 @@ def store(tmp_path: Path) -> DailyStore:
     # Seed a price so positions_daily can be written for the gap.
     with s.connect_rw() as conn:
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-22', '7769', 210.0, 'TWD', 'yfinance', '2026-04-22T00:00:00Z')"
         )
     return s

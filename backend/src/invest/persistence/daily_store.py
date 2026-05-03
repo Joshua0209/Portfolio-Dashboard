@@ -6,9 +6,10 @@ month-end equity; this store holds daily prices, FX rates, and per-day
 position state derived from them.
 
 The store is read-only on the request path. Writes flow through
-`backfill_runner.py` (Phase 3+) which holds a single writer connection
-guarded by `_write_lock`. Reads use per-thread connections in WAL mode so
-they never block each other or the writer.
+`invest.jobs.backfill` (Phase 3+, formerly `app/backfill_runner.py`)
+which holds a single writer connection guarded by `_write_lock`. Reads
+use per-thread connections in WAL mode so they never block each other
+or the writer.
 
 WAL is mandatory because two processes may write concurrently: the Flask
 backfill thread and the standalone `scripts/snapshot_daily.py` CLI.
@@ -32,7 +33,7 @@ BUSY_TIMEOUT_MS = 5000
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
         "prices",
-        "fx_daily",
+        "fx_rates",
         "symbol_market",
         "positions_daily",
         "portfolio_daily",
@@ -45,25 +46,13 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
 )
 
 _SCHEMA_DDL = """
-CREATE TABLE IF NOT EXISTS prices (
-    date         TEXT NOT NULL,
-    symbol       TEXT NOT NULL,
-    close        REAL NOT NULL,
-    currency     TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    fetched_at   TEXT NOT NULL,
-    PRIMARY KEY (date, symbol)
-);
-CREATE INDEX IF NOT EXISTS idx_prices_symbol_date ON prices(symbol, date);
-
-CREATE TABLE IF NOT EXISTS fx_daily (
-    date         TEXT NOT NULL,
-    ccy          TEXT NOT NULL,
-    rate_to_twd  REAL NOT NULL,
-    source       TEXT NOT NULL,
-    fetched_at   TEXT NOT NULL,
-    PRIMARY KEY (date, ccy)
-);
+-- Phase 14.3a: `prices` and `failed_tasks` are owned by SQLModel
+-- (invest.persistence.models.{price,failed_task}). DDL is created via
+-- SQLModel.metadata.create_all in init_schema().
+-- Phase 14.3b: `fx_rates` is owned by SQLModel
+-- (invest.persistence.models.fx_rate). The legacy `fx_daily` block was
+-- dropped — when the user regens dashboard.db, the SQLModel-canonical
+-- schema lands instead.
 
 CREATE TABLE IF NOT EXISTS symbol_market (
     symbol            TEXT PRIMARY KEY,
@@ -92,19 +81,6 @@ CREATE TABLE IF NOT EXISTS portfolio_daily (
     n_positions  INTEGER NOT NULL,
     has_overlay  INTEGER NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS failed_tasks (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_type       TEXT NOT NULL,
-    target          TEXT NOT NULL,
-    error_message   TEXT NOT NULL,
-    attempts        INTEGER NOT NULL DEFAULT 1,
-    first_seen_at   TEXT NOT NULL,
-    last_attempt_at TEXT NOT NULL,
-    resolved_at     TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_failed_open
-    ON failed_tasks(resolved_at) WHERE resolved_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS reconcile_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,7 +205,15 @@ class DailyStore:
 
     def init_schema(self) -> None:
         """Idempotent: create the parent dir, set WAL+busy_timeout, run DDL,
-        seed required `meta` rows. Safe to call multiple times."""
+        seed required `meta` rows. Safe to call multiple times.
+
+        Phase 14.3a: ``prices`` and ``failed_tasks`` DDLs are owned by
+        SQLModel (``invest.persistence.models.{price,failed_task}``). After
+        the legacy ``executescript(_SCHEMA_DDL)`` runs we call
+        ``SQLModel.metadata.create_all`` for those two tables specifically
+        so the SQLModel-canonical schema lands without disturbing the
+        other tables (which remain on the legacy DDL until 14.3b/14.3c).
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._write_lock:
             conn = sqlite3.connect(self._path, timeout=BUSY_TIMEOUT_MS / 1000)
@@ -252,6 +236,32 @@ class DailyStore:
                 conn.commit()
             finally:
                 conn.close()
+
+            # SQLModel-canonical tables for prices + failed_tasks (Phase 14.3a)
+            # and fx_rates (Phase 14.3b). Local imports avoid a circular
+            # dependency: the SQLModel models don't import from daily_store,
+            # but importing them at module top would tighten an already-fragile
+            # import order.
+            from sqlalchemy import create_engine
+            from sqlmodel import SQLModel
+
+            from invest.persistence.models.failed_task import FailedTask
+            from invest.persistence.models.fx_rate import FxRate
+            from invest.persistence.models.price import Price
+
+            engine = create_engine(
+                f"sqlite:///{self._path}",
+                connect_args={"timeout": BUSY_TIMEOUT_MS / 1000},
+            )
+            SQLModel.metadata.create_all(
+                engine,
+                tables=[
+                    Price.__table__,
+                    FailedTask.__table__,
+                    FxRate.__table__,
+                ],
+            )
+            engine.dispose()
         self._initialized = True
 
     # --- meta -----------------------------------------------------------------
@@ -538,8 +548,18 @@ class DailyStore:
     def get_fx_series(
         self, ccy: str = "USD", start: str | None = None, end: str | None = None
     ) -> list[dict[str, Any]]:
-        """Daily FX-to-TWD rate for one currency from fx_daily."""
-        sql = "SELECT date, rate_to_twd FROM fx_daily WHERE ccy = ?"
+        """Daily FX-to-TWD rate for one currency from fx_rates.
+
+        Phase 14.3b: schema is now SQLModel-canonical (``fx_rates`` with
+        ``base``/``quote``/``rate``). The returned dict still uses
+        ``rate_to_twd`` as the alias key so the existing /api/fx router
+        and analytics/monthly.py reader stay byte-identical without
+        churn.
+        """
+        sql = (
+            "SELECT date, rate AS rate_to_twd FROM fx_rates "
+            "WHERE base = ? AND quote = 'TWD'"
+        )
         params: list[Any] = [ccy]
         if start:
             sql += " AND date >= ?"
@@ -552,13 +572,60 @@ class DailyStore:
             return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
     def get_failed_tasks(self) -> list[dict[str, Any]]:
+        """Read open DLQ rows from the SQLModel-shape ``failed_tasks`` table.
+
+        Phase 14.3a: schema is now SQLModel-canonical
+        (``payload`` JSON / ``error`` / ``first_failed_at`` /
+        ``last_failed_at``) but the returned dicts also expose
+        legacy-aliased fields (``target`` derived from
+        ``payload['symbol' | 'ccy' | 'target']``, ``error_message``,
+        ``first_seen_at``, ``last_attempt_at``) so existing CLI/UI
+        consumers (scripts/backfill_daily.py rendering, frontend banner)
+        keep working without churn.
+        """
+        import json
+
         with self.connect_ro() as conn:
-            return [
-                dict(r)
-                for r in conn.execute(
-                    "SELECT id, task_type, target, error_message, attempts, "
-                    "first_seen_at, last_attempt_at "
-                    "FROM failed_tasks WHERE resolved_at IS NULL "
-                    "ORDER BY last_attempt_at DESC"
-                ).fetchall()
-            ]
+            rows = conn.execute(
+                "SELECT id, task_type, payload, error, attempts, "
+                "first_failed_at, last_failed_at "
+                "FROM failed_tasks WHERE resolved_at IS NULL "
+                "ORDER BY last_failed_at DESC"
+            ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            raw_payload = r["payload"]
+            if isinstance(raw_payload, (bytes, bytearray)):
+                raw_payload = raw_payload.decode("utf-8")
+            if isinstance(raw_payload, str):
+                try:
+                    payload = json.loads(raw_payload) if raw_payload else {}
+                except json.JSONDecodeError:
+                    payload = {}
+            elif isinstance(raw_payload, dict):
+                payload = raw_payload
+            else:
+                payload = {}
+            target = (
+                payload.get("symbol")
+                or payload.get("ccy")
+                or payload.get("target")
+                or ""
+            )
+            out.append(
+                {
+                    "id": r["id"],
+                    "task_type": r["task_type"],
+                    "target": target,
+                    "payload": payload,
+                    "error": r["error"],
+                    "error_message": r["error"],
+                    "attempts": r["attempts"],
+                    "first_seen_at": r["first_failed_at"],
+                    "first_failed_at": r["first_failed_at"],
+                    "last_attempt_at": r["last_failed_at"],
+                    "last_failed_at": r["last_failed_at"],
+                }
+            )
+        return out

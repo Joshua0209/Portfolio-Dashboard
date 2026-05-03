@@ -93,7 +93,7 @@ class TestRunFullBackfillState:
         def orchestrator(s, start, end):
             observed_states.append(state_module.get().snapshot()["state"])
 
-        backfill.run_full_backfill(
+        backfill.run_full_backfill_sqlmodel(
             session,
             start=date(2026, 1, 1),
             end=date(2026, 1, 1),
@@ -103,7 +103,7 @@ class TestRunFullBackfillState:
         assert observed_states == ["INITIALIZING"]
 
     def test_marks_ready_after_success(self, session):
-        backfill.run_full_backfill(
+        backfill.run_full_backfill_sqlmodel(
             session,
             start=date(2026, 1, 1),
             end=date(2026, 1, 1),
@@ -117,7 +117,7 @@ class TestRunFullBackfillState:
             raise RuntimeError("yfinance unreachable")
 
         with pytest.raises(RuntimeError, match="yfinance unreachable"):
-            backfill.run_full_backfill(
+            backfill.run_full_backfill_sqlmodel(
                 session,
                 start=date(2026, 1, 1),
                 end=date(2026, 1, 1),
@@ -140,7 +140,7 @@ class TestRunFullBackfillState:
         monkeypatch.setattr(_positions, "build_daily", boom)
 
         with pytest.raises(RuntimeError, match="schema corrupt"):
-            backfill.run_full_backfill(
+            backfill.run_full_backfill_sqlmodel(
                 session,
                 start=date(2026, 1, 1),
                 end=date(2026, 1, 1),
@@ -161,7 +161,7 @@ class TestRunFullBackfillOrchestrator:
             captured["start"] = start
             captured["end"] = end
 
-        backfill.run_full_backfill(
+        backfill.run_full_backfill_sqlmodel(
             session,
             start=date(2026, 1, 1),
             end=date(2026, 1, 31),
@@ -178,7 +178,7 @@ class TestRunFullBackfillOrchestrator:
         def orchestrator(s, start, end):
             _seed_one_day(s, d)
 
-        result = backfill.run_full_backfill(
+        result = backfill.run_full_backfill_sqlmodel(
             session,
             start=d,
             end=d,
@@ -234,7 +234,7 @@ class TestStart:
             )
             s.commit()
 
-        thread = backfill.start(
+        thread = backfill.start_sqlmodel(
             session_factory=lambda: Session(engine),
             start=date(2026, 1, 1),
             end=date(2026, 1, 31),
@@ -252,7 +252,7 @@ class TestStart:
         def orchestrator(s, start, end):
             ran.set()
 
-        thread = backfill.start(
+        thread = backfill.start_sqlmodel(
             session_factory=lambda: Session(engine),
             start=date(2026, 1, 1),
             end=date(2026, 1, 31),
@@ -274,7 +274,7 @@ class TestStart:
             gate.set()
             release.wait(timeout=5.0)
 
-        t1 = backfill.start(
+        t1 = backfill.start_sqlmodel(
             session_factory=lambda: Session(engine),
             start=date(2026, 1, 1),
             end=date(2026, 1, 31),
@@ -282,7 +282,7 @@ class TestStart:
         )
         gate.wait(timeout=5.0)
 
-        t2 = backfill.start(
+        t2 = backfill.start_sqlmodel(
             session_factory=lambda: Session(engine),
             start=date(2026, 1, 1),
             end=date(2026, 1, 31),

@@ -1,4 +1,4 @@
-"""Phase 3 acceptance tests for app/backfill_runner.compute_fetch_window().
+"""Phase 3 acceptance tests for app/backfill.compute_fetch_window().
 
 These pin down the §6.1 per-symbol windowing rule end-to-end, covering all
 five edge cases listed in the implementation plan §3 Phase 3:
@@ -11,7 +11,7 @@ five edge cases listed in the implementation plan §3 Phase 3:
 """
 from __future__ import annotations
 
-from invest.jobs.backfill_runner import compute_fetch_window
+from invest.jobs.backfill import compute_fetch_window
 
 
 FLOOR = "2025-08-01"

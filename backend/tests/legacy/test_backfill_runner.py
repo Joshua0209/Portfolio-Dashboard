@@ -1,10 +1,10 @@
-"""Phase 3 acceptance tests for app/backfill_runner.run_tw_backfill().
+"""Phase 3 acceptance tests for app/backfill.run_tw_backfill().
 
 The runner pulls TW symbols from portfolio.json, computes per-symbol
 windows via compute_fetch_window(), calls price_sources.get_prices, and
 UPSERTs into prices + derives basic positions_daily / portfolio_daily.
 
-These tests stub out the network (via invest.jobs.backfill_runner.get_prices) and
+These tests stub out the network (via invest.jobs.backfill.get_prices) and
 exercise the runner against a tiny synthetic portfolio fixture.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from invest.jobs.backfill_runner import (
+from invest.jobs.backfill import (
     iter_tw_symbols_with_metadata,
     run_tw_backfill,
 )
@@ -156,6 +156,46 @@ def test_iter_tw_symbols_emits_codes_with_window_metadata(portfolio_path: Path) 
     assert "2026-03" in by_code["2330"]["held_months"]
 
 
+def _install_fake_price_service(
+    monkeypatch, *, rows_by_symbol_or_fn, captured: list | None = None,
+):
+    """Phase 14.3a: backfill price-fetch goes through
+    ``_fetch_range_via_price_service``. Tests substitute that seam to
+    persist a deterministic set of rows without touching yfinance.
+
+    ``rows_by_symbol_or_fn`` is either:
+      - a dict mapping symbol -> list[dict] (each dict has date+close,
+        symbol+currency+source optional), or
+      - a callable (symbol, currency, start, end) -> list[dict].
+    """
+    from invest.jobs import backfill
+
+    def _fake(store, symbol, currency, start, end):
+        if captured is not None:
+            captured.append((symbol, currency, start, end))
+        if callable(rows_by_symbol_or_fn):
+            rows = rows_by_symbol_or_fn(symbol, currency, start, end)
+        else:
+            rows = rows_by_symbol_or_fn.get(symbol, [])
+        if not rows:
+            return 0
+        tagged = [
+            {
+                "date": r["date"],
+                "close": r["close"],
+                "symbol": r.get("symbol", symbol),
+                "currency": r.get("currency", currency),
+                "source": r.get("source", "yfinance"),
+            }
+            for r in rows
+        ]
+        return backfill._persist_symbol_prices(store, symbol, tagged)
+
+    monkeypatch.setattr(
+        backfill, "_fetch_range_via_price_service", _fake,
+    )
+
+
 def test_run_tw_backfill_skips_symbols_outside_floor(
     portfolio_path: Path, store: DailyStore, monkeypatch
 ) -> None:
@@ -163,16 +203,16 @@ def test_run_tw_backfill_skips_symbols_outside_floor(
     no symbol_market row."""
     fetched: list[tuple] = []
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
-        fetched.append((symbol, currency, start, end))
-        # Synthesize one row per requested month so positions_daily has data.
+    def fake_rows(symbol, currency, start, end):
         return [
             {"date": start, "close": 1000.0, "volume": 1,
              "symbol": symbol, "currency": currency, "source": "yfinance"},
         ]
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_price_service(
+        monkeypatch, rows_by_symbol_or_fn=fake_rows, captured=fetched,
+    )
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     summary = run_tw_backfill(store, portfolio_path)
 
@@ -192,11 +232,8 @@ def test_run_tw_backfill_writes_prices(
          "symbol": "2330", "currency": "TWD", "source": "yfinance"},
     ]
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
-        return rows if symbol == "2330" else []
-
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn={"2330": rows})
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_tw_backfill(store, portfolio_path)
 
@@ -214,14 +251,14 @@ def test_run_tw_backfill_is_idempotent_via_upsert(
               "symbol": "2330", "currency": "TWD", "source": "yfinance"}]
     state = {"calls": 0}
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_rows(symbol, currency, start, end):
         if symbol != "2330":
             return []
         state["calls"] += 1
         return rows1 if state["calls"] == 1 else rows2
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_tw_backfill(store, portfolio_path)
     run_tw_backfill(store, portfolio_path)
@@ -244,11 +281,8 @@ def test_run_tw_backfill_populates_portfolio_daily(
          "symbol": "2330", "currency": "TWD", "source": "yfinance"},
     ]
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
-        return rows if symbol == "2330" else []
-
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn={"2330": rows})
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_tw_backfill(store, portfolio_path)
 
@@ -268,7 +302,7 @@ def test_run_tw_backfill_populates_portfolio_daily(
 
 
 def test_month_end_iso_handles_month_lengths() -> None:
-    from invest.jobs.backfill_runner import month_end_iso
+    from invest.jobs.backfill import month_end_iso
     assert month_end_iso("2025-02") == "2025-02-28"  # non-leap
     assert month_end_iso("2024-02") == "2024-02-29"  # leap
     assert month_end_iso("2025-04") == "2025-04-30"

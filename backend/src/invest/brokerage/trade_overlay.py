@@ -21,24 +21,23 @@ Three-source merge (Path A, plan §"Code changes"):
 All three sources are unified into a single trade-shaped list, deduped
 by ``(date, code, side, int(round(qty)))``, and folded into qty_history.
 
-Audit hook (decision #1 option C, STRICT firing rule):
-  For each pair_id from list_realized_pairs, the SDK's buy-leg count
-  is compared against the PDF parser's trade rows for the same
-  (code, ≤sell_date) window. ANY count divergence — including legitimate
-  broker consolidations — fires a reconcile event via
-  ``invest.reconciliation.reconcile.record_event()``.
+Audit hook (Phase 14.5, extracted):
+  Broker-vs-PDF buy-leg coverage is checked by
+  ``invest.reconciliation.shioaji_audit.run``, invoked by
+  ``jobs.snapshot.run`` AFTER the overlay write completes.
+  This module no longer fires reconcile events on the write path —
+  separation matches the docstring intent that "a future change to
+  the audit policy should not require touching the write path."
 """
 from __future__ import annotations
 
 import calendar
-import json
 import logging
 from datetime import datetime, date, timezone
 from typing import Any, Iterable
 
 from invest.brokerage.shioaji_client import ShioajiClient
 from invest.persistence.daily_store import DailyStore
-from invest.reconciliation import reconcile
 
 log = logging.getLogger(__name__)
 
@@ -139,7 +138,7 @@ def compute_gap_window(
 
 
 def _qty_history_from_portfolio(portfolio: dict) -> dict[str, list[tuple[str, float]]]:
-    """Replicate backfill_runner._qty_history_for_symbol but for all TW
+    """Replicate _positions._qty_history_for_symbol but for all TW
     codes at once. Returns {code: [(date, signed_qty_change)]} sorted."""
     out: dict[str, list[tuple[str, float]]] = {}
     for t in portfolio.get("summary", {}).get("all_trades", []):
@@ -184,7 +183,7 @@ def _close_for(store: DailyStore, code: str, d: str) -> float | None:
 
 
 def _fx_for_date(store: DailyStore, ccy: str, d: str) -> float | None:
-    """Latest fx_daily.rate_to_twd for `ccy` on or before `d` (forward-fill).
+    """Latest fx_rates.rate for ``ccy``->TWD on or before ``d`` (forward-fill).
 
     Returns None when no FX row exists at all. The overlay's foreign
     leg is currently a no-op (the H-account is walled off behind HTTP
@@ -196,11 +195,12 @@ def _fx_for_date(store: DailyStore, ccy: str, d: str) -> float | None:
         return 1.0
     with store.connect_ro() as conn:
         row = conn.execute(
-            "SELECT rate_to_twd FROM fx_daily WHERE ccy = ? AND date <= ? "
+            "SELECT rate FROM fx_rates "
+            "WHERE base = ? AND quote = 'TWD' AND date <= ? "
             "ORDER BY date DESC LIMIT 1",
             (ccy, d),
         ).fetchone()
-    return row[0] if row else None
+    return float(row[0]) if row else None
 
 
 def _persist_overlay_trades(
@@ -402,164 +402,6 @@ def _dedup_overlay_trades(trades: list[dict]) -> list[dict]:
     return list(seen.values())
 
 
-# --- Audit hook (Strict firing rule) -------------------------------------
-
-
-def _pdf_buy_count_for(
-    portfolio: dict, code: str, sell_date: str,
-) -> tuple[int, list[dict]]:
-    """Count PDF buy trades for a code dated on or before sell_date.
-
-    Matches the same (code, side='普買', date ≤ sell_date) window the
-    SDK's list_profit_loss_detail covers. Returns (count, trade_rows)
-    so the audit event payload can show the actual trades for triage.
-    """
-    rows = []
-    for t in portfolio.get("summary", {}).get("all_trades", []):
-        if t.get("venue") != "TW":
-            continue
-        if t.get("code") != code:
-            continue
-        if t.get("side") != "普買":
-            continue
-        raw_date = t.get("date") or ""
-        iso_date = raw_date.replace("/", "-") if "/" in raw_date else raw_date
-        if iso_date and iso_date <= sell_date:
-            rows.append(t)
-    return len(rows), rows
-
-
-def _pair_groups(pairs: list[dict]) -> dict[Any, dict[str, Any]]:
-    """Group pairs by pair_id → {sell_date, code, buy_legs}.
-
-    Sells without legs (qty=0 degenerate) still appear with buy_legs=[].
-    """
-    groups: dict[Any, dict[str, Any]] = {}
-    for p in pairs:
-        pid = p.get("pair_id")
-        if pid is None:
-            continue
-        g = groups.setdefault(pid, {"sell_date": None, "code": None,
-                                    "buy_legs": []})
-        if p.get("side") == "普買":
-            g["buy_legs"].append(p)
-            if not g["code"]:
-                g["code"] = p.get("code")
-        elif p.get("side") == "普賣":
-            g["sell_date"] = p.get("date")
-            g["code"] = p.get("code")
-    return groups
-
-
-def _open_audit_pair_ids(store: DailyStore) -> set:
-    """pair_ids that already have an undismissed audit event of type
-    'broker_pdf_buy_leg_mismatch'. Re-running the merge against the
-    same SDK state must not insert a duplicate row.
-
-    Dismissed events do NOT block a refire — dismissal means "I've
-    reviewed this divergence", and if the divergence is still present
-    on the next run the operator wants to see it again.
-    """
-    seen: set = set()
-    for e in reconcile.get_open_events(store):
-        try:
-            payload = json.loads(e["diff_summary"]) if e["diff_summary"] else {}
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if payload.get("event_type") != "broker_pdf_buy_leg_mismatch":
-            continue
-        pid = (payload.get("detail") or {}).get("pair_id")
-        if pid is not None:
-            seen.add(pid)
-    return seen
-
-
-def _audit_policy(
-    pair_id: Any,
-    code: str,
-    sell_date: str,
-    sdk_legs: list[dict],
-    pdf_buy_rows: list[dict],
-) -> dict | None:
-    """Decide whether THIS realized pair should fire a reconcile event.
-
-    Return None to stay silent, or a `detail` dict to fire (will be
-    encoded inside diff_summary by record_event()).
-
-    BACKGROUND (2026-05-01 false-positive surge):
-    The original STRICT rule compared `len(sdk_legs)` against
-    `len(pdf_buy_rows)` and fired on any divergence. That comparison is
-    structurally apples-to-oranges:
-      • sdk_legs = buy legs FIFO-consumed by THIS one sell pair
-      • pdf_buy_rows = ALL buys for `code` ever, dated ≤ sell_date
-    A code held for years where the user has done multiple buy/sell
-    cycles will have many PDF buys that were already FIFO-closed by
-    earlier sells — so the strict rule fires on every realized pair.
-    Result: 8 alerts on 8 pairs, all false positives.
-
-    Currently this returns None unconditionally — the audit hook is
-    silent. The PDF-vs-overlay reconciliation via the manual "Reconcile
-    this month" button (`reconcile.run_for_month`) is a separate path
-    that already provides operator-triggered diff.
-
-    TODO: replace with a policy you actually want. Three meaningful
-    alternatives if you choose to add one back — see commit history /
-    PLAN-shioaji-historical-trades.md §"Audit hook" for context:
-
-      Option A — broker self-sanity:
-        sdk_qty = sum(int(round(float(l.get("qty") or 0))) for l in sdk_legs)
-        sell_qty = ???   # would need pl.qty (currently dropped)
-        if sdk_qty != sell_qty:
-            return {...}
-        return None
-
-      Option B — PDF coverage gap:
-        pdf_keys = {(t["date"].replace("/", "-"),
-                     int(round(float(t.get("qty") or 0))))
-                    for t in pdf_buy_rows}
-        missing = [l for l in sdk_legs
-                   if (l["date"], int(round(float(l.get("qty") or 0))))
-                   not in pdf_keys]
-        if missing:
-            return {"pair_id": pair_id, "code": code, "sell_date": sell_date,
-                    "missing_legs": missing}
-        return None
-    """
-    return None
-
-
-def _fire_audit_events(
-    store: DailyStore, portfolio: dict, pairs: list[dict],
-) -> int:
-    """Walk pair groups and fire whatever `_audit_policy` decides.
-
-    Dedup contract: a pair_id with an existing OPEN audit event is
-    skipped to prevent the banner count from doubling on every refresh.
-    Dismissed events allow the same pair_id to refire.
-    """
-    already_open = _open_audit_pair_ids(store)
-    fired = 0
-    for pid, g in _pair_groups(pairs).items():
-        if pid in already_open:
-            continue
-        sell_date = g.get("sell_date")
-        code = g.get("code")
-        if not sell_date or not code:
-            continue
-        _, pdf_rows = _pdf_buy_count_for(portfolio, code, sell_date)
-        detail = _audit_policy(pid, code, sell_date, g["buy_legs"], pdf_rows)
-        if detail is None:
-            continue
-        reconcile.record_event(
-            store,
-            event_type="broker_pdf_buy_leg_mismatch",
-            detail=detail,
-            pdf_month=sell_date[:7],
-        )
-        fired += 1
-    return fired
-
-
 # --- Production close resolver ------------------------------------------
 
 
@@ -685,14 +527,9 @@ def merge(
         gap_start, gap_end,
     )
 
-    # Strict-rule audit hook fires BEFORE dedup/projection so a count
-    # mismatch is surfaced even if the diff also happens to dedup down
-    # to a single record.
-    audit_fired = _fire_audit_events(store, portfolio, realized_pairs)
-    if audit_fired:
-        log.info(
-            "trade_overlay audit: fired %d reconcile event(s)", audit_fired
-        )
+    # Audit hook moved to reconciliation.shioaji_audit.run (Phase 14.5)
+    # — invoked by jobs.snapshot.run AFTER overlay write completes.
+    # The write path stays free of audit-policy concerns.
 
     # Unify all 3 sources into trade-shaped records, then dedup by
     # (date, code, side, int(round(qty))).
@@ -728,7 +565,7 @@ def merge(
 
     # Per-share avg cost from latest PDF month — combined with current
     # qty at write time to produce total cost_local. Matches the schema
-    # convention used by every reader (see backfill_runner.py:422 note).
+    # convention used by every reader (see _positions._derive_positions_and_portfolio).
     avg_cost_at: dict[str, float] = {}
     for m in portfolio.get("months", []):
         for h in m.get("tw", {}).get("holdings", []):
@@ -745,7 +582,7 @@ def merge(
 
     # We persist overlay rows for every priced day in the gap, for every
     # code with a non-zero opening (or post-overlay-trade) qty. This
-    # mirrors backfill_runner's mv-snapshot loop but scoped to the gap.
+    # mirrors _positions._derive_positions_and_portfolio's mv-snapshot loop but scoped to the gap.
     priced_dates = _priced_dates_in_range(store, gap_start, gap_end)
     if not priced_dates:
         log.info(
@@ -761,7 +598,7 @@ def merge(
 
     # Single-writer architecture (2026-05-01): merge() writes only
     # positions_daily for overlay-only (date, code) keys. portfolio_daily
-    # is owned by backfill_runner._derive_positions_and_portfolio, which
+    # is owned by _positions._derive_positions_and_portfolio, which
     # folds in overlay rows via a SUM query keyed on source='overlay'.
     # This eliminates the prior class of bug where merge() and derive()
     # both wrote equity_twd with different forward-fill / qty-history
@@ -783,8 +620,8 @@ def merge(
                 if close is None:
                     continue
                 mv_local = qty * close
-                # Total cost in local ccy. See backfill_runner.py:422 for
-                # why cost_local must be total, not per-share.
+                # Total cost in local ccy. See _positions._derive_positions_and_portfolio
+                # for why cost_local must be total, not per-share.
                 cost_local = qty * avg_cost_at.get(code, 0.0)
                 conn.execute(
                     """

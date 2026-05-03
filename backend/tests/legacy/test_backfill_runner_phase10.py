@@ -64,27 +64,38 @@ def test_run_full_backfill_continues_after_per_symbol_failure(
     store, portfolio_with_two_tw, monkeypatch
 ):
     """One TW symbol fails; the other still gets persisted; failed_tasks
-    has one open row for the failed symbol."""
-    from invest.jobs import backfill_runner
-    from invest.prices import sources as price_sources
+    has one open row for the failed symbol.
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    Phase 14.3a: simulate a failure by making the seam raise — the
+    orchestrator's deferred-retry pass + ``_record_dlq_failure``
+    writes a SQLModel-shape DLQ row under the legacy task_type
+    'tw_prices'. (In production the seam catches and writes
+    ``task_type='fetch_price'`` directly; the orchestrator's path is
+    only reached if the seam itself raises.)
+    """
+    from invest.jobs import backfill
+
+    def _fake_fetch_range(store, symbol, currency, start, end):
         if symbol == "2454":
             raise RuntimeError("yfinance 503 for 2454")
-        # Return a single fake row for 2330
-        return [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-15", "close": 600.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
-        }]
+        }])
 
-    def fake_get_fx(ccy, start, end, store=None, today=None):
-        return []
+    monkeypatch.setattr(
+        backfill, "_fetch_range_via_price_service", _fake_fetch_range,
+    )
+    monkeypatch.setattr(
+        backfill, "_fetch_range_via_fx_provider",
+        lambda store, ccy, s, e: 0,
+    )
+    monkeypatch.setattr(
+        backfill, "get_yfinance_prices",
+        lambda *a, **kw: [],
+    )
 
-    monkeypatch.setattr(price_sources, "get_prices", fake_get_prices)
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
-    monkeypatch.setattr(backfill_runner, "get_fx_rates", fake_get_fx)
-
-    summary = backfill_runner.run_full_backfill(
+    summary = backfill.run_full_backfill(
         store, portfolio_with_two_tw, today="2025-08-31"
     )
 
@@ -92,11 +103,10 @@ def test_run_full_backfill_continues_after_per_symbol_failure(
     assert "2330" in summary["tw_fetched"]
     assert "2454" not in summary["tw_fetched"]
 
-    with store.connect_ro() as conn:
-        open_rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM failed_tasks WHERE resolved_at IS NULL"
-        ).fetchall()]
-    assert len(open_rows) == 1
-    assert open_rows[0]["task_type"] == "tw_prices"
-    assert open_rows[0]["target"] == "2454"
-    assert "2454" in open_rows[0]["error_message"]
+    failed = store.get_failed_tasks()
+    assert len(failed) == 1
+    # Orchestrator path (seam raised): legacy task_type='tw_prices',
+    # target=payload['target'].
+    assert failed[0]["task_type"] == "tw_prices"
+    assert failed[0]["target"] == "2454"
+    assert "2454" in failed[0]["error_message"]

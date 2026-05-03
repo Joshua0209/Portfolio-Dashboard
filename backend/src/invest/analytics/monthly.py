@@ -1,51 +1,55 @@
-"""Monthly-aggregate-shaped analytics — verbatim port of legacy app/analytics.py
-plus daily/monthly bridge helpers that originally lived in app/api/performance.py
-(month_end_iso, _monthly_anchored_cum, _anchor_for_daily). Those are shared
-between summary, performance, and benchmarks routers; analytics is the natural
-home since they take only month/date primitives.
+"""Legacy month-dict-shaped analytics facade for the request path.
 
-Pure-Python: drawdown, volatility, Sharpe, Sortino, Calmar, cashflow
-attribution, FIFO realized P&L, FX P&L, sector mapping, daily TWR.
-Stateless functions over plain list/dict inputs; JSON-serializable
-outputs. Currency convention is TWD unless the function name says
-otherwise.
+The router code consumes the month-dict / by-ticker-dict shape produced
+by PortfolioStore. This module exposes those shapes while delegating
+all math primitives to the principled per-metric modules:
 
-Why this file is named "monthly":
-  Per PLAN §3 the principled per-metric files (twr.py, ratios.py,
-  drawdown.py, ...) take typed inputs (List[Trade], List[Price],
-  List[FX]). Those are the long-term home of analytics. This file
-  takes the legacy month-dict shape (`s.months` / `s.by_ticker` from
-  PortfolioStore) and is the bridge until the Trade-table aggregator
-  lands (Phase 10+). The router code consumes month dicts today;
-  swapping the source-of-truth is a future concern that doesn't
-  affect this module's interface.
+  ratios          : sharpe, sortino, calmar, stdev, downside_stdev
+  drawdown        : max_drawdown, drawdown_curve (via underwater_curve)
+  concentration   : hhi, top_n_share, effective_n
+  sectors         : sector_of, sector_breakdown
+  attribution     : fx_pnl (via usd_exposure_walk)
+  tax_pnl         : realized_pnl_by_ticker_fifo (via realized_stats_per_position)
 
-Why a wholesale port (not a refactor):
-  PLAN §3 explicitly forbids math rewrites here:
-    > Tests: golden-vector tests against the *current implementation's
-    > outputs* for the real portfolio.json. Lock these BEFORE rewriting
-    > any math — they catch silent drift between old and new.
-  Parity tests in test_monthly_parity.py lock new ≡ legacy on every
-  function. Any code-level deviation from app/analytics.py would
-  surface as a parity failure.
+The facade owns:
+  - month-dict-shape primitives (period_returns, daily_twr, daily_external_flows,
+    monthly_flows, reprice_holdings_with_daily, daily_fx_pnl, top_movers,
+    recent_activity, monthly_anchored_cum, bank_cash_forward_fill, …)
+  - thin float ↔ Decimal adapters at the call sites
+  - the legacy 16-key shape for realized_pnl_by_ticker_fifo (Trade VOs +
+    bookkeeping happen in tax_pnl.realized_stats_per_position; this module
+    flattens the result back into the dashboard shape and merges per-ticker
+    metadata)
 
-Coexistence with the principled per-metric files:
-  Some function names overlap (e.g., legacy.sharpe vs ratios.sharpe).
-  Both produce the same number for the same input — they were ported
-  from the same source. Routers explicitly import from this module
-  (`invest.analytics.monthly`) to keep the dependency direction clear:
-  router → monthly. The principled files remain pristine for Phase 10+
-  consumers (jobs/snapshot, jobs/backfill) that work in trade-shaped
-  inputs.
+Float math stays where the input shape is float (period_returns,
+daily_twr, monthly_flows, reprice_holdings_with_daily, top_movers,
+recent_activity, daily_fx_pnl). Math primitives that round-trip
+through Decimal incur ≤ 1e-9 drift — well below dashboard rounding.
 """
 from __future__ import annotations
 
-import math
 from calendar import monthrange
-from collections import defaultdict, deque
+from collections import defaultdict
 from datetime import date, datetime
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any, Iterable, Literal
+
+from invest.analytics import (
+    attribution as _attribution,
+    concentration as _concentration,
+    drawdown as _drawdown,
+    ratios as _ratios,
+    sectors as _sectors,
+    tax_pnl as _tax_pnl,
+)
+from invest.domain.money import Money
+from invest.domain.trade import Side, Trade, Venue
+
+
+def _decimals(values: Iterable[Any]) -> list[Decimal]:
+    """Coerce floats/None to Decimal via str (shortest-roundtrip)."""
+    return [Decimal(str(v or 0)) for v in values]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -366,22 +370,31 @@ def cumulative_curve(period_returns: Iterable[float]) -> list[float]:
 
 
 def drawdown_curve(cum_returns: Iterable[float]) -> list[dict]:
-    """For each point, return current drawdown from running peak."""
-    out = []
-    peak = 1.0
-    for r in cum_returns:
-        wealth = 1.0 + (r or 0)
-        if wealth > peak:
-            peak = wealth
-        dd = (wealth - peak) / peak if peak else 0.0
-        out.append({"wealth": wealth, "drawdown": dd})
-    return out
+    """For each point, return current drawdown from running peak.
+
+    Wires through `drawdown.underwater_curve` while preserving legacy
+    semantics: peak starts at 1.0 (i.e. the implicit pre-period
+    starting wealth), so a first-period loss reports `dd = cum[0]`
+    rather than the principled module's first-observation `dd = 0`.
+    Implemented by prepending a synthetic 1.0 to the equity series.
+    """
+    cum_list = list(cum_returns)
+    equity = [Decimal("1")] + [Decimal(str(1.0 + (r or 0))) for r in cum_list]
+    dds = _drawdown.underwater_curve(equity)
+    return [
+        {"wealth": float(equity[i + 1]), "drawdown": float(dds[i + 1])}
+        for i in range(len(cum_list))
+    ]
 
 
 def max_drawdown(cum_returns: list[float]) -> float:
+    """Worst peak-to-trough decline. Wires through
+    `drawdown.max_drawdown` with the same prepend-1.0 trick used in
+    drawdown_curve to preserve legacy semantics."""
     if not cum_returns:
         return 0.0
-    return min(p["drawdown"] for p in drawdown_curve(cum_returns))
+    equity = [Decimal("1")] + [Decimal(str(1.0 + (r or 0))) for r in cum_returns]
+    return float(_drawdown.max_drawdown(equity))
 
 
 def drawdown_episodes(cum_returns: list[float], months: list[str] | None = None) -> list[dict]:
@@ -443,21 +456,16 @@ def _episode(peak, peak_i, trough, trough_i, last_w, last_i, months, recovered: 
 
 
 def stdev(values: list[float]) -> float:
-    if len(values) < 2:
-        return 0.0
-    mean = sum(values) / len(values)
-    var = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
-    return math.sqrt(var)
+    """Sample stdev — delegates to ratios.stdev (Decimal)."""
+    return float(_ratios.stdev(_decimals(values)))
 
 
 def downside_stdev(values: list[float], target: float = 0.0) -> float:
-    """Stdev computed only over below-target observations (for Sortino)."""
-    if not values:
-        return 0.0
-    sq_neg = [(v - target) ** 2 for v in values if v < target]
-    if not sq_neg:
-        return 0.0
-    return math.sqrt(sum(sq_neg) / len(sq_neg))
+    """Sample stdev of below-target observations — delegates to
+    ratios.downside_stdev. NOTE: divides by (n − 1) using full series
+    count (Sortino convention), not population stdev of negatives.
+    Differs numerically from the legacy formula."""
+    return float(_ratios.downside_stdev(_decimals(values), Decimal(str(target))))
 
 
 def annualize_return(period_return: float, periods: int = 12) -> float:
@@ -475,37 +483,26 @@ def cagr_from_cum(cum_return: float, periods: int, periods_per_year: int = 12) -
 
 
 def sharpe(period_returns: list[float], rf_period: float = 0.0, periods_per_year: int = 12) -> float:
-    if len(period_returns) < 2:
-        return 0.0
-    excess = [r - rf_period for r in period_returns]
-    sd = stdev(excess)
-    if sd == 0:
-        return 0.0
-    mean_excess = sum(excess) / len(excess)
-    return (mean_excess / sd) * math.sqrt(periods_per_year)
+    """Annualized Sharpe — delegates to ratios.sharpe.
+
+    Legacy `rf_period` is the per-period risk-free rate; `ratios.sharpe`
+    accepts an annualized `risk_free` and divides internally by
+    `periods_per_year`. We multiply at the boundary to match.
+    """
+    risk_free_annual = Decimal(str(rf_period)) * Decimal(periods_per_year)
+    return float(_ratios.sharpe(_decimals(period_returns), risk_free_annual, periods_per_year))
 
 
 def sortino(period_returns: list[float], rf_period: float = 0.0, periods_per_year: int = 12) -> float:
-    if len(period_returns) < 2:
-        return 0.0
-    excess = [r - rf_period for r in period_returns]
-    dsd = downside_stdev(excess, target=0.0)
-    if dsd == 0:
-        return 0.0
-    mean_excess = sum(excess) / len(excess)
-    return (mean_excess / dsd) * math.sqrt(periods_per_year)
+    """Annualized Sortino — delegates to ratios.sortino. Sample-stdev
+    convention (see downside_stdev note)."""
+    risk_free_annual = Decimal(str(rf_period)) * Decimal(periods_per_year)
+    return float(_ratios.sortino(_decimals(period_returns), risk_free_annual, periods_per_year))
 
 
 def calmar(period_returns: list[float], periods_per_year: int = 12) -> float:
-    """CAGR divided by |max drawdown|. Higher = better return per unit of pain."""
-    if not period_returns:
-        return 0.0
-    cum = cumulative_curve(period_returns)
-    mdd = abs(max_drawdown(cum))
-    if mdd < 1e-9:
-        return 0.0
-    cagr = cagr_from_cum(cum[-1], len(period_returns), periods_per_year)
-    return cagr / mdd
+    """CAGR divided by |max drawdown| — delegates to ratios.calmar."""
+    return float(_ratios.calmar(_decimals(period_returns), periods_per_year))
 
 
 def rolling_returns(period_returns: list[float], window: int) -> list[float | None]:
@@ -538,12 +535,20 @@ def rolling_sharpe(period_returns: list[float], window: int, periods_per_year: i
 
 
 def hhi(weights: Iterable[float]) -> float:
-    return sum((w or 0) ** 2 for w in weights)
+    """HHI — delegates to concentration.hhi.
+
+    Caller must pass pre-normalized weights (sum ≈ 1). The principled
+    function normalizes internally; with already-normalized input the
+    extra normalization is a no-op and the result matches the legacy
+    sum-of-squares formula.
+    """
+    return float(_concentration.hhi(_decimals(weights)))
 
 
 def top_n_share(weights: list[float], n: int) -> float:
-    sorted_w = sorted([w or 0 for w in weights], reverse=True)
-    return sum(sorted_w[:n])
+    """Top-n share — delegates to concentration.top_n_share. Same
+    pre-normalization caveat as hhi."""
+    return float(_concentration.top_n_share(_decimals(weights), n))
 
 
 def effective_n(weights: Iterable[float]) -> float:
@@ -595,94 +600,120 @@ def realized_pnl_by_ticker(by_ticker: dict) -> list[dict]:
     return out
 
 
-def realized_pnl_by_ticker_fifo(by_ticker: dict) -> list[dict]:
-    """FIFO realized P&L per ticker.
+def _venue_for_legacy(raw: Any) -> Venue:
+    """Map legacy by_ticker `venue` (str/None) to the Venue enum.
+    Unknown / missing values fall back to TW (default for the
+    Taiwan-statement code path)."""
+    if raw == "US":
+        return Venue.US
+    if raw == "HK":
+        return Venue.HK
+    if raw == "JP":
+        return Venue.JP
+    return Venue.TW
 
-    Walks each ticker's trade log in chronological order, matching sells
-    against the oldest open buy lots. This is closer to Taiwan tax basis
-    (FIFO is the default) and produces accurate holding-period and
-    win-rate stats.
+
+def _trades_from_legacy_ticker(code: str, ticker: dict) -> list[Trade]:
+    """Synthesize Trade VOs from a legacy by_ticker entry.
+
+    Per-share price embeds fees/taxes the way the legacy FIFO walk did:
+        buy  : px = (gross + fee + tax) / qty
+        sell : px = (gross − fee − tax) / qty
+    All amounts are TWD (legacy `*_twd` fields). Margin and short sides
+    ("資買" / "資賣") are coerced to CASH_* — the legacy walk treated
+    them identically for P&L bookkeeping; preserving that semantic here
+    avoids a NotImplementedError from Position.apply on margin holdings.
+    Trades with non-positive qty or non-buy/non-sell side (e.g.
+    "股利") are skipped, matching legacy.
     """
-    out = []
+    venue = _venue_for_legacy(ticker.get("venue"))
+    out: list[Trade] = []
+    for tr in ticker.get("trades") or []:
+        qty_raw = tr.get("qty", 0) or 0
+        if qty_raw <= 0:
+            continue
+        side_str = tr.get("side") or ""
+        is_buy = "買" in side_str
+        is_sell = ("賣" in side_str) and (side_str != "股利")
+        if not (is_buy or is_sell):
+            continue
+        qty = int(round(qty_raw))
+        gross = Decimal(str(tr.get("gross_twd", 0) or 0))
+        fee = Decimal(str(tr.get("fee_twd", 0) or 0))
+        tax = Decimal(str(tr.get("tax_twd", 0) or 0))
+        per_share = (gross + fee + tax) / Decimal(qty) if is_buy else (gross - fee - tax) / Decimal(qty)
+        out.append(Trade(
+            date=_parse_iso_or_slash(tr.get("date")),
+            code=code,
+            side=Side.CASH_BUY if is_buy else Side.CASH_SELL,
+            qty=qty,
+            price=Money(per_share, "TWD"),
+            venue=venue,
+        ))
+    return out
+
+
+def realized_pnl_by_ticker_fifo(by_ticker: dict) -> list[dict]:
+    """FIFO realized P&L per ticker — wires through
+    `tax_pnl.realized_stats_per_position`.
+
+    Synthesizes Trade VOs from the legacy by_ticker dict, runs the
+    principled FIFO walk + bookkeeping, and flattens RealizedStats into
+    the dashboard's 16-key shape (merging back per-ticker `name`,
+    `venue`, `dividends_twd` which Trade VOs don't carry).
+    """
+    out: list[dict] = []
     for code, t in by_ticker.items():
-        trades = sorted(t.get("trades", []) or [], key=lambda r: r.get("date") or "")
-        lots: deque[dict] = deque()
-        realized = 0.0
-        sell_proceeds = 0.0
-        cost_of_sold = 0.0
-        sell_qty_total = 0.0
-        wins = losses = 0
-        gross_win = gross_loss = 0.0
-        holding_periods: list[float] = []
-        for tr in trades:
-            qty = tr.get("qty", 0) or 0
-            if qty <= 0:
-                continue
-            side = (tr.get("side") or "")
-            is_buy = "買" in side
-            is_sell = ("賣" in side) and (side != "股利")
-            if is_buy:
-                gross = tr.get("gross_twd", 0) or 0
-                fee = tr.get("fee_twd", 0) or 0
-                tax = tr.get("tax_twd", 0) or 0
-                px = ((gross + fee + tax) / qty) if qty else 0
-                lots.append({
-                    "qty": qty, "px_twd": px,
-                    "date": _parse_iso_or_slash(tr.get("date")),
-                })
-            elif is_sell:
-                gross = tr.get("gross_twd", 0) or 0
-                fee = tr.get("fee_twd", 0) or 0
-                tax = tr.get("tax_twd", 0) or 0
-                proceeds_per_share = ((gross - fee - tax) / qty) if qty else 0
-                sell_dt = _parse_iso_or_slash(tr.get("date"))
-                remaining = qty
-                trade_realized = 0.0
-                while remaining > 1e-9 and lots:
-                    lot = lots[0]
-                    take = min(lot["qty"], remaining)
-                    lot_cost = take * lot["px_twd"]
-                    proceeds = take * proceeds_per_share
-                    realized += proceeds - lot_cost
-                    trade_realized += proceeds - lot_cost
-                    sell_proceeds += proceeds
-                    cost_of_sold += lot_cost
-                    sell_qty_total += take
-                    if sell_dt and lot["date"]:
-                        holding_periods.append((sell_dt - lot["date"]).days)
-                    lot["qty"] -= take
-                    remaining -= take
-                    if lot["qty"] <= 1e-9:
-                        lots.popleft()
-                if trade_realized > 0:
-                    wins += 1
-                    gross_win += trade_realized
-                elif trade_realized < 0:
-                    losses += 1
-                    gross_loss += -trade_realized
-        open_qty = sum(l["qty"] for l in lots)
-        open_cost = sum(l["qty"] * l["px_twd"] for l in lots)
-        avg_holding_days = (sum(holding_periods) / len(holding_periods)) if holding_periods else None
-        win_rate = (wins / (wins + losses)) if (wins + losses) else None
-        profit_factor = (gross_win / gross_loss) if gross_loss > 0 else None
+        trades = _trades_from_legacy_ticker(code, t)
+        stats_map = _tax_pnl.realized_stats_per_position(trades)
+        stats = stats_map.get(code)
+
+        if stats is None:
+            # Ticker had only dividends or skipped sides — no FIFO matches.
+            out.append({
+                "code": code,
+                "name": t.get("name"),
+                "venue": t.get("venue"),
+                "realized_pnl_twd": 0.0,
+                "sell_proceeds_twd": 0.0,
+                "cost_of_sold_twd": 0.0,
+                "sell_qty": 0.0,
+                "open_qty": 0,
+                "open_cost_twd": 0.0,
+                "avg_open_cost_twd": None,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": None,
+                "profit_factor": None,
+                "avg_holding_days": None,
+                "dividends_twd": t.get("dividends_twd", 0) or 0,
+                "fully_closed": False,
+            })
+            continue
+
         out.append({
             "code": code,
             "name": t.get("name"),
             "venue": t.get("venue"),
-            "realized_pnl_twd": realized,
-            "sell_proceeds_twd": sell_proceeds,
-            "cost_of_sold_twd": cost_of_sold,
-            "sell_qty": sell_qty_total,
-            "open_qty": open_qty,
-            "open_cost_twd": open_cost,
-            "avg_open_cost_twd": (open_cost / open_qty) if open_qty else None,
-            "wins": wins,
-            "losses": losses,
-            "win_rate": win_rate,
-            "profit_factor": profit_factor,
-            "avg_holding_days": avg_holding_days,
+            "realized_pnl_twd": float(stats.realized_pnl.amount),
+            "sell_proceeds_twd": float(stats.sell_proceeds.amount),
+            "cost_of_sold_twd": float(stats.cost_of_sold.amount),
+            "sell_qty": float(stats.sell_qty),
+            "open_qty": stats.open_qty,
+            "open_cost_twd": float(stats.open_cost.amount),
+            "avg_open_cost_twd": (
+                float(stats.avg_open_cost.amount)
+                if stats.avg_open_cost is not None else None
+            ),
+            "wins": stats.wins,
+            "losses": stats.losses,
+            "win_rate": stats.win_rate,
+            "profit_factor": (
+                float(stats.profit_factor) if stats.profit_factor is not None else None
+            ),
+            "avg_holding_days": stats.avg_holding_days,
             "dividends_twd": t.get("dividends_twd", 0) or 0,
-            "fully_closed": open_qty < 1e-6,
+            "fully_closed": stats.open_qty == 0,
         })
     out.sort(key=lambda r: r["realized_pnl_twd"], reverse=True)
     return out
@@ -891,34 +922,10 @@ def daily_fx_pnl(
 
 
 def fx_pnl(months: list[dict]) -> dict:
-    """USD/TWD FX P&L on full USD exposure (bank + foreign equities).
-
-    Old version only counted USD bank cash, missing the much-larger USD equity
-    exposure. We now use total USD held = (bank_usd_in_twd + foreign_market_value_twd)
-    converted back to USD via prior-month FX rate.
-    """
-    if len(months) < 2:
-        return {"contribution_twd": 0, "monthly": []}
-
-    monthly = []
-    cumulative = 0.0
-    for i in range(1, len(months)):
-        prev = months[i - 1]
-        curr = months[i]
-        prev_fx = prev.get("fx_usd_twd") or 1
-        curr_fx = curr.get("fx_usd_twd") or prev_fx
-        usd_held_twd = (prev.get("bank_usd_in_twd", 0) or 0) + (prev.get("foreign_market_value_twd", 0) or 0)
-        usd_amount = (usd_held_twd / prev_fx) if prev_fx else 0
-        delta_twd = usd_amount * (curr_fx - prev_fx)
-        cumulative += delta_twd
-        monthly.append({
-            "month": curr["month"],
-            "fx_usd_twd": curr_fx,
-            "usd_amount": usd_amount,
-            "fx_pnl_twd": delta_twd,
-            "cumulative_fx_pnl_twd": cumulative,
-        })
-    return {"contribution_twd": cumulative, "monthly": monthly}
+    """USD/TWD FX P&L on full USD exposure — delegates to
+    `attribution.usd_exposure_walk`. Whole-portfolio sequential walk:
+    one bar per month for the dashboard's /fx page."""
+    return _attribution.usd_exposure_walk(months)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -954,78 +961,18 @@ def recent_activity(all_trades: list[dict], limit: int = 25) -> list[dict]:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Sector mapping (heuristic, no external API)
+# Sector mapping (delegates to sectors module)
 # ────────────────────────────────────────────────────────────────────────────
 
 
-_TW_SECTOR_HINTS = {
-    "0050": "ETF (TW broad)", "00631L": "ETF (TW leveraged)",
-    "0051": "ETF (TW mid-cap)", "0056": "ETF (high dividend)",
-    "00878": "ETF (high dividend)", "00929": "ETF (high dividend)",
-    "00919": "ETF (high dividend)", "00713": "ETF (Smart Beta)",
-    "00940": "ETF (high dividend)", "00713L": "ETF (TW leveraged)",
-    "00981A": "ETF (Active TW)",
-    "2330": "Semiconductors", "2317": "Hardware/EMS", "2454": "Semiconductors",
-    "2308": "Hardware/EMS", "2382": "Hardware/EMS", "2603": "Shipping",
-    "2609": "Shipping", "2615": "Shipping", "2002": "Steel",
-    "1326": "Petrochemicals", "1303": "Petrochemicals", "1301": "Petrochemicals",
-    "2412": "Telecom", "3008": "Optics", "3034": "Semiconductors",
-    "2891": "Financials", "2882": "Financials", "2884": "Financials",
-    "2885": "Financials", "2880": "Financials", "2890": "Financials",
-    "1802": "Materials", "2912": "Retail", "1216": "Food",
-    "5871": "Financials", "5880": "Financials",
-    "2360": "Semiconductors", "2376": "Hardware/EMS", "2369": "Optics",
-    "3035": "Semiconductors",
-}
-
-_US_SECTOR_HINTS = {
-    "NVDA": "Semiconductors", "AMD": "Semiconductors", "AVGO": "Semiconductors",
-    "TSM": "Semiconductors", "INTC": "Semiconductors", "MU": "Semiconductors",
-    "AAPL": "Hardware/Tech", "MSFT": "Software", "GOOGL": "Internet",
-    "GOOG": "Internet", "META": "Internet", "AMZN": "Internet",
-    "TSLA": "Auto/EV", "NFLX": "Media",
-    "JPM": "Financials", "BAC": "Financials", "GS": "Financials",
-    "V": "Financials", "MA": "Financials",
-    "JNJ": "Healthcare", "UNH": "Healthcare", "LLY": "Healthcare",
-    "PFE": "Healthcare", "MRK": "Healthcare",
-    "XOM": "Energy", "CVX": "Energy",
-    "WMT": "Consumer", "COST": "Consumer", "MCD": "Consumer",
-    "DIS": "Media", "BA": "Industrials", "CAT": "Industrials",
-    "SPY": "ETF (US broad)", "VOO": "ETF (US broad)", "QQQ": "ETF (US tech)",
-    "VTI": "ETF (US broad)", "IVV": "ETF (US broad)",
-    "LITE": "Semiconductors", "SNDK": "Hardware/Tech",
-    "CRWD": "Software", "NET": "Software",
-    "DDOG": "Software", "SNOW": "Software", "PLTR": "Software",
-}
-
-
 def sector_of(code: str, venue: str) -> str:
-    if not code:
-        return "Unknown"
-    if venue == "TW":
-        return _TW_SECTOR_HINTS.get(code, "TW Equity (other)")
-    return _US_SECTOR_HINTS.get(code.upper(), "US Equity (other)")
+    """Delegates to sectors.sector_of."""
+    return _sectors.sector_of(code, venue)
 
 
 def sector_breakdown(holdings: list[dict]) -> list[dict]:
-    by_sector: dict[str, dict] = defaultdict(lambda: {"value": 0.0, "count": 0})
-    total = 0.0
-    for h in holdings:
-        sec = sector_of(h.get("code", ""), h.get("venue", ""))
-        v = h.get("mkt_value_twd", 0) or 0
-        by_sector[sec]["value"] += v
-        by_sector[sec]["count"] += 1
-        total += v
-    out = []
-    for sec, agg in by_sector.items():
-        out.append({
-            "sector": sec,
-            "value_twd": agg["value"],
-            "count": agg["count"],
-            "weight": (agg["value"] / total) if total else 0,
-        })
-    out.sort(key=lambda r: r["value_twd"], reverse=True)
-    return out
+    """Delegates to sectors.sector_breakdown."""
+    return _sectors.sector_breakdown(holdings)
 def month_end_iso(yyyy_mm: str) -> str:
     """'2025-02' → '2025-02-28' (handles leap years)."""
     y, m = (int(p) for p in yyyy_mm.split("-"))

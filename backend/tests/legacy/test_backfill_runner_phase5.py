@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from invest.jobs.backfill_runner import run_tw_backfill
+from invest.jobs.backfill import run_tw_backfill
 from invest.persistence.daily_store import DailyStore
 
 
@@ -85,8 +85,8 @@ def test_runner_persists_tpex_market_for_otc_symbol(
 ) -> None:
     """When a held symbol is OTC (`.TW` returns empty, `.TWO` returns
     rows), symbol_market must end up with market='tpex', not 'twse'."""
-    monkeypatch.setattr("invest.prices.sources.yfinance_fetch_prices", _fake_yf_otc_only)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2025-09-30")
+    monkeypatch.setattr("invest.prices.yfinance_client.fetch_prices", _fake_yf_otc_only)
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2025-09-30")
 
     run_tw_backfill(store, portfolio_path)
 
@@ -120,8 +120,8 @@ def test_runner_does_not_re_probe_cached_symbols(
         queried_first.append(symbol)
         return _fake_yf_otc_only(symbol, start, end)
 
-    monkeypatch.setattr("invest.prices.sources.yfinance_fetch_prices", yf_first)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2025-09-30")
+    monkeypatch.setattr("invest.prices.yfinance_client.fetch_prices", yf_first)
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2025-09-30")
 
     run_tw_backfill(store, portfolio_path)
     # First run probed both suffixes (.TW empty → .TWO success)
@@ -134,7 +134,7 @@ def test_runner_does_not_re_probe_cached_symbols(
         queried_second.append(symbol)
         return _fake_yf_otc_only(symbol, start, end)
 
-    monkeypatch.setattr("invest.prices.sources.yfinance_fetch_prices", yf_second)
+    monkeypatch.setattr("invest.prices.yfinance_client.fetch_prices", yf_second)
     run_tw_backfill(store, portfolio_path)
     # Second run must NOT have probed `.TW` — symbol cached as 'tpex'
     listed_probes = [s for s in queried_second if s.endswith(".TW") and not s.endswith(".TWO")]

@@ -183,3 +183,58 @@ class TestProbe:
         verdict = market_repo.find("9999")
         assert verdict is not None
         assert verdict.market == "unknown"
+
+
+# --- Warrants (權證) ----------------------------------------------------
+
+
+class TestWarrantClassifier:
+    @pytest.mark.parametrize(
+        "symbol",
+        ["042900", "030001", "081234", "099999", "712345", "799999"],
+    )
+    def test_call_and_put_warrant_codes_recognized(self, symbol):
+        assert tw_probe.is_tw_warrant(symbol) is True
+
+    @pytest.mark.parametrize(
+        "symbol",
+        [
+            "2330",     # 4-digit stock
+            "0050",     # ETF (4 digits)
+            "00631L",   # leveraged ETF (alpha suffix)
+            "00981A",   # ETF
+            "1234",     # any 4-digit
+            "002330",   # second digit '0', not warrant
+            "012345",   # second digit '1', not warrant (reserved range)
+            "022345",   # second digit '2', not warrant
+            "642900",   # first digit '6', not warrant
+            "842900",   # first digit '8', not warrant
+        ],
+    )
+    def test_non_warrant_codes_rejected(self, symbol):
+        assert tw_probe.is_tw_warrant(symbol) is False
+
+
+class TestWarrantProbe:
+    def test_warrant_both_empty_skips_unknown_cache(self, market_repo):
+        """A warrant whose .TW and .TWO probes both come back empty is
+        the steady state — the symbol may simply have had no trades in
+        the window. Persisting 'unknown' would blacklist it forever, so
+        we deliberately leave the cache empty and re-probe next run."""
+        client = StubClient()  # both empty
+
+        rows = tw_probe.fetch_tw_with_probe(
+            "042900",
+            "2026-04-30",
+            "2026-04-30",
+            client=client,
+            market_repo=market_repo,
+        )
+
+        assert rows == []
+        assert [c["symbol"] for c in client.calls] == [
+            "042900.TW",
+            "042900.TWO",
+        ]
+        # Crucial: no negative cache so future backfills re-probe.
+        assert market_repo.find("042900") is None

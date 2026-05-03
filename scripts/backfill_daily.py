@@ -33,7 +33,7 @@ try:
 except ImportError:
     pass
 
-from invest.jobs.backfill_runner import run_full_backfill, run_tw_backfill  # noqa: E402
+from invest.jobs.backfill import run_full_backfill, run_tw_backfill  # noqa: E402
 from invest.persistence.daily_store import DailyStore  # noqa: E402
 
 

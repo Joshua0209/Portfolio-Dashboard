@@ -77,15 +77,15 @@ def client(engine, monkeypatch, fake_portfolio, fake_daily):
     empty PortfolioStore + empty DailyStore by default."""
     from invest.app import create_app
     from invest.http.deps import get_session
-    from invest.jobs import snapshot_workflow
+    from invest.jobs import snapshot
     from .conftest import install_store_overrides
 
-    # Phase 11: /api/admin/refresh now invokes snapshot_workflow.run
+    # Phase 14.2: /api/admin/refresh invokes snapshot.run
     # (yfinance + Shioaji). Stub it in this fixture — these tests only
     # exercise the require_admin gate and the envelope contract, not
     # the workflow body itself.
     monkeypatch.setattr(
-        snapshot_workflow,
+        snapshot,
         "run",
         lambda store, portfolio: {
             "skipped_reason": "stubbed_in_test",

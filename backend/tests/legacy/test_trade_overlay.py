@@ -63,11 +63,11 @@ def store(tmp_path: Path) -> DailyStore:
     # computed.
     with s.connect_rw() as conn:
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-22', '2330', 920.0, 'TWD', 'yfinance', '2026-04-22T00:00:00Z')"
         )
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-23', '2330', 925.0, 'TWD', 'yfinance', '2026-04-23T00:00:00Z')"
         )
     return s
@@ -178,7 +178,7 @@ def test_merge_flips_has_overlay_flag(store, portfolio_with_held_position):
     portfolio_daily.has_overlay. The contract being tested here is that
     the integrated flow (merge → derive) flips the flag; merge alone
     no longer writes portfolio_daily."""
-    from invest.jobs import backfill_runner
+    from invest.jobs import _positions
 
     fake = _FakeShioajiClient(trades=[
         {"date": "2026-04-22", "code": "2330", "side": "普買", "qty": 500,
@@ -189,7 +189,7 @@ def test_merge_flips_has_overlay_flag(store, portfolio_with_held_position):
     trade_overlay.merge(
         store, portfolio, fake, gap_start="2026-04-01", gap_end="2026-04-26"
     )
-    backfill_runner._derive_positions_and_portfolio(store, portfolio)
+    _positions._derive_positions_and_portfolio(store, portfolio)
 
     with store.connect_ro() as conn:
         flags = [r[0] for r in conn.execute(
@@ -301,7 +301,7 @@ def test_merge_writes_open_lot_position_for_currently_held_only_lot(store, tmp_p
     # Seed a price for 00981A so positions_daily can compute MV.
     with store.connect_rw() as conn:
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-22', '00981A', 32.0, 'TWD', 'yfinance', '2026-04-22T00:00:00Z')"
         )
 
@@ -343,11 +343,11 @@ def test_merge_writes_realized_pair_buy_legs_into_qty_history(store, tmp_path):
 
     with store.connect_rw() as conn:
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-22', '6442', 145.0, 'TWD', 'yfinance', '2026-04-22T00:00:00Z')"
         )
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-23', '6442', 144.0, 'TWD', 'yfinance', '2026-04-23T00:00:00Z')"
         )
 

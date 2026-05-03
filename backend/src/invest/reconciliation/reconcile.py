@@ -3,8 +3,8 @@ Shioaji-overlay trade record.
 
 Run point: NEVER auto-fired. Spec §12 calls out three forbidden trigger
 sites:
-  - app/backfill_runner.py
-  - scripts/snapshot_daily.py
+  - invest.jobs.backfill (formerly app/backfill_runner.py)
+  - invest.jobs.snapshot  (formerly scripts/snapshot_daily.py callee)
   - scripts/parse_statements.py
 
 The user runs `python scripts/reconcile.py --month YYYY-MM` (CLI) or

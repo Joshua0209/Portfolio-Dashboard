@@ -32,15 +32,24 @@ divergence persists the operator wants to see it again.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date as _date
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
+
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from invest.domain.trade import Side
 from invest.persistence.models.reconcile_event import ReconcileEvent
+from invest.persistence.models.trade import Trade
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 from invest.persistence.repositories.trade_repo import TradeRepo
 
+if TYPE_CHECKING:
+    from invest.persistence.daily_store import DailyStore
+
+
+log = logging.getLogger(__name__)
 
 _EVENT_TYPE = "broker_pdf_buy_leg_mismatch"
 
@@ -201,3 +210,56 @@ def _norm_pair_id(pid: Any) -> str:
 def _parse_iso(s: str) -> _date:
     y, m, d = s.split("-")
     return _date(int(y), int(m), int(d))
+
+
+# --- Orchestrator (Phase 14.5) ------------------------------------------
+
+
+def _trade_table_has_rows(session: Session) -> bool:
+    """True iff at least one Trade row exists. Defensive guard for run()."""
+    return session.scalar(select(Trade).limit(1)) is not None
+
+
+def run(
+    realized_pairs: Iterable[dict[str, Any]],
+    *,
+    daily_store: "DailyStore",
+) -> AuditResult:
+    """Bootstrap a SQLModel session against ``daily_store`` and audit.
+
+    The post-PDF caller (``jobs.snapshot.run``) holds a
+    ``DailyStore`` but no SQLModel session — the read-side of the audit
+    needs the SQLModel ``trades`` table (populated by
+    ``invest.jobs.trade_backfill``). This wrapper opens an engine
+    against the same SQLite file, runs ``create_all`` (idempotent), and
+    invokes ``audit_realized_pairs``.
+
+    Defensive skip: when the ``trades`` table is empty (operator hasn't
+    run ``scripts/backfill_trades.py`` yet) every SDK leg would look
+    "uncovered" and an event would fire per pair. We skip silently
+    instead — the operator's first encounter with the audit hook
+    should be after they've populated PDF trades.
+    """
+    pairs = list(realized_pairs or [])
+    if not pairs:
+        return AuditResult(pairs_examined=0, events_fired=0)
+
+    engine = create_engine(
+        f"sqlite:///{daily_store.path}",
+        connect_args={"timeout": 5},
+    )
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        if not _trade_table_has_rows(session):
+            log.info(
+                "shioaji_audit.run: trades table empty — skipping audit "
+                "(run scripts/backfill_trades.py to enable)"
+            )
+            return AuditResult(pairs_examined=0, events_fired=0)
+
+        return audit_realized_pairs(
+            realized_pairs=pairs,
+            trade_repo=TradeRepo(session),
+            reconcile_repo=ReconcileRepo(session),
+        )

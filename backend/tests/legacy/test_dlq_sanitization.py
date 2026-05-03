@@ -3,14 +3,14 @@
 `failed_tasks.error_message` is exposed via the unauthenticated
 `/api/admin/failed-tasks` endpoint; full filesystem paths in exception
 strings would leak host layout when the dashboard is reachable from a
-tunnel or LAN. The sanitizer in app/backfill_runner.py is the single
+tunnel or LAN. The sanitizer in app/backfill.py is the single
 chokepoint for that data — every persist site routes through it.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from invest.jobs.backfill_runner import _sanitize_error_message
+from invest.jobs.backfill import _sanitize_error_message
 
 
 def test_strips_project_root_path():

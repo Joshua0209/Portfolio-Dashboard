@@ -2,14 +2,19 @@
 
 The runner extends to:
   - iter_foreign_symbols_with_metadata() — like iter_tw_… but for foreign holdings
-  - run_fx_backfill() — populates fx_daily for [BACKFILL_FLOOR, today]
+  - run_fx_backfill() — populates fx_rates for [BACKFILL_FLOOR, today]
   - run_foreign_backfill() — fetches yfinance prices per foreign symbol
-  - _derive_positions_and_portfolio() — converts foreign mv via fx_daily
+  - _derive_positions_and_portfolio() — converts foreign mv via fx_rates
 
 Acceptance criteria from the plan:
-  - sqlite3 ... "SELECT COUNT(*) FROM fx_daily" >= trading days in window
+  - sqlite3 ... "SELECT COUNT(*) FROM fx_rates" >= trading days in window
   - Held foreign tickers have prices rows with currency='USD'
   - portfolio_daily.equity_twd within 1% of corresponding portfolio.json
+
+Phase 14.3b: tests that historically monkeypatched
+``backfill.get_fx_rates`` now patch ``_fetch_range_via_fx_provider``
+— mirrors the seam pattern Phase 14.3a established for prices. The
+seam writes SQLModel-shape ``fx_rates`` rows directly via FxRepo.
 """
 from __future__ import annotations
 
@@ -18,13 +23,96 @@ from pathlib import Path
 
 import pytest
 
-from invest.jobs.backfill_runner import (
+from invest.jobs.backfill import (
     iter_foreign_symbols_with_metadata,
     run_fx_backfill,
     run_foreign_backfill,
     run_full_backfill,
 )
 from invest.persistence.daily_store import DailyStore
+
+
+def _install_fake_price_service(
+    monkeypatch, *, rows_by_symbol_or_fn,
+):
+    """Phase 14.3a — see test_backfill.py for the seam shape."""
+    from invest.jobs import backfill
+
+    def _fake(store, symbol, currency, start, end):
+        if callable(rows_by_symbol_or_fn):
+            rows = rows_by_symbol_or_fn(symbol, currency, start, end)
+        else:
+            rows = rows_by_symbol_or_fn.get(symbol, [])
+        if not rows:
+            return 0
+        tagged = [
+            {
+                "date": r["date"],
+                "close": r["close"],
+                "symbol": r.get("symbol", symbol),
+                "currency": r.get("currency", currency),
+                "source": r.get("source", "yfinance"),
+            }
+            for r in rows
+        ]
+        return backfill._persist_symbol_prices(store, symbol, tagged)
+
+    monkeypatch.setattr(
+        backfill, "_fetch_range_via_price_service", _fake,
+    )
+
+
+def _install_fake_fx_provider(monkeypatch, *, rows_by_ccy_or_fn):
+    """Phase 14.3b — analogue of ``_install_fake_price_service`` for FX.
+
+    Replaces ``backfill._fetch_range_via_fx_provider`` with a fake
+    that synthesizes rows and writes them into the SQLModel ``fx_rates``
+    table directly via FxRepo. Test code passes either:
+
+      - ``rows_by_ccy_or_fn(ccy, start, end) -> list[{date, rate}]`` — a
+        callable invoked per ccy; or
+      - ``{ccy: [{date, rate}, ...], ...}`` — a static map.
+
+    The real seam returns count of persisted rows; this fake mirrors
+    that contract.
+    """
+    from datetime import date as _date
+    from decimal import Decimal
+
+    from invest.jobs import backfill
+    from invest.persistence.models.fx_rate import FxRate
+    from invest.persistence.repositories.fx_repo import FxRepo
+
+    def _fake(store, ccy, start, end):
+        if ccy == "TWD":
+            return 0
+        if callable(rows_by_ccy_or_fn):
+            rows = rows_by_ccy_or_fn(ccy, start, end)
+        else:
+            rows = rows_by_ccy_or_fn.get(ccy, [])
+        if not rows:
+            return 0
+        with backfill._with_session(store) as session:
+            repo = FxRepo(session)
+            for r in rows:
+                d = r["date"]
+                on_date = (
+                    d if isinstance(d, _date) else _date.fromisoformat(str(d))
+                )
+                repo.upsert(
+                    FxRate(
+                        date=on_date,
+                        base=ccy,
+                        quote="TWD",
+                        rate=Decimal(str(r["rate"])),
+                        source=r.get("source", "yfinance"),
+                    )
+                )
+        return len(rows)
+
+    monkeypatch.setattr(
+        backfill, "_fetch_range_via_fx_provider", _fake,
+    )
 
 
 def _portfolio_with_foreign() -> dict:
@@ -120,26 +208,30 @@ def test_iter_foreign_symbols_yields_held_and_traded(portfolio_path: Path) -> No
 # --- FX backfill ---------------------------------------------------------
 
 
-def test_run_fx_backfill_writes_fx_daily(
+def test_run_fx_backfill_writes_fx_rates(
     portfolio_path: Path, store: DailyStore, monkeypatch
 ) -> None:
     """FX backfill is window-bounded by [BACKFILL_FLOOR, today]; writes one
-    row per trading day yfinance returns for the requested ccy."""
+    row per trading day yfinance returns for the requested ccy.
+
+    Phase 14.3b: rows land in SQLModel-shape ``fx_rates``, written via
+    fx_provider through the ``_fetch_range_via_fx_provider`` seam.
+    """
     fx_calls: list[tuple] = []
 
-    def fake_get_fx(ccy, start, end, store=None, today=None):
+    def fake_fx(ccy, start, end):
         fx_calls.append((ccy, start, end))
         # Synthesize 5 days of FX
         return [
-            {"date": "2026-04-21", "ccy": ccy, "rate": 32.40, "source": "yfinance"},
-            {"date": "2026-04-22", "ccy": ccy, "rate": 32.45, "source": "yfinance"},
-            {"date": "2026-04-23", "ccy": ccy, "rate": 32.50, "source": "yfinance"},
-            {"date": "2026-04-24", "ccy": ccy, "rate": 32.55, "source": "yfinance"},
-            {"date": "2026-04-25", "ccy": ccy, "rate": 32.60, "source": "yfinance"},
+            {"date": "2026-04-21", "rate": 32.40, "source": "yfinance"},
+            {"date": "2026-04-22", "rate": 32.45, "source": "yfinance"},
+            {"date": "2026-04-23", "rate": 32.50, "source": "yfinance"},
+            {"date": "2026-04-24", "rate": 32.55, "source": "yfinance"},
+            {"date": "2026-04-25", "rate": 32.60, "source": "yfinance"},
         ]
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_fx_rates", fake_get_fx)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_fx_provider(monkeypatch, rows_by_ccy_or_fn=fake_fx)
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_fx_backfill(store, portfolio_path)
 
@@ -150,7 +242,9 @@ def test_run_fx_backfill_writes_fx_daily(
     assert fx_calls[0][2] == "2026-04-27"
 
     with store.connect_ro() as conn:
-        rows = conn.execute("SELECT COUNT(*) AS n FROM fx_daily").fetchone()
+        rows = conn.execute(
+            "SELECT COUNT(*) AS n FROM fx_rates WHERE quote = 'TWD'"
+        ).fetchone()
         assert rows["n"] == 5
 
 
@@ -162,7 +256,7 @@ def test_run_foreign_backfill_writes_prices(
 ) -> None:
     captured: list[tuple] = []
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_rows(symbol, currency, start, end):
         captured.append((symbol, currency, start, end))
         return [
             {"date": "2025-08-15", "close": 100.0, "volume": 1_000,
@@ -171,8 +265,8 @@ def test_run_foreign_backfill_writes_prices(
              "symbol": symbol, "currency": currency, "source": "yfinance"},
         ]
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_foreign_backfill(store, portfolio_path)
 
@@ -199,7 +293,7 @@ def test_full_backfill_aggregates_foreign_with_fx(
     foreign + 85,000 TW = 235,000)... wait that's 235k. The fixture says 100,000.
     Anyway, the test asserts the combined equity matches our derivation.
     """
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_rows(symbol, currency, start, end):
         if symbol == "2330":
             return [
                 {"date": "2025-08-15", "close": 850.0, "volume": 1,
@@ -216,15 +310,15 @@ def test_full_backfill_aggregates_foreign_with_fx(
             ]
         return []
 
-    def fake_get_fx(ccy, start, end, store=None, today=None):
+    def fake_fx(ccy, start, end):
         return [
-            {"date": "2025-08-15", "ccy": ccy, "rate": 30.0, "source": "yfinance"},
-            {"date": "2026-03-31", "ccy": ccy, "rate": 32.0, "source": "yfinance"},
+            {"date": "2025-08-15", "rate": 30.0, "source": "yfinance"},
+            {"date": "2026-03-31", "rate": 32.0, "source": "yfinance"},
         ]
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_fx_rates", fake_get_fx)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
+    _install_fake_fx_provider(monkeypatch, rows_by_ccy_or_fn=fake_fx)
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_full_backfill(store, portfolio_path)
 
@@ -251,7 +345,7 @@ def test_full_backfill_within_1pct_of_portfolio_json(
     portfolio.json says 2026-03 equity = 100,000 (TW) + 7,500 USD × 32 = 340,000.
     Our derivation should land within 1% of that.
     """
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_rows(symbol, currency, start, end):
         if symbol == "2330":
             return [{"date": "2026-03-31", "close": 1000.0, "volume": 1,
                      "symbol": "2330", "currency": "TWD", "source": "yfinance"}]
@@ -260,16 +354,14 @@ def test_full_backfill_within_1pct_of_portfolio_json(
                      "symbol": "SNDK", "currency": "USD", "source": "yfinance"}]
         return []
 
-    monkeypatch.setattr(
-        "invest.jobs.backfill_runner.get_prices", fake_get_prices
-    )
-    monkeypatch.setattr(
-        "invest.jobs.backfill_runner.get_fx_rates",
-        lambda ccy, st, ed, store=None, today=None: [
-            {"date": "2026-03-31", "ccy": ccy, "rate": 32.0, "source": "yfinance"}
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
+    _install_fake_fx_provider(
+        monkeypatch,
+        rows_by_ccy_or_fn=lambda ccy, st, ed: [
+            {"date": "2026-03-31", "rate": 32.0, "source": "yfinance"}
         ],
     )
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_full_backfill(store, portfolio_path)
 
@@ -293,9 +385,9 @@ def test_fx_forward_fills_within_trading_window(
 ) -> None:
     """yfinance returns stale TWD=X rows on Asia weekends. The portfolio
     derivation must forward-fill the most-recent FX when a price-day has
-    no matching fx_daily row (otherwise foreign positions get NULL mv_twd).
+    no matching fx_rates row (otherwise foreign positions get NULL mv_twd).
     """
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_rows(symbol, currency, start, end):
         if symbol == "SNDK":
             return [
                 # FX exists for 2025-08-15
@@ -307,15 +399,15 @@ def test_fx_forward_fills_within_trading_window(
             ]
         return []
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr(
-        "invest.jobs.backfill_runner.get_fx_rates",
-        lambda ccy, st, ed, store=None, today=None: [
-            {"date": "2025-08-15", "ccy": ccy, "rate": 30.0, "source": "yfinance"},
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
+    _install_fake_fx_provider(
+        monkeypatch,
+        rows_by_ccy_or_fn=lambda ccy, st, ed: [
+            {"date": "2025-08-15", "rate": 30.0, "source": "yfinance"},
             # 2025-08-16 missing
         ],
     )
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_full_backfill(store, portfolio_path)
 
@@ -388,7 +480,7 @@ def test_rotation_day_does_not_show_phantom_drop(
     portfolio_path = tmp_path / "portfolio.json"
     portfolio_path.write_text(json.dumps(portfolio), encoding="utf-8")
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_rows(symbol, currency, start, end):
         if symbol != "2330":
             return []
         return [
@@ -400,16 +492,16 @@ def test_rotation_day_does_not_show_phantom_drop(
              "symbol": "2330", "currency": "TWD", "source": "yfinance"},
         ]
 
-    monkeypatch.setattr("invest.jobs.backfill_runner.get_prices", fake_get_prices)
-    monkeypatch.setattr(
-        "invest.jobs.backfill_runner.get_fx_rates",
-        lambda ccy, st, ed, store=None, today=None: [
-            {"date": "2026-01-19", "ccy": ccy, "rate": 31.0, "source": "yfinance"},
-            {"date": "2026-01-20", "ccy": ccy, "rate": 31.0, "source": "yfinance"},
-            {"date": "2026-01-21", "ccy": ccy, "rate": 31.0, "source": "yfinance"},
+    _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
+    _install_fake_fx_provider(
+        monkeypatch,
+        rows_by_ccy_or_fn=lambda ccy, st, ed: [
+            {"date": "2026-01-19", "rate": 31.0, "source": "yfinance"},
+            {"date": "2026-01-20", "rate": 31.0, "source": "yfinance"},
+            {"date": "2026-01-21", "rate": 31.0, "source": "yfinance"},
         ],
     )
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_full_backfill(store, portfolio_path)
 

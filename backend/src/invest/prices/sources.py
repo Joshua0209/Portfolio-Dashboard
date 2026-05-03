@@ -196,7 +196,12 @@ def get_fx_rates(
     today: str | None = None,
 ) -> list[dict]:
     """Return [{date, ccy, rate, source}, ...] for ccy → TWD over the
-    inclusive window. Used by backfill_runner to populate `fx_daily`.
+    inclusive window. Historically used by backfill_runner to populate
+    ``fx_daily``; after Phase 14.3b the production FX-fetch path goes
+    through ``invest.prices.fx_provider`` and writes the SQLModel-shape
+    ``fx_rates`` table. This raw fetcher remains in place for the admin
+    retry resolver and for tests that pin the set-minus / dates_checked
+    semantics independent of any persistence layer.
 
     `dates_checked` keys for FX use `FX:<ccy>` to keep them in a separate
     namespace from equity symbols."""

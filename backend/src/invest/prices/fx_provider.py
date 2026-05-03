@@ -13,6 +13,7 @@ properties:
 """
 from __future__ import annotations
 
+import logging
 from datetime import date as _date
 from decimal import Decimal
 from typing import Optional, Protocol
@@ -22,6 +23,7 @@ from invest.persistence.models.fx_rate import FxRate
 from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.fx_repo import FxRepo
 
+log = logging.getLogger(__name__)
 
 _TASK_TYPE = "fetch_fx"
 
@@ -67,6 +69,7 @@ def fetch_and_store_fx(
     try:
         rows = client.fetch_fx(ccy, iso, iso)
     except Exception as exc:
+        log.warning("fx_provider: %s->TWD on %s failed: %r", ccy, iso, exc)
         existing = _open_task_for(dlq, ccy)
         if existing is None:
             dlq.insert(
@@ -80,8 +83,13 @@ def fetch_and_store_fx(
 
     if not rows:
         if _has_prior_history(fx_repo, ccy):
+            log.debug("fx_provider: %s->TWD on %s empty (holiday)", ccy, iso)
             return None
         if _open_task_for(dlq, ccy) is None:
+            log.warning(
+                "fx_provider: %s->TWD on %s — no rows, no prior history "
+                "(possible exotic/unsupported currency)", ccy, iso,
+            )
             dlq.insert(
                 FailedTask(
                     task_type=_TASK_TYPE,
@@ -111,3 +119,111 @@ def fetch_and_store_fx(
         dlq.mark_resolved(existing.id)
 
     return rate
+
+
+def fetch_and_store_range(
+    ccy: str,
+    start: _date,
+    end: _date,
+    *,
+    fx_repo: FxRepo,
+    dlq: FailedTaskRepo,
+    client: FxClient,
+) -> int:
+    """Fetch a date range of ccy->TWD rates and persist all rows via fx_repo.
+
+    Returns the number of rows persisted (0 on miss/failure). DLQ rules
+    mirror :func:`fetch_and_store_fx` but at the ``(ccy, range)``
+    granularity — one DLQ row per failed range, not per failed date:
+
+      Outcome A  exception                  -> insert/bump ONE DLQ row
+      Outcome B  empty, has prior history   -> silent miss
+      Outcome C  empty, no prior history    -> insert ONCE
+                                                (no auto-bump on repeat)
+      Non-empty -> persist + resolve any open DLQ row for the ccy
+
+    Special case: ``ccy='TWD'`` returns 0 immediately without any
+    client call, persistence side-effect, or DLQ row (TWD->TWD is unity).
+    """
+    if ccy == "TWD":
+        # Identity short-circuit. No fetch, no row, no DLQ.
+        return 0
+
+    start_iso = start.isoformat()
+    end_iso = end.isoformat()
+    payload = {"ccy": ccy, "start": start_iso, "end": end_iso}
+
+    try:
+        rows = client.fetch_fx(ccy, start_iso, end_iso)
+    except Exception as exc:
+        # Outcome A: real failure. Always bump.
+        log.warning(
+            "fx_provider: %s->TWD [%s..%s] failed: %r",
+            ccy, start_iso, end_iso, exc,
+        )
+        existing = _open_task_for(dlq, ccy)
+        if existing is None:
+            dlq.insert(
+                FailedTask(
+                    task_type=_TASK_TYPE, payload=payload, error=repr(exc)
+                )
+            )
+        else:
+            dlq.bump_attempt(existing.id, repr(exc))
+        return 0
+
+    if not rows:
+        if _has_prior_history(fx_repo, ccy):
+            # Outcome B: silent miss.
+            log.debug(
+                "fx_provider: %s->TWD [%s..%s] empty (holiday window)",
+                ccy, start_iso, end_iso,
+            )
+            return 0
+        # Outcome C: log once.
+        if _open_task_for(dlq, ccy) is None:
+            log.warning(
+                "fx_provider: %s->TWD [%s..%s] — no rows, no prior history "
+                "(possible exotic/unsupported currency)",
+                ccy, start_iso, end_iso,
+            )
+            dlq.insert(
+                FailedTask(
+                    task_type=_TASK_TYPE,
+                    payload=payload,
+                    error=(
+                        f"no FX rows for {ccy}->TWD in [{start_iso}..{end_iso}]; "
+                        "currency may be exotic / unsupported by yfinance"
+                    ),
+                )
+            )
+        return 0
+
+    # Happy path: persist every returned row. ``date`` may arrive as a
+    # str (yfinance_client returns ISO strings) or as a date object — be
+    # defensive on the boundary.
+    persisted = 0
+    for row in rows:
+        raw_date = row.get("date")
+        if isinstance(raw_date, _date):
+            on_date = raw_date
+        else:
+            on_date = _date.fromisoformat(str(raw_date))
+        rate = Decimal(str(row["rate"]))
+        fx_repo.upsert(
+            FxRate(
+                date=on_date,
+                base=ccy,
+                quote="TWD",
+                rate=rate,
+                source="yfinance",
+            )
+        )
+        persisted += 1
+
+    # Recovery: resolve any open DLQ row for this ccy.
+    existing = _open_task_for(dlq, ccy)
+    if existing is not None:
+        dlq.mark_resolved(existing.id)
+
+    return persisted
