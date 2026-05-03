@@ -73,15 +73,15 @@ def client(engine, monkeypatch, fake_portfolio, fake_daily):
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     from invest.app import create_app
     from invest.http.deps import get_session
-    from invest.jobs import snapshot_workflow
+    from invest.jobs import snapshot
     from .conftest import install_store_overrides
 
-    # Phase 11: /api/admin/refresh is wired to snapshot_workflow.run,
+    # Phase 14.2: /api/admin/refresh is wired to snapshot.run,
     # which fetches yfinance + Shioaji on the real path. Stub it out
     # in tests — endpoint contract here is "200 + envelope with
     # new_rows or skipped_reason key".
     monkeypatch.setattr(
-        snapshot_workflow,
+        snapshot,
         "run",
         lambda store, portfolio: {
             "skipped_reason": "stubbed_in_test",

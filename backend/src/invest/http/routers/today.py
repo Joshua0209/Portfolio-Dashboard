@@ -56,7 +56,7 @@ from invest.http.deps import (
 )
 from invest.http.envelope import error, success
 from invest.persistence.models.portfolio_daily import PortfolioDaily
-from invest.jobs import retry_failed, snapshot_workflow
+from invest.jobs import retry_failed, snapshot
 from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
 from invest.persistence.repositories.reconcile_repo import ReconcileRepo
 
@@ -440,14 +440,13 @@ def admin_refresh(
     daily=Depends(get_daily_store),
     portfolio=Depends(get_portfolio_store),
 ) -> dict[str, Any]:
-    # Phase 11 cutover: route the endpoint through the canonical
-    # production path (`invest.jobs.snapshot_workflow.run`), which
-    # backs `python scripts/snapshot_daily.py`. The previously wired
-    # `snapshot.run_incremental` was a SQLModel-backed scaffold for
-    # the future Trade-table aggregator and never executed real
-    # fetches. Tests monkeypatch `snapshot_workflow.run` to avoid
-    # network calls.
-    summary = snapshot_workflow.run(daily, portfolio.raw)
+    # Phase 14.2 cutover: route the endpoint through the canonical
+    # production path (`invest.jobs.snapshot.run`), which backs
+    # `python scripts/snapshot_daily.py`. ``snapshot.run_incremental``
+    # remains as a SQLModel-backed scaffold for the future Trade-table
+    # aggregator (Phase 14.3+) but is not yet on the request path.
+    # Tests monkeypatch `snapshot.run` to avoid network calls.
+    summary = snapshot.run(daily, portfolio.raw)
     return success(summary)
 
 

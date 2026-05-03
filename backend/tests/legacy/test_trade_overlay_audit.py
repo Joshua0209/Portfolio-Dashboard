@@ -10,7 +10,7 @@ Phase 14.5 (2026-05-03) moved the audit hook out of
 ``reconciliation/shioaji_audit.py`` (Option B — PDF coverage gap by
 ``(date, qty)`` keys). ``trade_overlay.merge()`` no longer fires
 reconcile events on the write path; the audit runs as a post-overlay
-step inside ``jobs.snapshot_workflow.run``.
+step inside ``jobs.snapshot.run``.
 
 These tests stay in the codebase as scenario documentation for the
 originally-planned strict rule. They are ``pytest.skip``-ped because

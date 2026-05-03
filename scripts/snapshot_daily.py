@@ -5,7 +5,7 @@ Fills the gap between ``meta.last_known_date`` and "today" without doing a
 full cold-start backfill. Two callsites:
   - CLI:        ``python scripts/snapshot_daily.py``
   - Endpoint:   ``POST /api/admin/refresh``  (calls
-                ``invest.jobs.snapshot_workflow.run`` directly)
+                ``invest.jobs.snapshot.run`` directly)
 
 Idempotent: re-running back-to-back is a no-op (``already_current``).
 """
@@ -30,14 +30,14 @@ try:
 except ImportError:
     pass
 
-from invest.jobs import snapshot_workflow  # noqa: E402
+from invest.jobs import snapshot  # noqa: E402
 from invest.persistence.daily_store import DailyStore  # noqa: E402
 
 
 # Re-exports for backwards compatibility with any external callers that
 # import these names directly from the script.
-compute_increment_window = snapshot_workflow.compute_increment_window
-run = snapshot_workflow.run
+compute_increment_window = snapshot.compute_increment_window
+run = snapshot.run
 
 
 def main(argv=None) -> int:
@@ -61,7 +61,7 @@ def main(argv=None) -> int:
     store = DailyStore(Path(args.db))
     store.init_schema()
 
-    summary = snapshot_workflow.run(store, portfolio)
+    summary = snapshot.run(store, portfolio)
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
     return 0
 

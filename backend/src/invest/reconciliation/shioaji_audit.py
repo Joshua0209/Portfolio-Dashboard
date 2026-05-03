@@ -227,7 +227,7 @@ def run(
 ) -> AuditResult:
     """Bootstrap a SQLModel session against ``daily_store`` and audit.
 
-    The post-PDF caller (``jobs.snapshot_workflow.run``) holds a
+    The post-PDF caller (``jobs.snapshot.run``) holds a
     ``DailyStore`` but no SQLModel session — the read-side of the audit
     needs the SQLModel ``trades`` table (populated by
     ``invest.jobs.trade_backfill``). This wrapper opens an engine

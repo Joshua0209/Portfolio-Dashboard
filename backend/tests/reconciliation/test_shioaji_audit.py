@@ -399,7 +399,7 @@ class TestPairIdNormalization:
 
 # --- Phase 14.5 — `run()` orchestrator -----------------------------------
 #
-# The post-PDF caller (jobs.snapshot_workflow.run) holds a DailyStore but
+# The post-PDF caller (jobs.snapshot.run) holds a DailyStore but
 # no SQLModel session. `run()` is the seam: bootstrap engine + session
 # against the same SQLite file, defensively skip when the trades table
 # is empty (operator hasn't run scripts/backfill_trades.py), then

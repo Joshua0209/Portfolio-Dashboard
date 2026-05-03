@@ -24,7 +24,7 @@ by ``(date, code, side, int(round(qty)))``, and folded into qty_history.
 Audit hook (Phase 14.5, extracted):
   Broker-vs-PDF buy-leg coverage is checked by
   ``invest.reconciliation.shioaji_audit.run``, invoked by
-  ``jobs.snapshot_workflow.run`` AFTER the overlay write completes.
+  ``jobs.snapshot.run`` AFTER the overlay write completes.
   This module no longer fires reconcile events on the write path —
   separation matches the docstring intent that "a future change to
   the audit policy should not require touching the write path."
@@ -527,8 +527,8 @@ def merge(
     )
 
     # Audit hook moved to reconciliation.shioaji_audit.run (Phase 14.5)
-    # — invoked by jobs.snapshot_workflow.run AFTER overlay write
-    # completes. The write path stays free of audit-policy concerns.
+    # — invoked by jobs.snapshot.run AFTER overlay write completes.
+    # The write path stays free of audit-policy concerns.
 
     # Unify all 3 sources into trade-shaped records, then dedup by
     # (date, code, side, int(round(qty))).
