@@ -454,23 +454,74 @@ def admin_refresh(
 @admin_router.post(
     "/api/admin/retry-failed", dependencies=[Depends(require_admin)],
 )
-def admin_retry_failed(session: Session = Depends(get_session)) -> dict[str, Any]:
-    # Resolver is intentionally a "nothing to retry" no-op until the
-    # Phase 2 services are wired into a real per-task resolver. This
-    # keeps the envelope honest: if the DLQ is empty, both counters
-    # are 0; if it has rows, every row will count as still_failing
-    # (no false positives for "resolved").
-    def not_yet_wired_resolver(task):
-        def _retry():
-            raise NotImplementedError(
-                "admin retry resolver not yet wired up — run "
-                "scripts/retry_failed.py with a real PriceClient/"
-                "FxClient instead"
-            )
-        return _retry
+def admin_retry_failed(
+    session: Session = Depends(get_session),
+    daily=Depends(get_daily_store),
+) -> dict[str, Any]:
+    """Drain the SQLModel ``failed_tasks`` DLQ via ``retry_failed.run``.
 
-    summary = retry_failed.run(session, not_yet_wired_resolver)
+    Resolver dispatches per-task_type to the price/fx fetch helpers
+    that produced the original DLQ rows. Mirrors the resolver in
+    ``scripts/retry_failed_tasks.py``; both routes share the same
+    contract: callable fetches AND persists.
+    """
+    summary = retry_failed.run(session, _build_admin_resolver(daily))
     return success(summary)
+
+
+def _build_admin_resolver(store):
+    """Resolver factory for the admin DLQ drain — same dispatch shape
+    as the CLI's ``build_resolver`` (deliberately inlined to avoid a
+    cross-cutting helper module while the migration is in flight).
+    """
+    from invest.jobs import backfill_runner
+    from invest.prices import sources as price_sources
+
+    def resolver(task):
+        ttype = task.task_type
+        target = (task.payload or {}).get("target")
+        if not target:
+            raise ValueError(
+                f"failed_task id={task.id} has no payload['target']"
+            )
+        floor = store.get_meta("backfill_floor") or "2025-08-01"
+        today = store.get_meta("last_known_date") or floor
+        if ttype == "tw_prices":
+            def _do() -> None:
+                rows = price_sources.get_prices(
+                    target, "TWD", floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_symbol_prices(store, target, rows)
+            return _do
+        if ttype == "foreign_prices":
+            def _do() -> None:
+                rows = price_sources.get_prices(
+                    target, "USD", floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_symbol_prices(store, target, rows)
+            return _do
+        if ttype == "fx_rates":
+            def _do() -> None:
+                rows = price_sources.get_fx_rates(
+                    target, floor, today, store=store, today=today,
+                )
+                backfill_runner._persist_fx_rows(store, target, rows)
+            return _do
+        if ttype == "benchmark_prices":
+            def _do() -> None:
+                rows = price_sources.get_yfinance_prices(
+                    target, floor, today, store=store, today=today,
+                )
+                ccy = "TWD" if target.endswith((".TW", ".TWO")) else "USD"
+                tagged = [
+                    {**r, "symbol": target, "currency": ccy, "source": "yfinance"}
+                    for r in rows
+                ]
+                backfill_runner._persist_symbol_prices(store, target, tagged)
+            return _do
+        raise ValueError(f"unknown task_type: {ttype}")
+
+    return resolver
 
 
 @admin_router.post(

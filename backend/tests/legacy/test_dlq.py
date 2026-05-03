@@ -1,4 +1,4 @@
-"""Phase 10 — failed-tasks DLQ wrapper.
+"""Phase 10 — failed-tasks DLQ wrapper (legacy producer-side tests).
 
 `fetch_with_dlq(store, task_type, target, fn, *args, **kwargs)`:
   - On success: return fn(*args, **kwargs); no DB write.
@@ -8,8 +8,12 @@
   - The (task_type, target) pair is the de-dupe key for "open" rows
     (resolved_at IS NULL), so retrying the same target after a failure
     does not create N rows.
-  - retry_open_tasks(store, fn_resolver) walks open rows and retries
-    each one; on success sets resolved_at, on failure increments attempts.
+
+Phase 14.4 retired ``retry_open_tasks`` from backfill_runner. Drainage
+now lives in ``invest.jobs.retry_failed.run`` (SQLModel-backed); see
+``tests/jobs/test_retry_failed.py``. ``fetch_with_dlq`` (the producer)
+stays here pending Phase 14.3, which will retire the entire
+backfill_runner monolith.
 """
 from __future__ import annotations
 
@@ -127,58 +131,7 @@ def test_resolved_failure_does_not_block_new_open_row(store):
     assert rows[1]["attempts"] == 1
 
 
-def test_retry_open_tasks_resolves_on_success(store):
-    """retry_open_tasks(store, resolver): walks every open row, calls
-    resolver(row) which returns a callable to retry; on success sets
-    resolved_at."""
-    from invest.jobs.backfill_runner import fetch_with_dlq, retry_open_tasks
-
-    def boom():
-        raise RuntimeError("first")
-
-    fetch_with_dlq(store, "tw_prices", "2330", boom)
-    fetch_with_dlq(store, "tw_prices", "2454", boom)
-
-    def resolver(row):
-        # First task succeeds, second still fails.
-        if row["target"] == "2330":
-            return lambda: [{"ok": True}]
-        return lambda: (_ for _ in ()).throw(RuntimeError("still failing"))
-
-    summary = retry_open_tasks(store, resolver)
-    assert summary["resolved"] == 1
-    assert summary["still_failing"] == 1
-
-    with store.connect_ro() as conn:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT target, resolved_at, attempts FROM failed_tasks ORDER BY target"
-        ).fetchall()]
-    assert rows[0]["target"] == "2330"
-    assert rows[0]["resolved_at"] is not None
-    assert rows[1]["target"] == "2454"
-    assert rows[1]["resolved_at"] is None
-    assert rows[1]["attempts"] == 2
-
-
-def test_retry_open_tasks_skips_resolved_rows(store):
-    from invest.jobs.backfill_runner import fetch_with_dlq, retry_open_tasks
-
-    def boom():
-        raise RuntimeError("x")
-
-    fetch_with_dlq(store, "tw_prices", "2330", boom)
-    with store.connect_rw() as conn:
-        conn.execute(
-            "UPDATE failed_tasks SET resolved_at='2026-04-25T00:00:00Z'"
-        )
-
-    calls = {"n": 0}
-
-    def resolver(row):
-        calls["n"] += 1
-        return lambda: []
-
-    summary = retry_open_tasks(store, resolver)
-    assert summary["resolved"] == 0
-    assert summary["still_failing"] == 0
-    assert calls["n"] == 0
+# Drainage tests for the modular replacement live in
+# tests/jobs/test_retry_failed.py — those exercise the SQLModel
+# `failed_tasks` shape (payload['target'] / error / first_failed_at)
+# that Phase 14.4 wired the script + admin endpoint onto.

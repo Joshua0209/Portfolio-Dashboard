@@ -1603,66 +1603,12 @@ def fetch_with_dlq(
         return None
 
 
-Resolver = Callable[[dict[str, Any]], Callable[[], Any]]
-
-
-def retry_open_tasks(store: DailyStore, resolver: Resolver) -> dict[str, int]:
-    """Walk every open failed_tasks row and retry it.
-
-    `resolver(row) -> callable`: caller-supplied factory that returns a
-    no-arg callable that fetches AND persists the rows for the given DLQ
-    entry. On success (no exception), sets resolved_at on the row. On
-    failure, bumps attempts.
-
-    The callable MUST persist on its own — `retry_open_tasks` discards
-    the return value. This mirrors the FetchTask round-robin path which
-    pairs fetch_fn with persist_fn. A resolver that only fetches will
-    silently mark dates_checked but lose the actual price rows; the
-    contract is "do everything needed to make the original failure
-    no-longer-failing."
-
-    Used by /api/admin/retry-failed and scripts/retry_failed_tasks.py.
-    """
-    columns = (
-        "id, task_type, target, attempts, error_message, "
-        "first_seen_at, last_attempt_at, resolved_at"
-    )
-    with store.connect_ro() as conn:
-        rows = [dict(r) for r in conn.execute(
-            f"SELECT {columns} FROM failed_tasks WHERE resolved_at IS NULL"
-        ).fetchall()]
-
-    resolved = 0
-    still_failing = 0
-    for row in rows:
-        try:
-            retry_fn = resolver(row)
-            retry_fn()
-        except Exception as exc:  # noqa: BLE001 — same boundary
-            now = _now_utc_iso()
-            sanitized = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
-            with store.connect_rw() as conn:
-                conn.execute(
-                    """
-                    UPDATE failed_tasks
-                    SET attempts = attempts + 1,
-                        last_attempt_at = ?,
-                        error_message = ?
-                    WHERE id = ?
-                    """,
-                    (now, sanitized, row["id"]),
-                )
-            still_failing += 1
-            continue
-        now = _now_utc_iso()
-        with store.connect_rw() as conn:
-            conn.execute(
-                "UPDATE failed_tasks SET resolved_at = ? WHERE id = ?",
-                (now, row["id"]),
-            )
-        resolved += 1
-
-    return {"resolved": resolved, "still_failing": still_failing}
+# Note (Phase 14.4): the legacy `retry_open_tasks` walked the legacy
+# `failed_tasks` schema (target/error_message/first_seen_at). Drainage
+# now routes through `invest.jobs.retry_failed.run` against the SQLModel
+# `failed_tasks` shape (payload/error/first_failed_at). The legacy
+# `fetch_with_dlq` producer above stays in place — Phase 14.3 will
+# retire it together with the rest of this monolith.
 
 
 # --- Phase 9: background thread + state machine --------------------------
