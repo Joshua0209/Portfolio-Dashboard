@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from invest.jobs import backfill_runner
+from invest.jobs import backfill
 from invest.persistence.daily_store import DailyStore
 from invest.prices import sources as price_sources
 
@@ -265,7 +265,7 @@ def test_round_robin_interleaves_upstreams(
         else:
             visit_order.append("foreign")
         # Persist a single fake row so the upstream count reflects "fetched".
-        return backfill_runner._persist_symbol_prices(store, symbol, [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-20",
             "close": 600.0 if currency == "TWD" else 200.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
@@ -276,18 +276,18 @@ def test_round_robin_interleaves_upstreams(
         return 1
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_fx_provider", fake_fx_range,
+        backfill, "_fetch_range_via_fx_provider", fake_fx_range,
     )
     # Skip benchmark fetches — they'd dominate the order.
     monkeypatch.setattr(
-        backfill_runner, "get_yfinance_prices",
+        backfill, "get_yfinance_prices",
         lambda *a, **kw: [],
     )
 
-    backfill_runner.run_full_backfill(
+    backfill.run_full_backfill(
         store, portfolio_two_upstreams, today="2025-08-31",
     )
 
@@ -317,25 +317,25 @@ def test_deferred_retry_recovers_transient_failure(
             if call_count["2330"] == 1:
                 raise RuntimeError("transient yfinance 503")
         # Persist a fake row on success.
-        return backfill_runner._persist_symbol_prices(store, symbol, [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-20",
             "close": 600.0 if currency == "TWD" else 200.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_fx_provider",
+        backfill, "_fetch_range_via_fx_provider",
         lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_yfinance_prices",
+        backfill, "get_yfinance_prices",
         lambda *a, **kw: [],
     )
 
-    summary = backfill_runner.run_full_backfill(
+    summary = backfill.run_full_backfill(
         store, portfolio_two_upstreams, today="2025-08-31",
     )
 
@@ -361,25 +361,25 @@ def test_deferred_retry_writes_dlq_on_second_failure(
     def fake_fetch_range(store, symbol, currency, start, end):
         if symbol == "2330":
             raise RuntimeError("yfinance permanently down")
-        return backfill_runner._persist_symbol_prices(store, symbol, [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-20",
             "close": 200.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_fx_provider",
+        backfill, "_fetch_range_via_fx_provider",
         lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_yfinance_prices",
+        backfill, "get_yfinance_prices",
         lambda *a, **kw: [],
     )
 
-    backfill_runner.run_full_backfill(
+    backfill.run_full_backfill(
         store, portfolio_two_upstreams, today="2025-08-31",
     )
 
@@ -444,24 +444,24 @@ def test_circuit_breaker_trips_after_threshold_failures(
             tw_call_count["n"] += 1
             raise RuntimeError("yfinance permanently down")
         # Foreign always succeeds.
-        return backfill_runner._persist_symbol_prices(store, symbol, [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-20", "close": 200.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_fx_provider",
+        backfill, "_fetch_range_via_fx_provider",
         lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_yfinance_prices",
+        backfill, "get_yfinance_prices",
         lambda *a, **kw: [],
     )
 
-    summary = backfill_runner.run_full_backfill(
+    summary = backfill.run_full_backfill(
         store, portfolio_breaker, today="2025-08-31",
         max_failures_per_market=3,
     )
@@ -488,24 +488,24 @@ def test_circuit_breaker_disabled_with_high_threshold(
         if currency == "TWD":
             tw_call_count["n"] += 1
             raise RuntimeError("yfinance flaky")
-        return backfill_runner._persist_symbol_prices(store, symbol, [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-20", "close": 200.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_fx_provider",
+        backfill, "_fetch_range_via_fx_provider",
         lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_yfinance_prices",
+        backfill, "get_yfinance_prices",
         lambda *a, **kw: [],
     )
 
-    summary = backfill_runner.run_full_backfill(
+    summary = backfill.run_full_backfill(
         store, portfolio_breaker, today="2025-08-31",
         max_failures_per_market=99,
     )
@@ -533,7 +533,7 @@ def test_run_tw_backfill_circuit_breaker(
     def fake_fetch_range(store, symbol, currency, start, end):
         tw_call_count["n"] += 1
         # Mimic price_service Outcome A: write SQLModel-shape DLQ row.
-        now = backfill_runner._now_utc_iso()
+        now = backfill._now_utc_iso()
         payload = _json.dumps({
             "symbol": symbol, "currency": currency,
             "start": start, "end": end,
@@ -551,10 +551,10 @@ def test_run_tw_backfill_circuit_breaker(
         return 0
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", fake_fetch_range,
     )
 
-    summary = backfill_runner.run_tw_backfill(
+    summary = backfill.run_tw_backfill(
         store, portfolio_breaker, today="2025-08-31",
         max_failures_per_market=3,
     )

@@ -9,7 +9,7 @@
     (resolved_at IS NULL), so retrying the same target after a failure
     does not create N rows.
 
-Phase 14.4 retired ``retry_open_tasks`` from backfill_runner. Drainage
+Phase 14.4 retired ``retry_open_tasks`` from backfill. Drainage
 now lives in ``invest.jobs.retry_failed.run`` (SQLModel-backed); see
 ``tests/jobs/test_retry_failed.py``. ``fetch_with_dlq`` (the producer)
 stays here pending Phase 14.3, which will retire the entire
@@ -41,7 +41,7 @@ def _open_rows(store: DailyStore) -> list[dict[str, Any]]:
 
 
 def test_fetch_with_dlq_returns_value_on_success(store):
-    from invest.jobs.backfill_runner import fetch_with_dlq
+    from invest.jobs.backfill import fetch_with_dlq
 
     out = fetch_with_dlq(
         store, "tw_prices", "2330", lambda: [{"date": "2026-04-25"}]
@@ -51,7 +51,7 @@ def test_fetch_with_dlq_returns_value_on_success(store):
 
 
 def test_fetch_with_dlq_writes_row_on_exception(store):
-    from invest.jobs.backfill_runner import fetch_with_dlq
+    from invest.jobs.backfill import fetch_with_dlq
 
     def boom():
         raise RuntimeError("yfinance 503")
@@ -71,7 +71,7 @@ def test_fetch_with_dlq_writes_row_on_exception(store):
 def test_fetch_with_dlq_dedupes_by_task_target(store):
     """Retrying the same target after failure must NOT insert a second
     open row — it bumps `attempts` and updates `last_failed_at`."""
-    from invest.jobs.backfill_runner import fetch_with_dlq
+    from invest.jobs.backfill import fetch_with_dlq
 
     def boom():
         raise RuntimeError("yfinance 503")
@@ -86,7 +86,7 @@ def test_fetch_with_dlq_dedupes_by_task_target(store):
 
 
 def test_fetch_with_dlq_separate_targets_separate_rows(store):
-    from invest.jobs.backfill_runner import fetch_with_dlq
+    from invest.jobs.backfill import fetch_with_dlq
 
     def boom_for(t):
         def _():
@@ -104,7 +104,7 @@ def test_fetch_with_dlq_separate_targets_separate_rows(store):
 def test_resolved_failure_does_not_block_new_open_row(store):
     """If a row was resolved, a new failure for the same target must
     create a fresh open row (not bump the resolved one)."""
-    from invest.jobs.backfill_runner import fetch_with_dlq
+    from invest.jobs.backfill import fetch_with_dlq
 
     def boom():
         raise RuntimeError("first")

@@ -12,7 +12,7 @@ modularization (Phase 14):
       Production path. Operates on ``DailyStore`` (raw SQLite) + the
       PDF-aggregate portfolio dict. Handles TW/foreign price fetch,
       FX gap-fill, the 3-source broker overlay, the post-overlay audit
-      hook, and DLQ-backed external fetches via ``backfill_runner``.
+      hook, and DLQ-backed external fetches via ``invest.jobs.backfill``.
       Backs both ``POST /api/admin/refresh`` and
       ``scripts/snapshot_daily.py``.
 
@@ -35,7 +35,7 @@ from typing import Any, Callable, Optional
 
 from sqlmodel import Session, desc, select
 
-from invest.jobs import _positions, backfill_runner
+from invest.jobs import _positions, backfill
 from invest.persistence.daily_store import BACKFILL_FLOOR_DEFAULT, DailyStore
 from invest.persistence.models.portfolio_daily import PortfolioDaily
 
@@ -127,10 +127,10 @@ def _fetch_range_via_fx_provider(
     """Phase 14.3b: route incremental FX gap-fill through fx_provider.
 
     Symmetric to ``_fetch_range_via_price_service`` for prices —
-    delegates to ``backfill_runner._fetch_range_via_fx_provider`` so the
+    delegates to ``backfill._fetch_range_via_fx_provider`` so the
     same SQLModel session lifecycle and DLQ semantics apply.
     """
-    return backfill_runner._fetch_range_via_fx_provider(store, ccy, start, end)
+    return backfill._fetch_range_via_fx_provider(store, ccy, start, end)
 
 
 def compute_increment_window(store: DailyStore) -> tuple[str, str] | None:
@@ -138,8 +138,8 @@ def compute_increment_window(store: DailyStore) -> tuple[str, str] | None:
     store is already at today.
 
     On a fresh DB with no ``last_known_date`` meta row yet (cold start
-    that hasn't been completed by backfill_runner), the window falls
-    back to [BACKFILL_FLOOR, today] so a CLI-only user can populate
+    that hasn't been completed by ``invest.jobs.backfill``), the window
+    falls back to [BACKFILL_FLOOR, today] so a CLI-only user can populate
     everything in one go.
     """
     today = _today_iso()
@@ -331,7 +331,7 @@ def _fetch_overlay_symbol_prices(
         # The price_service writes rows internally; we re-query the
         # ``prices`` table for the new (date) tuples to fold into the
         # caller's running ``new_dates`` set.
-        n = backfill_runner._fetch_range_via_price_service(
+        n = backfill._fetch_range_via_price_service(
             store, code, "TWD", overlay_start, overlay_end,
         )
         if n <= 0:
@@ -352,7 +352,7 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
 
     Returns a summary dict the ``/api/admin/refresh`` endpoint surfaces
     back to the UI. Never raises — fetch failures land in failed_tasks
-    via ``backfill_runner.fetch_with_dlq``, like the cold-start path.
+    via ``backfill.fetch_with_dlq``, like the cold-start path.
     """
     window = compute_increment_window(store)
     if window is None:
@@ -376,7 +376,7 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
             store, portfolio, today, sdk_data=sdk_data
         )
         audit_summary = _run_audit_safe(store, sdk_data)
-        backfill_runner._derive_positions_and_portfolio(store, portfolio)
+        _positions._derive_positions_and_portfolio(store, portfolio)
         summary = {
             "new_dates": len(overlay_dates),
             "new_rows": overlay_rows,
@@ -398,7 +398,7 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     # Phase 14.3a: routed through price_service.fetch_and_store_range.
     # Per-symbol DLQ writes happen inside price_service.
     for code in _held_tw_symbols(portfolio):
-        n = backfill_runner._fetch_range_via_price_service(
+        n = backfill._fetch_range_via_price_service(
             store, code, "TWD", start, end,
         )
         if n <= 0:
@@ -414,7 +414,7 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
 
     # 2. Foreign prices
     for code, ccy in _held_foreign_symbols(portfolio):
-        n = backfill_runner._fetch_range_via_price_service(
+        n = backfill._fetch_range_via_price_service(
             store, code, ccy, start, end,
         )
         if n <= 0:
@@ -468,7 +468,7 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     # 6. Derive positions_daily / portfolio_daily — authoritative writer
     # of portfolio_daily. Walks PDF holdings, then sums any overlay rows
     # the merge step just wrote.
-    backfill_runner._derive_positions_and_portfolio(store, portfolio)
+    _positions._derive_positions_and_portfolio(store, portfolio)
 
     store.set_meta("last_known_date", end)
 

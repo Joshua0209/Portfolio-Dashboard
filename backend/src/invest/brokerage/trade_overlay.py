@@ -138,7 +138,7 @@ def compute_gap_window(
 
 
 def _qty_history_from_portfolio(portfolio: dict) -> dict[str, list[tuple[str, float]]]:
-    """Replicate backfill_runner._qty_history_for_symbol but for all TW
+    """Replicate _positions._qty_history_for_symbol but for all TW
     codes at once. Returns {code: [(date, signed_qty_change)]} sorted."""
     out: dict[str, list[tuple[str, float]]] = {}
     for t in portfolio.get("summary", {}).get("all_trades", []):
@@ -565,7 +565,7 @@ def merge(
 
     # Per-share avg cost from latest PDF month — combined with current
     # qty at write time to produce total cost_local. Matches the schema
-    # convention used by every reader (see backfill_runner.py:422 note).
+    # convention used by every reader (see _positions._derive_positions_and_portfolio).
     avg_cost_at: dict[str, float] = {}
     for m in portfolio.get("months", []):
         for h in m.get("tw", {}).get("holdings", []):
@@ -582,7 +582,7 @@ def merge(
 
     # We persist overlay rows for every priced day in the gap, for every
     # code with a non-zero opening (or post-overlay-trade) qty. This
-    # mirrors backfill_runner's mv-snapshot loop but scoped to the gap.
+    # mirrors _positions._derive_positions_and_portfolio's mv-snapshot loop but scoped to the gap.
     priced_dates = _priced_dates_in_range(store, gap_start, gap_end)
     if not priced_dates:
         log.info(
@@ -598,7 +598,7 @@ def merge(
 
     # Single-writer architecture (2026-05-01): merge() writes only
     # positions_daily for overlay-only (date, code) keys. portfolio_daily
-    # is owned by backfill_runner._derive_positions_and_portfolio, which
+    # is owned by _positions._derive_positions_and_portfolio, which
     # folds in overlay rows via a SUM query keyed on source='overlay'.
     # This eliminates the prior class of bug where merge() and derive()
     # both wrote equity_twd with different forward-fill / qty-history
@@ -620,8 +620,8 @@ def merge(
                 if close is None:
                     continue
                 mv_local = qty * close
-                # Total cost in local ccy. See backfill_runner.py:422 for
-                # why cost_local must be total, not per-share.
+                # Total cost in local ccy. See _positions._derive_positions_and_portfolio
+                # for why cost_local must be total, not per-share.
                 cost_local = qty * avg_cost_at.get(code, 0.0)
                 conn.execute(
                     """

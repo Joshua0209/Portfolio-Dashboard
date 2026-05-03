@@ -4,7 +4,7 @@ The CLI routes through ``invest.jobs.retry_failed.run`` (SQLModel-
 backed). We exercise it as an in-process call with a tmp DB so the
 test does not touch real network or the production sqlite file.
 
-Pre-14.4 the script called ``backfill_runner.retry_open_tasks``
+Pre-14.4 the script called ``backfill.retry_open_tasks``
 against the legacy ``failed_tasks`` schema (target/error_message/
 first_seen_at). Those tests were retired with that function.
 """

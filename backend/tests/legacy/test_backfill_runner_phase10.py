@@ -73,29 +73,29 @@ def test_run_full_backfill_continues_after_per_symbol_failure(
     ``task_type='fetch_price'`` directly; the orchestrator's path is
     only reached if the seam itself raises.)
     """
-    from invest.jobs import backfill_runner
+    from invest.jobs import backfill
 
     def _fake_fetch_range(store, symbol, currency, start, end):
         if symbol == "2454":
             raise RuntimeError("yfinance 503 for 2454")
-        return backfill_runner._persist_symbol_prices(store, symbol, [{
+        return backfill._persist_symbol_prices(store, symbol, [{
             "date": "2025-08-15", "close": 600.0,
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", _fake_fetch_range,
+        backfill, "_fetch_range_via_price_service", _fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_fx_provider",
+        backfill, "_fetch_range_via_fx_provider",
         lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_yfinance_prices",
+        backfill, "get_yfinance_prices",
         lambda *a, **kw: [],
     )
 
-    summary = backfill_runner.run_full_backfill(
+    summary = backfill.run_full_backfill(
         store, portfolio_with_two_tw, today="2025-08-31"
     )
 

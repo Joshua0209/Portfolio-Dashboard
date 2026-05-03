@@ -473,7 +473,7 @@ def _build_admin_resolver(store):
     as the CLI's ``build_resolver`` (deliberately inlined to avoid a
     cross-cutting helper module while the migration is in flight).
     """
-    from invest.jobs import backfill_runner
+    from invest.jobs import backfill
     from invest.prices import sources as price_sources
 
     def resolver(task):
@@ -490,20 +490,20 @@ def _build_admin_resolver(store):
                 rows = price_sources.get_prices(
                     target, "TWD", floor, today, store=store, today=today,
                 )
-                backfill_runner._persist_symbol_prices(store, target, rows)
+                backfill._persist_symbol_prices(store, target, rows)
             return _do
         if ttype == "foreign_prices":
             def _do() -> None:
                 rows = price_sources.get_prices(
                     target, "USD", floor, today, store=store, today=today,
                 )
-                backfill_runner._persist_symbol_prices(store, target, rows)
+                backfill._persist_symbol_prices(store, target, rows)
             return _do
         if ttype == "fx_rates":
             # Phase 14.3b: route through fx_provider.fetch_and_store_range,
             # mirroring the price_service routing for tw/foreign upstreams.
             def _do() -> None:
-                backfill_runner._fetch_range_via_fx_provider(
+                backfill._fetch_range_via_fx_provider(
                     store, target, floor, today,
                 )
             return _do
@@ -517,7 +517,7 @@ def _build_admin_resolver(store):
                     {**r, "symbol": target, "currency": ccy, "source": "yfinance"}
                     for r in rows
                 ]
-                backfill_runner._persist_symbol_prices(store, target, tagged)
+                backfill._persist_symbol_prices(store, target, tagged)
             return _do
         raise ValueError(f"unknown task_type: {ttype}")
 

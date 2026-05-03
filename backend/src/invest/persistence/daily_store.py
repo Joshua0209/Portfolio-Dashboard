@@ -6,9 +6,10 @@ month-end equity; this store holds daily prices, FX rates, and per-day
 position state derived from them.
 
 The store is read-only on the request path. Writes flow through
-`backfill_runner.py` (Phase 3+) which holds a single writer connection
-guarded by `_write_lock`. Reads use per-thread connections in WAL mode so
-they never block each other or the writer.
+`invest.jobs.backfill` (Phase 3+, formerly `app/backfill_runner.py`)
+which holds a single writer connection guarded by `_write_lock`. Reads
+use per-thread connections in WAL mode so they never block each other
+or the writer.
 
 WAL is mandatory because two processes may write concurrently: the Flask
 backfill thread and the standalone `scripts/snapshot_daily.py` CLI.

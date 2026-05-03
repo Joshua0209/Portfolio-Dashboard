@@ -109,15 +109,20 @@ investment/
 │   │   │                         #   transactions, dividends, fx, tax, risk, cashflows,
 │   │   │                         #   tickers, benchmarks, daily, today (read+admin)
 │   │   └── jobs/
-│   │       ├── backfill_runner.py    # 1725-LOC production cold-start path
-│   │       ├── snapshot_workflow.py  # Incremental refresh — backs both
+│   │       ├── backfill.py           # Production cold-start path (DailyStore +
+│   │       │                         #   portfolio.json) co-located with the
+│   │       │                         #   SQLModel scaffold (`*_sqlmodel`).
+│   │       ├── snapshot.py           # Incremental refresh — backs both
 │   │       │                         #   scripts/snapshot_daily.py AND
-│   │       │                         #   POST /api/admin/refresh
+│   │       │                         #   POST /api/admin/refresh.
 │   │       ├── trade_backfill.py     # PDF → SQLModel `trades` table
-│   │       ├── backfill.py / snapshot.py / retry_failed.py / verify_month.py
-│   │       │                         # Trade-table aggregator scaffolds (in-progress) —
-│   │       │                         #   coexist with the canonical jobs above
+│   │       ├── retry_failed.py / verify_month.py
+│   │       │                         # Trade-table aggregator scaffolds (in-progress).
 │   │       └── _positions.py / _dlq.py
+│   │                                 # _positions hosts BOTH the SQLModel
+│   │                                 # build_daily/qty_trajectory/forward_fill
+│   │                                 # AND the production daily walker
+│   │                                 # (_derive_positions_and_portfolio).
 │   └── tests/                    # ~870 tests (pytest)
 │       ├── analytics/ brokerage/ core/ domain/ http/ ingestion/
 │       ├── jobs/ persistence/ prices/ reconciliation/
@@ -428,19 +433,21 @@ Metrics layer  (reads daily-portfolio rows directly — never re-aggregates
 ## In-progress modularization (Phase 14)
 
 See `docs/superpowers/plans/PLAN-modularization.md`. No data-model
-change; no request-path behavior change. Three monoliths are being
-replaced by their existing modularized rewrites:
+change; no request-path behavior change.
 
-| Monolith | Modularized rewrite (already on disk, tested) |
-|---|---|
-| `jobs/backfill_runner.py` (~1727 LOC) | `jobs/backfill.py` + `prices/price_service.py` + `prices/fx_provider.py` |
-| `jobs/snapshot_workflow.py` (~433 LOC) | `jobs/snapshot.py` |
-| inline float math in `analytics/monthly.py` | per-metric Decimal modules in `analytics/{twr,xirr,drawdown,concentration,attribution,sectors,tax_pnl,ratios}.py` |
-| inline `_fire_audit_events` in `brokerage/trade_overlay.py` | `reconciliation/shioaji_audit.py` |
+| Monolith | Modularized rewrite | Status |
+|---|---|---|
+| `jobs/backfill_runner.py` (~1864 LOC) | `jobs/backfill.py` + `jobs/_positions.py` + `prices/price_service.py` + `prices/fx_provider.py` | DONE (Phase 14.3) |
+| `jobs/snapshot_workflow.py` (~433 LOC) | `jobs/snapshot.py` | DONE (Phase 14.2) |
+| inline float math in `analytics/monthly.py` | per-metric Decimal modules in `analytics/{twr,xirr,drawdown,concentration,attribution,sectors,tax_pnl,ratios}.py` | DONE (Phase 14.1) |
+| inline `_fire_audit_events` in `brokerage/trade_overlay.py` | `reconciliation/shioaji_audit.py` | DONE (Phase 14.5) |
 
-Phase 14.1 (wire `monthly.py` through the per-metric primitives) is
-shipped. Remaining phases swap the request path onto the smaller
-modules behind parity tests.
+After 14.3, the production cold-start path lives in `jobs/backfill.py`
+co-located with the SQLModel-backed scaffold (suffixed `_sqlmodel`).
+The daily walker (`_derive_positions_and_portfolio`) lives in
+`jobs/_positions.py` alongside the trade-table aggregator
+(`build_daily`). Remaining phases swap the request path onto the
+trade-table aggregator behind parity tests.
 
 ## Files NOT to commit
 

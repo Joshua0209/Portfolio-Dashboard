@@ -37,7 +37,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
-from invest.jobs.backfill_runner import (  # noqa: E402
+from invest.jobs.backfill import (  # noqa: E402
     iter_foreign_symbols_with_metadata,
     iter_tw_symbols_with_metadata,
     month_end_iso,

@@ -178,7 +178,7 @@ def test_merge_flips_has_overlay_flag(store, portfolio_with_held_position):
     portfolio_daily.has_overlay. The contract being tested here is that
     the integrated flow (merge → derive) flips the flag; merge alone
     no longer writes portfolio_daily."""
-    from invest.jobs import backfill_runner
+    from invest.jobs import _positions
 
     fake = _FakeShioajiClient(trades=[
         {"date": "2026-04-22", "code": "2330", "side": "普買", "qty": 500,
@@ -189,7 +189,7 @@ def test_merge_flips_has_overlay_flag(store, portfolio_with_held_position):
     trade_overlay.merge(
         store, portfolio, fake, gap_start="2026-04-01", gap_end="2026-04-26"
     )
-    backfill_runner._derive_positions_and_portfolio(store, portfolio)
+    _positions._derive_positions_and_portfolio(store, portfolio)
 
     with store.connect_ro() as conn:
         flags = [r[0] for r in conn.execute(

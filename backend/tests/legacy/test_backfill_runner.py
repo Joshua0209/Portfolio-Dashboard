@@ -1,10 +1,10 @@
-"""Phase 3 acceptance tests for app/backfill_runner.run_tw_backfill().
+"""Phase 3 acceptance tests for app/backfill.run_tw_backfill().
 
 The runner pulls TW symbols from portfolio.json, computes per-symbol
 windows via compute_fetch_window(), calls price_sources.get_prices, and
 UPSERTs into prices + derives basic positions_daily / portfolio_daily.
 
-These tests stub out the network (via invest.jobs.backfill_runner.get_prices) and
+These tests stub out the network (via invest.jobs.backfill.get_prices) and
 exercise the runner against a tiny synthetic portfolio fixture.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from invest.jobs.backfill_runner import (
+from invest.jobs.backfill import (
     iter_tw_symbols_with_metadata,
     run_tw_backfill,
 )
@@ -168,7 +168,7 @@ def _install_fake_price_service(
         symbol+currency+source optional), or
       - a callable (symbol, currency, start, end) -> list[dict].
     """
-    from invest.jobs import backfill_runner
+    from invest.jobs import backfill
 
     def _fake(store, symbol, currency, start, end):
         if captured is not None:
@@ -189,10 +189,10 @@ def _install_fake_price_service(
             }
             for r in rows
         ]
-        return backfill_runner._persist_symbol_prices(store, symbol, tagged)
+        return backfill._persist_symbol_prices(store, symbol, tagged)
 
     monkeypatch.setattr(
-        backfill_runner, "_fetch_range_via_price_service", _fake,
+        backfill, "_fetch_range_via_price_service", _fake,
     )
 
 
@@ -212,7 +212,7 @@ def test_run_tw_backfill_skips_symbols_outside_floor(
     _install_fake_price_service(
         monkeypatch, rows_by_symbol_or_fn=fake_rows, captured=fetched,
     )
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     summary = run_tw_backfill(store, portfolio_path)
 
@@ -233,7 +233,7 @@ def test_run_tw_backfill_writes_prices(
     ]
 
     _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn={"2330": rows})
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_tw_backfill(store, portfolio_path)
 
@@ -258,7 +258,7 @@ def test_run_tw_backfill_is_idempotent_via_upsert(
         return rows1 if state["calls"] == 1 else rows2
 
     _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn=fake_rows)
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_tw_backfill(store, portfolio_path)
     run_tw_backfill(store, portfolio_path)
@@ -282,7 +282,7 @@ def test_run_tw_backfill_populates_portfolio_daily(
     ]
 
     _install_fake_price_service(monkeypatch, rows_by_symbol_or_fn={"2330": rows})
-    monkeypatch.setattr("invest.jobs.backfill_runner._today_iso", lambda: "2026-04-27")
+    monkeypatch.setattr("invest.jobs.backfill._today_iso", lambda: "2026-04-27")
 
     run_tw_backfill(store, portfolio_path)
 
@@ -302,7 +302,7 @@ def test_run_tw_backfill_populates_portfolio_daily(
 
 
 def test_month_end_iso_handles_month_lengths() -> None:
-    from invest.jobs.backfill_runner import month_end_iso
+    from invest.jobs.backfill import month_end_iso
     assert month_end_iso("2025-02") == "2025-02-28"  # non-leap
     assert month_end_iso("2024-02") == "2024-02-29"  # leap
     assert month_end_iso("2025-04") == "2025-04-30"
