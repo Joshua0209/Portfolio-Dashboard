@@ -398,29 +398,49 @@ cd backend && pytest tests/analytics/   # Pure-function analytics
 cd backend && pytest tests/jobs/        # Backfill + snapshot orchestration
 ```
 
-## In-progress migration: analytics on trades
+## Architecture model: dual SoT (locked)
 
-The codebase is mid-migration from `PortfolioStore`-backed analytics
-(reading aggregated month-dicts out of `portfolio.json`) to
-`trades`-table-backed analytics (computing monthly aggregates from the
-SQLModel `trades` table on-the-fly).
+```
+Trades log (PDF + Shioaji overlay)            ← SoT-1
+        │
+        ▼ walk day-by-day + apply prices + apply FX
+positions_daily / portfolio_daily              ← SoT-2 (precomputed cache)
+        │   ▲ verified at month-ends vs PDF monthly snapshots
+        ▼
+Metrics layer  (reads daily-portfolio rows directly — never re-aggregates
+               trades on the request path)
+```
 
-State of play:
-- **Source side done**: `invest.jobs.trade_backfill` populates `trades`
-  from `portfolio.json:summary.all_trades`. The overlay writes
-  `source='overlay'` rows; PDFs write `source='pdf'`. Both populated.
-- **Read side not flipped**: every router branch still reads
-  `PortfolioStore`. The redesigned scaffolds in `invest.jobs.{backfill,
-  snapshot,retry_failed}`, `invest.prices.{price_service,fx_provider}`,
-  and `invest.reconciliation.shioaji_audit` coexist with the verbatim
-  ports but are not on the request path.
-- **Migration recipe**: rewrite each analytics module
-  (`invest.analytics.{twr,xirr,ratios,drawdown,concentration,
-  attribution,tax_pnl,sectors}`) to consume `trades`, then ship behind
-  a byte-equality verifier comparing the new output against
-  `PortfolioStore.summary[*]` for every production month before flipping
-  the router branch. `PortfolioStore` retires once every branch is
-  flipped.
+- **Trades** are SoT because the broker API returns trade-level data only.
+- **Daily portfolio** is *also* SoT because it is computed once, verified
+  against the PDF month-end snapshot, and stored. Metrics consume it
+  directly.
+- Consistency invariant: month-end aggregate of `portfolio_daily` ≡ PDF
+  monthly snapshot. Currently enforced *implicitly* by anchoring the
+  daily walk at each prior PDF month-end inside
+  `backfill_runner._qty_per_priced_date_for_symbol`.
+- **Rejected design**: routing the metrics layer through per-request
+  trade aggregation. The deleted `PLAN-analytics-on-trades-migration.md`
+  proposed this; it conflicts with the dual-SoT model and is permanently
+  off the table. `PortfolioStore` is the canonical monthly view; the
+  `?resolution=daily` branches read `portfolio_daily` directly.
+
+## In-progress modularization (Phase 14)
+
+See `docs/superpowers/plans/PLAN-modularization.md`. No data-model
+change; no request-path behavior change. Three monoliths are being
+replaced by their existing modularized rewrites:
+
+| Monolith | Modularized rewrite (already on disk, tested) |
+|---|---|
+| `jobs/backfill_runner.py` (~1727 LOC) | `jobs/backfill.py` + `prices/price_service.py` + `prices/fx_provider.py` |
+| `jobs/snapshot_workflow.py` (~433 LOC) | `jobs/snapshot.py` |
+| inline float math in `analytics/monthly.py` | per-metric Decimal modules in `analytics/{twr,xirr,drawdown,concentration,attribution,sectors,tax_pnl,ratios}.py` |
+| inline `_fire_audit_events` in `brokerage/trade_overlay.py` | `reconciliation/shioaji_audit.py` |
+
+Phase 14.1 (wire `monthly.py` through the per-metric primitives) is
+shipped. Remaining phases swap the request path onto the smaller
+modules behind parity tests.
 
 ## Files NOT to commit
 
