@@ -33,10 +33,11 @@ def store(tmp_path: Path) -> DailyStore:
 
 
 def _open_rows(store: DailyStore) -> list[dict[str, Any]]:
-    with store.connect_ro() as conn:
-        return [dict(r) for r in conn.execute(
-            "SELECT * FROM failed_tasks ORDER BY id"
-        ).fetchall()]
+    """Phase 14.3a: ``failed_tasks`` is now SQLModel-shape — read via
+    DailyStore.get_failed_tasks which surfaces both the canonical
+    columns and the legacy aliases (``target``, ``error_message``).
+    """
+    return store.get_failed_tasks()
 
 
 def test_fetch_with_dlq_returns_value_on_success(store):
@@ -60,16 +61,16 @@ def test_fetch_with_dlq_writes_row_on_exception(store):
     rows = _open_rows(store)
     assert len(rows) == 1
     assert rows[0]["task_type"] == "tw_prices"
+    # SQLModel shape: target derived from payload['target']
     assert rows[0]["target"] == "2330"
     assert "yfinance 503" in rows[0]["error_message"]
     assert rows[0]["attempts"] == 1
     assert rows[0]["first_seen_at"] == rows[0]["last_attempt_at"]
-    assert rows[0]["resolved_at"] is None
 
 
 def test_fetch_with_dlq_dedupes_by_task_target(store):
     """Retrying the same target after failure must NOT insert a second
-    open row — it bumps `attempts` and updates `last_attempt_at`."""
+    open row — it bumps `attempts` and updates `last_failed_at`."""
     from invest.jobs.backfill_runner import fetch_with_dlq
 
     def boom():
@@ -121,9 +122,11 @@ def test_resolved_failure_does_not_block_new_open_row(store):
 
     fetch_with_dlq(store, "tw_prices", "2330", boom2)
 
+    # Both rows still on disk: one resolved, one fresh-open. Read raw
+    # to bypass the get_failed_tasks() filter (it skips resolved).
     with store.connect_ro() as conn:
         rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM failed_tasks ORDER BY id"
+            "SELECT id, resolved_at, attempts FROM failed_tasks ORDER BY id"
         ).fetchall()]
     assert len(rows) == 2
     assert rows[0]["resolved_at"] is not None

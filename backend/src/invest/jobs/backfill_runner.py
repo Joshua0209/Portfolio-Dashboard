@@ -22,14 +22,92 @@ import calendar
 import json
 import logging
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from invest.core import state as backfill_state
 from invest.persistence.daily_store import BACKFILL_FLOOR_DEFAULT, DailyStore
 from invest.prices.sources import get_fx_rates, get_prices, get_yfinance_prices
+
+
+# --- Phase 14.3a: SQLModel-session helper for price_service routing -------
+
+
+@contextmanager
+def _with_session(store: DailyStore) -> Iterator[Any]:
+    """Yield a SQLModel Session bound to the same SQLite file as `store`.
+
+    The price-fetch path now goes through ``invest.prices.price_service``
+    which expects PriceRepo + FailedTaskRepo + SymbolMarketRepo wired
+    onto a session. We open a short-lived engine + session per fetch
+    site — same pattern as scripts/retry_failed_tasks.py.
+    """
+    from sqlmodel import Session, create_engine
+
+    engine = create_engine(
+        f"sqlite:///{store.path}",
+        connect_args={"timeout": 5},
+    )
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
+class _YFinancePriceClient:
+    """Module-function wrapper exposing the PriceClient Protocol shape.
+
+    ``invest.prices.yfinance_client`` is a module of free functions;
+    ``price_service`` wants an object with ``fetch_prices(symbol,
+    start, end)``. Wrapping per-fetch keeps the indirection cheap and
+    lets tests monkeypatch ``yfinance_client.fetch_prices`` directly.
+    """
+
+    def fetch_prices(self, symbol: str, start: str, end: str) -> list[dict]:
+        from invest.prices import yfinance_client as _yfc
+
+        return _yfc.fetch_prices(symbol, start, end)
+
+
+def _fetch_range_via_price_service(
+    store: DailyStore,
+    symbol: str,
+    currency: str,
+    start: str,
+    end: str,
+) -> int:
+    """Adapt price_service.fetch_and_store_range to the store-backed
+    backfill loops.
+
+    Returns the count of price rows persisted (0 on miss/failure). DLQ
+    rows are written by price_service inside the same session.
+    """
+    from datetime import date as _date
+
+    from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
+    from invest.persistence.repositories.price_repo import PriceRepo
+    from invest.persistence.repositories.symbol_market_repo import (
+        SymbolMarketRepo,
+    )
+    from invest.prices import price_service
+
+    start_d = _date.fromisoformat(start)
+    end_d = _date.fromisoformat(end)
+    with _with_session(store) as session:
+        return price_service.fetch_and_store_range(
+            symbol,
+            currency,
+            start_d,
+            end_d,
+            price_repo=PriceRepo(session),
+            dlq=FailedTaskRepo(session),
+            client=_YFinancePriceClient(),
+            market_repo=SymbolMarketRepo(session),
+        )
 
 log = logging.getLogger(__name__)
 
@@ -847,6 +925,12 @@ def _persist_symbol_prices(
     the router knows which exchange responded and persists the verdict
     there (so OTC symbols land as 'tpex', not 'twse'). The runner only
     handles the prices table.
+
+    Phase 14.3a: writes SQLModel-shape columns (no `fetched_at`/PK on
+    (date, symbol); instead `ingested_at` + autoincrement id +
+    UNIQUE constraint on (date, symbol)). The benchmark backfill is
+    the last in-tree caller; portfolio TW + foreign price-fetch sites
+    now route through ``price_service.fetch_and_store_range``.
     """
     if not rows:
         return 0
@@ -855,13 +939,13 @@ def _persist_symbol_prices(
         for r in rows:
             conn.execute(
                 """
-                INSERT INTO prices(date, symbol, close, currency, source, fetched_at)
+                INSERT INTO prices(date, symbol, close, currency, source, ingested_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(date, symbol) DO UPDATE SET
                     close = excluded.close,
                     currency = excluded.currency,
                     source = excluded.source,
-                    fetched_at = excluded.fetched_at
+                    ingested_at = excluded.ingested_at
                 """,
                 (r["date"], r["symbol"], r["close"], r["currency"], r["source"], now),
             )
@@ -931,7 +1015,12 @@ def run_foreign_backfill(
     only_codes: set[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch yfinance prices for each foreign symbol in portfolio.json,
-    using the same per-symbol fetch-window logic as the TW backfill."""
+    using the same per-symbol fetch-window logic as the TW backfill.
+
+    Phase 14.3a: routes through ``price_service.fetch_and_store_range``
+    instead of ``get_prices`` + ``_persist_symbol_prices``. DLQ writes
+    happen inside ``price_service`` (SQLModel-shape).
+    """
     portfolio_path = Path(portfolio_path)
     portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
     today = today or _today_iso()
@@ -965,16 +1054,10 @@ def run_foreign_backfill(
             break
         start, end = window
         log.info("foreign backfill: %s [%s..%s]", code, start, end)
-        rows = fetch_with_dlq(
-            store, "foreign_prices", code,
-            lambda c=code, ccy=currency, s=start, e=end, t=today: get_prices(
-                c, ccy, s, e, store=store, today=t,
-            ),
-        )
-        if rows is None:
-            continue
-        rows_written += _persist_symbol_prices(store, code, rows)
-        fetched.append(code)
+        n = _fetch_range_via_price_service(store, code, currency, start, end)
+        if n > 0:
+            rows_written += n
+            fetched.append(code)
         processed += 1
 
     return {
@@ -1079,15 +1162,25 @@ def _record_dlq_failure(
 ) -> None:
     """Mirror of fetch_with_dlq's exception branch — writes / bumps a row
     in failed_tasks. Used by the deferred-retry pass when a task fails a
-    second time."""
+    second time.
+
+    Phase 14.3a: writes SQLModel-shape columns
+    (``payload`` JSON with ``{"target": target}``, ``error``,
+    ``first_failed_at``, ``last_failed_at``). The legacy
+    ``target``/``error_message``/``first_seen_at``/``last_attempt_at``
+    columns no longer exist after the SQLModel-canonical schema lands.
+    """
     message = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
     now = _now_utc_iso()
+    payload_json = json.dumps({"target": target})
     log.warning("retry pass: %s/%s failed again: %s", task_type, target, message)
     with store.connect_rw() as conn:
         existing = conn.execute(
             """
             SELECT id, attempts FROM failed_tasks
-            WHERE task_type = ? AND target = ? AND resolved_at IS NULL
+            WHERE task_type = ?
+              AND json_extract(payload, '$.target') = ?
+              AND resolved_at IS NULL
             """,
             (task_type, target),
         ).fetchone()
@@ -1095,7 +1188,7 @@ def _record_dlq_failure(
             conn.execute(
                 """
                 UPDATE failed_tasks
-                SET attempts = ?, last_attempt_at = ?, error_message = ?
+                SET attempts = ?, last_failed_at = ?, error = ?
                 WHERE id = ?
                 """,
                 (existing["attempts"] + 1, now, message, existing["id"]),
@@ -1104,11 +1197,11 @@ def _record_dlq_failure(
             conn.execute(
                 """
                 INSERT INTO failed_tasks(
-                    task_type, target, error_message,
-                    attempts, first_seen_at, last_attempt_at
+                    task_type, payload, error,
+                    attempts, first_failed_at, last_failed_at
                 ) VALUES (?, ?, ?, 1, ?, ?)
                 """,
-                (task_type, target, message, now, now),
+                (task_type, payload_json, message, now, now),
             )
 
 
@@ -1119,6 +1212,16 @@ def _build_tw_tasks(
     today: str,
     latest_month: str,
 ) -> tuple[list[FetchTask], list[str], dict[str, str]]:
+    """Build TW fetch tasks routed through ``price_service.fetch_and_store_range``.
+
+    Phase 14.3a: per-task ``fetch_fn`` opens a SQLModel session against
+    the store, calls price_service, and returns its persisted-row count
+    wrapped in a synthetic single-element list so the round-robin
+    orchestrator's persist_fn (count-the-rows) treats it correctly.
+    DLQ writes happen inside price_service — the orchestrator's
+    deferred-retry pass will re-call the fetch_fn, which is idempotent
+    (open DLQ row gets bumped, success resolves).
+    """
     tasks: list[FetchTask] = []
     skipped: list[str] = []
     skip_reasons: dict[str, str] = {}
@@ -1138,14 +1241,23 @@ def _build_tw_tasks(
             )
             continue
         start, end = window
+
+        def _make_fetch(c: str, s: str, e: str):
+            def _fetch() -> list[dict]:
+                n = _fetch_range_via_price_service(store, c, "TWD", s, e)
+                # Encode the count as a list of N empty placeholders so
+                # the orchestrator's `persist_fn(rows or []) -> len(rows)`
+                # convention surfaces the right `tw_price_rows` total.
+                return [{}] * n
+            return _fetch
+
         tasks.append(FetchTask(
             upstream="tw",
             target=code,
             descriptor=f"{code} [{start}..{end}]",
             dlq_task_type="tw_prices",
-            fetch_fn=(lambda c=code, s=start, e=end:
-                      get_prices(c, "TWD", s, e, store=store, today=today)),
-            persist_fn=(lambda rows, c=code: _persist_symbol_prices(store, c, rows)),
+            fetch_fn=_make_fetch(code, start, end),
+            persist_fn=(lambda rows: len(rows)),
         ))
     return tasks, skipped, skip_reasons
 
@@ -1174,6 +1286,12 @@ def _build_foreign_tasks(
     today: str,
     latest_month: str,
 ) -> tuple[list[FetchTask], list[str], dict[str, str]]:
+    """Build foreign fetch tasks routed through ``price_service.fetch_and_store_range``.
+
+    Phase 14.3a: same pattern as ``_build_tw_tasks`` — fetch_fn opens a
+    SQLModel session, calls price_service, and surfaces an N-placeholder
+    list to the orchestrator so the row counts plumb through.
+    """
     tasks: list[FetchTask] = []
     skipped: list[str] = []
     skip_reasons: dict[str, str] = {}
@@ -1194,14 +1312,20 @@ def _build_foreign_tasks(
             )
             continue
         start, end = window
+
+        def _make_fetch(c: str, ccy: str, s: str, e: str):
+            def _fetch() -> list[dict]:
+                n = _fetch_range_via_price_service(store, c, ccy, s, e)
+                return [{}] * n
+            return _fetch
+
         tasks.append(FetchTask(
             upstream="foreign",
             target=code,
             descriptor=f"{code} ({currency}) [{start}..{end}]",
             dlq_task_type="foreign_prices",
-            fetch_fn=(lambda c=code, ccy=currency, s=start, e=end:
-                      get_prices(c, ccy, s, e, store=store, today=today)),
-            persist_fn=(lambda rows, c=code: _persist_symbol_prices(store, c, rows)),
+            fetch_fn=_make_fetch(code, currency, start, end),
+            persist_fn=(lambda rows: len(rows)),
         ))
     return tasks, skipped, skip_reasons
 
@@ -1501,13 +1625,14 @@ def run_tw_backfill(
             continue
         start, end = window
         log.info("backfill: %s [%s..%s]", code, start, end)
-        rows = fetch_with_dlq(
-            store, "tw_prices", code,
-            lambda c=code, s=start, e=end, t=today: get_prices(
-                c, "TWD", s, e, store=store, today=t,
-            ),
-        )
-        if rows is None:
+        # Phase 14.3a: route through price_service. The "fetch failed"
+        # signal is captured by counting open DLQ rows after the call;
+        # price_service writes its own DLQ row on Outcome A, so we
+        # detect failures by checking count_open() before/after.
+        before = _count_open_dlq_for(store, "fetch_price", code)
+        n = _fetch_range_via_price_service(store, code, "TWD", start, end)
+        after = _count_open_dlq_for(store, "fetch_price", code)
+        if after > before:
             failures += 1
             if failures >= max_failures_per_market:
                 tripped = True
@@ -1517,7 +1642,7 @@ def run_tw_backfill(
                     failures,
                 )
             continue
-        rows_written += _persist_symbol_prices(store, code, rows)
+        rows_written += n
         fetched.append(code)
         processed += 1
 
@@ -1547,6 +1672,31 @@ def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _count_open_dlq_for(
+    store: DailyStore, task_type: str, symbol: str
+) -> int:
+    """Count open DLQ rows for ``(task_type, symbol)`` against the
+    SQLModel-shape ``failed_tasks`` table.
+
+    price_service writes ``payload['symbol']`` (not ``payload['target']``);
+    fetch_with_dlq writes ``payload['target']``. We accept either so a
+    single helper covers both producers.
+    """
+    with store.connect_ro() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM failed_tasks
+            WHERE task_type = ? AND resolved_at IS NULL
+              AND (
+                  json_extract(payload, '$.symbol') = ?
+                  OR json_extract(payload, '$.target') = ?
+              )
+            """,
+            (task_type, symbol, symbol),
+        ).fetchone()
+    return int(row[0] or 0)
+
+
 def fetch_with_dlq(
     store: DailyStore,
     task_type: str,
@@ -1570,6 +1720,7 @@ def fetch_with_dlq(
     except Exception as exc:  # noqa: BLE001 — boundary by design
         message = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
         now = _now_utc_iso()
+        payload_json = json.dumps({"target": target})
         log.warning(
             "fetch_with_dlq: %s/%s failed: %s", task_type, target, message
         )
@@ -1577,7 +1728,9 @@ def fetch_with_dlq(
             existing = conn.execute(
                 """
                 SELECT id, attempts FROM failed_tasks
-                WHERE task_type = ? AND target = ? AND resolved_at IS NULL
+                WHERE task_type = ?
+                  AND json_extract(payload, '$.target') = ?
+                  AND resolved_at IS NULL
                 """,
                 (task_type, target),
             ).fetchone()
@@ -1585,7 +1738,7 @@ def fetch_with_dlq(
                 conn.execute(
                     """
                     UPDATE failed_tasks
-                    SET attempts = ?, last_attempt_at = ?, error_message = ?
+                    SET attempts = ?, last_failed_at = ?, error = ?
                     WHERE id = ?
                     """,
                     (existing["attempts"] + 1, now, message, existing["id"]),
@@ -1594,11 +1747,11 @@ def fetch_with_dlq(
                 conn.execute(
                     """
                     INSERT INTO failed_tasks(
-                        task_type, target, error_message,
-                        attempts, first_seen_at, last_attempt_at
+                        task_type, payload, error,
+                        attempts, first_failed_at, last_failed_at
                     ) VALUES (?, ?, ?, 1, ?, ?)
                     """,
-                    (task_type, target, message, now, now),
+                    (task_type, payload_json, message, now, now),
                 )
         return None
 

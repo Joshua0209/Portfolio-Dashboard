@@ -38,11 +38,13 @@ def _now() -> str:
 
 def _seed_prices(store: DailyStore, symbol: str, dates: list[str], close: float = 100.0,
                   currency: str = "TWD", source: str = "yfinance") -> None:
+    """Phase 14.3a: SQLModel-shape ``prices`` (id PK + ingested_at)."""
     now = _now()
     with store.connect_rw() as conn:
         for d in dates:
             conn.execute(
-                "INSERT INTO prices VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO prices(date, symbol, close, currency, source, ingested_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (d, symbol, close, currency, source, now),
             )
 

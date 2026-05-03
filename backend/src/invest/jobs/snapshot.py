@@ -155,27 +155,6 @@ def compute_increment_window(store: DailyStore) -> tuple[str, str] | None:
     return (_next_day(last_known), today)
 
 
-def _persist_prices(store: DailyStore, rows: list[dict]) -> int:
-    if not rows:
-        return 0
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with store.connect_rw() as conn:
-        for r in rows:
-            conn.execute(
-                """
-                INSERT INTO prices(date, symbol, close, currency, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(date, symbol) DO UPDATE SET
-                    close = excluded.close,
-                    currency = excluded.currency,
-                    source = excluded.source,
-                    fetched_at = excluded.fetched_at
-                """,
-                (r["date"], r["symbol"], r["close"], r["currency"], r["source"], now),
-            )
-    return len(rows)
-
-
 def _persist_fx(store: DailyStore, ccy: str, rows: list[dict]) -> int:
     if not rows:
         return 0
@@ -371,19 +350,23 @@ def _fetch_overlay_symbol_prices(
     new_dates: set[str] = set()
     rows_added = 0
     for code in sorted(extra_symbols):
-        rows = backfill_runner.fetch_with_dlq(
-            store,
-            "tw_prices",
-            code,
-            lambda c=code, s=overlay_start, e=overlay_end, t=end: _get_prices(
-                c, "TWD", s, e, store=store, today=t,
-            ),
+        # Phase 14.3a: route through price_service.fetch_and_store_range.
+        # The price_service writes rows internally; we re-query the
+        # ``prices`` table for the new (date) tuples to fold into the
+        # caller's running ``new_dates`` set.
+        n = backfill_runner._fetch_range_via_price_service(
+            store, code, "TWD", overlay_start, overlay_end,
         )
-        if rows is None:
+        if n <= 0:
             continue
-        for r in rows:
-            new_dates.add(r["date"])
-        rows_added += _persist_prices(store, rows)
+        rows_added += n
+        with store.connect_ro() as conn:
+            for r in conn.execute(
+                "SELECT date FROM prices WHERE symbol = ? "
+                "AND date >= ? AND date <= ?",
+                (code, overlay_start, overlay_end),
+            ).fetchall():
+                new_dates.add(r["date"])
     return new_dates, rows_added, sdk_data
 
 
@@ -435,36 +418,38 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     new_dates: set[str] = set()
 
     # 1. TW prices for currently-held codes
+    # Phase 14.3a: routed through price_service.fetch_and_store_range.
+    # Per-symbol DLQ writes happen inside price_service.
     for code in _held_tw_symbols(portfolio):
-        rows = backfill_runner.fetch_with_dlq(
-            store,
-            "tw_prices",
-            code,
-            lambda c=code, s=start, e=end, t=end: _get_prices(
-                c, "TWD", s, e, store=store, today=t,
-            ),
+        n = backfill_runner._fetch_range_via_price_service(
+            store, code, "TWD", start, end,
         )
-        if rows is None:
+        if n <= 0:
             continue
-        for r in rows:
-            new_dates.add(r["date"])
-        new_rows += _persist_prices(store, rows)
+        new_rows += n
+        with store.connect_ro() as conn:
+            for r in conn.execute(
+                "SELECT date FROM prices WHERE symbol = ? "
+                "AND date >= ? AND date <= ?",
+                (code, start, end),
+            ).fetchall():
+                new_dates.add(r["date"])
 
     # 2. Foreign prices
     for code, ccy in _held_foreign_symbols(portfolio):
-        rows = backfill_runner.fetch_with_dlq(
-            store,
-            "foreign_prices",
-            code,
-            lambda c=code, ccy=ccy, s=start, e=end, t=end: _get_prices(
-                c, ccy, s, e, store=store, today=t,
-            ),
+        n = backfill_runner._fetch_range_via_price_service(
+            store, code, ccy, start, end,
         )
-        if rows is None:
+        if n <= 0:
             continue
-        for r in rows:
-            new_dates.add(r["date"])
-        new_rows += _persist_prices(store, rows)
+        new_rows += n
+        with store.connect_ro() as conn:
+            for r in conn.execute(
+                "SELECT date FROM prices WHERE symbol = ? "
+                "AND date >= ? AND date <= ?",
+                (code, start, end),
+            ).fetchall():
+                new_dates.add(r["date"])
 
     # 3. FX (always at least USD, regardless of current foreign holdings)
     needed_ccys: set[str] = {"USD"}

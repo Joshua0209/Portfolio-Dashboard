@@ -252,31 +252,33 @@ def test_round_robin_interleaves_upstreams(
 ):
     """tw → fx → foreign cycle should interleave upstream calls. With one
     task per upstream the visit order is [tw, fx, foreign], not all-tw-
-    then-all-fx-then-all-foreign."""
+    then-all-fx-then-all-foreign.
+
+    Phase 14.3a: TW + foreign go through ``_fetch_range_via_price_service``;
+    FX still uses the legacy ``get_fx_rates`` + fetch_with_dlq path.
+    """
     visit_order: list[str] = []
 
-    def fake_tw(symbol, currency, start, end, store=None, today=None):
-        visit_order.append("tw")
-        return [{"date": "2025-08-20", "close": 600.0,
-                 "symbol": symbol, "currency": currency, "source": "yfinance"}]
+    def fake_fetch_range(store, symbol, currency, start, end):
+        if currency == "TWD":
+            visit_order.append("tw")
+        else:
+            visit_order.append("foreign")
+        # Persist a single fake row so the upstream count reflects "fetched".
+        return backfill_runner._persist_symbol_prices(store, symbol, [{
+            "date": "2025-08-20",
+            "close": 600.0 if currency == "TWD" else 200.0,
+            "symbol": symbol, "currency": currency, "source": "yfinance",
+        }])
 
     def fake_fx(ccy, start, end, store=None, today=None):
         visit_order.append("fx")
         return [{"date": "2025-08-20", "ccy": ccy, "rate": 30.0,
                  "source": "yfinance"}]
 
-    def fake_foreign(symbol, currency, start, end, store=None, today=None):
-        visit_order.append("foreign")
-        return [{"date": "2025-08-20", "close": 200.0,
-                 "symbol": symbol, "currency": currency, "source": "yfinance"}]
-
-    # The router dispatches by currency: TWD → fake_tw, USD → fake_foreign.
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
-        if currency == "TWD":
-            return fake_tw(symbol, currency, start, end, store=store, today=today)
-        return fake_foreign(symbol, currency, start, end, store=store, today=today)
-
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+    )
     monkeypatch.setattr(backfill_runner, "get_fx_rates", fake_fx)
     # Skip benchmark fetches — they'd dominate the order.
     monkeypatch.setattr(
@@ -296,21 +298,33 @@ def test_deferred_retry_recovers_transient_failure(
     store: DailyStore, portfolio_two_upstreams: Path, monkeypatch,
 ):
     """A task that fails on the first pass but succeeds on retry should
-    NOT land in failed_tasks."""
+    NOT land in failed_tasks.
+
+    Phase 14.3a: tests the orchestrator's deferred-retry semantics by
+    stubbing the seam (``_fetch_range_via_price_service``) to raise on
+    the first call and succeed on the second. In production this seam
+    never raises (price_service catches and writes its own DLQ row);
+    the orchestrator's deferred-retry path is therefore largely
+    unreachable for prices, but the test pins the legacy contract for
+    the FX-failure case which still drives the deferred-retry pass.
+    """
     call_count = {"2330": 0}
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_fetch_range(store, symbol, currency, start, end):
         if symbol == "2330":
             call_count["2330"] += 1
             if call_count["2330"] == 1:
                 raise RuntimeError("transient yfinance 503")
-            return [{"date": "2025-08-20", "close": 600.0,
-                     "symbol": symbol, "currency": currency, "source": "yfinance"}]
-        # AAPL succeeds first try
-        return [{"date": "2025-08-20", "close": 200.0,
-                 "symbol": symbol, "currency": currency, "source": "yfinance"}]
+        # Persist a fake row on success.
+        return backfill_runner._persist_symbol_prices(store, symbol, [{
+            "date": "2025-08-20",
+            "close": 600.0 if currency == "TWD" else 200.0,
+            "symbol": symbol, "currency": currency, "source": "yfinance",
+        }])
 
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+    )
     monkeypatch.setattr(
         backfill_runner, "get_fx_rates",
         lambda ccy, s, e, store=None, today=None: [],
@@ -334,14 +348,27 @@ def test_deferred_retry_recovers_transient_failure(
 def test_deferred_retry_writes_dlq_on_second_failure(
     store: DailyStore, portfolio_two_upstreams: Path, monkeypatch,
 ):
-    """Two consecutive failures → DLQ row written."""
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    """Two consecutive failures → DLQ row written.
+
+    Phase 14.3a: same caveat as
+    ``test_deferred_retry_recovers_transient_failure``. The DLQ row
+    surfaces under the legacy ``tw_prices`` task_type because the
+    orchestrator's ``_record_dlq_failure`` path runs (the seam raised);
+    in production the seam writes ``fetch_price`` DLQ rows directly
+    via price_service.
+    """
+    def fake_fetch_range(store, symbol, currency, start, end):
         if symbol == "2330":
             raise RuntimeError("yfinance permanently down")
-        return [{"date": "2025-08-20", "close": 200.0,
-                 "symbol": symbol, "currency": currency, "source": "yfinance"}]
+        return backfill_runner._persist_symbol_prices(store, symbol, [{
+            "date": "2025-08-20",
+            "close": 200.0,
+            "symbol": symbol, "currency": currency, "source": "yfinance",
+        }])
 
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+    )
     monkeypatch.setattr(
         backfill_runner, "get_fx_rates",
         lambda ccy, s, e, store=None, today=None: [],
@@ -402,18 +429,28 @@ def test_circuit_breaker_trips_after_threshold_failures(
     store: DailyStore, portfolio_breaker: Path, monkeypatch,
 ):
     """3 TW failures should trip the breaker and skip remaining TW symbols.
-    The foreign market should be unaffected (separate counter)."""
+    The foreign market should be unaffected (separate counter).
+
+    Phase 14.3a: simulate fetch failures by making
+    ``_fetch_range_via_price_service`` raise — drives the orchestrator's
+    legacy retry/breaker path. In production the seam catches and writes
+    a DLQ row directly without engaging the breaker.
+    """
     tw_call_count = {"n": 0}
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_fetch_range(store, symbol, currency, start, end):
         if currency == "TWD":
             tw_call_count["n"] += 1
             raise RuntimeError("yfinance permanently down")
         # Foreign always succeeds.
-        return [{"date": "2025-08-20", "close": 200.0,
-                 "symbol": symbol, "currency": currency, "source": "yfinance"}]
+        return backfill_runner._persist_symbol_prices(store, symbol, [{
+            "date": "2025-08-20", "close": 200.0,
+            "symbol": symbol, "currency": currency, "source": "yfinance",
+        }])
 
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+    )
     monkeypatch.setattr(
         backfill_runner, "get_fx_rates",
         lambda ccy, s, e, store=None, today=None: [],
@@ -446,14 +483,18 @@ def test_circuit_breaker_disabled_with_high_threshold(
     every TW symbol still gets its two-pass shot."""
     tw_call_count = {"n": 0}
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_fetch_range(store, symbol, currency, start, end):
         if currency == "TWD":
             tw_call_count["n"] += 1
             raise RuntimeError("yfinance flaky")
-        return [{"date": "2025-08-20", "close": 200.0,
-                 "symbol": symbol, "currency": currency, "source": "yfinance"}]
+        return backfill_runner._persist_symbol_prices(store, symbol, [{
+            "date": "2025-08-20", "close": 200.0,
+            "symbol": symbol, "currency": currency, "source": "yfinance",
+        }])
 
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+    )
     monkeypatch.setattr(
         backfill_runner, "get_fx_rates",
         lambda ccy, s, e, store=None, today=None: [],
@@ -477,22 +518,47 @@ def test_circuit_breaker_disabled_with_high_threshold(
 def test_run_tw_backfill_circuit_breaker(
     store: DailyStore, portfolio_breaker: Path, monkeypatch,
 ):
-    """The single-market path also honors the threshold."""
+    """The single-market path also honors the threshold.
+
+    Phase 14.3a: ``run_tw_backfill`` detects failure by counting open DLQ
+    rows for the symbol before/after the seam call. We simulate failure
+    by writing a SQLModel-shape DLQ row (mirroring price_service's
+    Outcome A path) and returning 0.
+    """
+    import json as _json
+
     tw_call_count = {"n": 0}
 
-    def fake_get_prices(symbol, currency, start, end, store=None, today=None):
+    def fake_fetch_range(store, symbol, currency, start, end):
         tw_call_count["n"] += 1
-        raise RuntimeError("yfinance down")
+        # Mimic price_service Outcome A: write SQLModel-shape DLQ row.
+        now = backfill_runner._now_utc_iso()
+        payload = _json.dumps({
+            "symbol": symbol, "currency": currency,
+            "start": start, "end": end,
+        })
+        with store.connect_rw() as conn:
+            conn.execute(
+                """
+                INSERT INTO failed_tasks(
+                    task_type, payload, error,
+                    attempts, first_failed_at, last_failed_at
+                ) VALUES ('fetch_price', ?, 'yfinance down', 1, ?, ?)
+                """,
+                (payload, now, now),
+            )
+        return 0
 
-    monkeypatch.setattr(backfill_runner, "get_prices", fake_get_prices)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
+    )
 
     summary = backfill_runner.run_tw_backfill(
         store, portfolio_breaker, today="2025-08-31",
         max_failures_per_market=3,
     )
 
-    # No retry pass in this path — fetch_with_dlq writes DLQ on each
-    # failure. After 3 failures the loop short-circuits.
+    # After 3 failures the loop short-circuits.
     assert tw_call_count["n"] == 3
     assert summary["tripped_markets"] == ["tw"]
     assert len(summary["circuit_breaker_skipped"]["tw"]) >= 2

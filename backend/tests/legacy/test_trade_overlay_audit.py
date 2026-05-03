@@ -42,7 +42,7 @@ def store(tmp_path: Path) -> DailyStore:
     # Seed a price so positions_daily can be written for the gap.
     with s.connect_rw() as conn:
         conn.execute(
-            "INSERT INTO prices(date, symbol, close, currency, source, fetched_at)"
+            "INSERT INTO prices(date, symbol, close, currency, source, ingested_at)"
             " VALUES ('2026-04-22', '7769', 210.0, 'TWD', 'yfinance', '2026-04-22T00:00:00Z')"
         )
     return s
