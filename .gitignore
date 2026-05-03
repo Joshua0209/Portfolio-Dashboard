@@ -34,3 +34,5 @@ logs/
 # under backend/ depending on where pytest / scripts are invoked.
 shioaji.log
 **/shioaji.log
+
+TODO.md
