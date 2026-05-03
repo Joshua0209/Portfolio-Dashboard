@@ -395,3 +395,101 @@ class TestPairIdNormalization:
         )
         assert result2.events_fired == 0
         assert len(reconcile_repo.find_open()) == 1
+
+
+# --- Phase 14.5 — `run()` orchestrator -----------------------------------
+#
+# The post-PDF caller (jobs.snapshot_workflow.run) holds a DailyStore but
+# no SQLModel session. `run()` is the seam: bootstrap engine + session
+# against the same SQLite file, defensively skip when the trades table
+# is empty (operator hasn't run scripts/backfill_trades.py), then
+# delegate to audit_realized_pairs.
+
+
+class TestRunOrchestrator:
+    def test_empty_pairs_returns_zero_without_db_touch(self, tmp_path):
+        """Empty input is a no-op: no engine bootstrap, no audit call."""
+        from invest.persistence.daily_store import DailyStore
+        from invest.reconciliation import shioaji_audit
+
+        store = DailyStore(tmp_path / "audit_run.db")
+        # NOTE: deliberately not calling init_schema — the empty-pair
+        # short-circuit must run before any DB I/O.
+        result = shioaji_audit.run([], daily_store=store)
+        assert result.pairs_examined == 0
+        assert result.events_fired == 0
+
+    def test_skips_audit_when_trade_table_empty(self, tmp_path, caplog):
+        """Defensive: a fresh dashboard.db (no PDF trades yet) would
+        flag every SDK leg as `missing` — skip silently and log.
+
+        Mirrors the FastAPI startup order: SQLModel.create_all owns the
+        `trades`, `reconcile_events`, `failed_tasks` tables; legacy
+        DailyStore.init_schema only creates the regenerable cache
+        tables (prices, fx_daily, positions_daily, ...). We don't call
+        init_schema here — run() bootstraps the SQLModel shape itself.
+        """
+        import logging
+
+        from invest.persistence.daily_store import DailyStore
+        from invest.reconciliation import shioaji_audit
+
+        store = DailyStore(tmp_path / "audit_empty.db")
+        pairs = [
+            _sdk_leg(pair_id="P1", code="2330", d="2026-01-10", qty=1000),
+            _sdk_sell(pair_id="P1", code="2330", d="2026-03-15", qty=1000),
+        ]
+        with caplog.at_level(logging.INFO, logger=shioaji_audit.__name__):
+            result = shioaji_audit.run(pairs, daily_store=store)
+        assert result.pairs_examined == 0
+        assert result.events_fired == 0
+        assert any(
+            "trades table empty" in r.message for r in caplog.records
+        )
+
+    def test_fires_event_on_real_dailystore_with_populated_trades(
+        self, tmp_path,
+    ):
+        """End-to-end: a populated trades table + a missing leg fires
+        a real ReconcileEvent row.
+
+        Same startup-order assumption as the empty-table test —
+        SQLModel.metadata.create_all owns the `trades` and
+        `reconcile_events` schemas in the FastAPI process, and run()
+        invokes it during bootstrap. Calling DailyStore.init_schema()
+        first would create incompatible legacy DDL for those two
+        tables; that schema fork is tracked separately.
+        """
+        from sqlmodel import Session, SQLModel, create_engine
+
+        from invest.persistence.daily_store import DailyStore
+        from invest.persistence.repositories.reconcile_repo import (
+            ReconcileRepo,
+        )
+        from invest.persistence.repositories.trade_repo import TradeRepo
+        from invest.reconciliation import shioaji_audit
+
+        db = tmp_path / "audit_e2e.db"
+        store = DailyStore(db)
+        engine = create_engine(f"sqlite:///{db}")
+        SQLModel.metadata.create_all(engine)
+
+        # Seed one PDF buy, deliberately leaving the second leg uncovered.
+        with Session(engine) as s:
+            TradeRepo(s).insert(_pdf_buy("2330", date(2026, 1, 10), 1000))
+
+        pairs = [
+            _sdk_leg(pair_id="P1", code="2330", d="2026-01-10", qty=1000),
+            _sdk_leg(pair_id="P1", code="2330", d="2026-02-05", qty=500),
+            _sdk_sell(pair_id="P1", code="2330", d="2026-03-15", qty=1500),
+        ]
+        result = shioaji_audit.run(pairs, daily_store=store)
+        assert result.pairs_examined == 1
+        assert result.events_fired == 1
+
+        with Session(engine) as s:
+            events = ReconcileRepo(s).find_open()
+        assert len(events) == 1
+        assert events[0].event_type == "broker_pdf_buy_leg_mismatch"
+        missing = events[0].detail["missing_legs"]
+        assert missing == [{"date": "2026-02-05", "qty": 500}]

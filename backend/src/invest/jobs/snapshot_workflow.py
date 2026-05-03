@@ -221,6 +221,43 @@ def _run_overlay_safe(
     return overlay_summary
 
 
+def _run_audit_safe(
+    store: DailyStore, sdk_data: tuple | None,
+) -> dict[str, int]:
+    """Phase 14.5 — invoke shioaji_audit AFTER overlay write completes.
+
+    Read-side companion to _run_overlay_safe. The audit hook used to
+    live inline in trade_overlay.merge() (`_fire_audit_events`) and
+    fired against the legacy reconcile_events table; it now runs
+    against the SQLModel ``trades`` table populated by
+    ``invest.jobs.trade_backfill``.
+
+    Defensive contract: never aborts the snapshot, returns
+    {pairs_examined, events_fired} for the summary envelope. When
+    sdk_data is None (no overlay gap or SDK unconfigured) the audit
+    is a no-op.
+    """
+    if sdk_data is None:
+        return {"pairs_examined": 0, "events_fired": 0}
+    _session, _lots, realized_pairs = sdk_data
+    try:
+        from invest.reconciliation import shioaji_audit
+
+        result = shioaji_audit.run(realized_pairs, daily_store=store)
+        if result.events_fired:
+            log.info(
+                "shioaji_audit: fired %d reconcile event(s) over %d pair(s)",
+                result.events_fired, result.pairs_examined,
+            )
+        return {
+            "pairs_examined": result.pairs_examined,
+            "events_fired": result.events_fired,
+        }
+    except Exception:  # noqa: BLE001 — audit must never abort snapshot
+        log.exception("shioaji_audit.run raised; continuing without audit")
+        return {"pairs_examined": 0, "events_fired": 0}
+
+
 def _fetch_overlay_symbol_prices(
     store: DailyStore,
     portfolio: dict,
@@ -326,11 +363,13 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
         overlay_summary = _run_overlay_safe(
             store, portfolio, today, sdk_data=sdk_data
         )
+        audit_summary = _run_audit_safe(store, sdk_data)
         backfill_runner._derive_positions_and_portfolio(store, portfolio)
         summary = {
             "new_dates": len(overlay_dates),
             "new_rows": overlay_rows,
             "overlay": overlay_summary,
+            "audit": audit_summary,
             "skipped_reason": "already_current",
             "window": None,
         }
@@ -415,6 +454,11 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
     # the day's overlay rows.
     overlay_summary = _run_overlay_safe(store, portfolio, end, sdk_data=sdk_data)
 
+    # 5b. Phase 14.5 — broker-vs-PDF buy-leg audit. Read-only against
+    # the SQLModel `trades` table; emits reconcile events on (date, qty)
+    # mismatches. Defensive: skipped silently if `trades` is empty.
+    audit_summary = _run_audit_safe(store, sdk_data)
+
     # 6. Derive positions_daily / portfolio_daily — authoritative writer
     # of portfolio_daily. Walks PDF holdings, then sums any overlay rows
     # the merge step just wrote.
@@ -426,6 +470,7 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
         "new_dates": len(new_dates),
         "new_rows": new_rows,
         "overlay": overlay_summary,
+        "audit": audit_summary,
         "skipped_reason": None,
         "window": [start, end],
     }
