@@ -27,6 +27,23 @@ class PriceClient(Protocol):
 _SUFFIX_BY_VERDICT = {"twse": ".TW", "tpex": ".TWO"}
 
 
+def is_tw_warrant(symbol: str) -> bool:
+    """True if `symbol` looks like a Taiwan warrant (權證) code.
+
+    Taiwan warrant numbering (per TWSE / TPEX):
+      - 6-digit code, all numeric
+      - Calls:  first digit '0', second digit '3'-'9'  (e.g. 042900, 081234)
+      - Puts:   first digit '7'                        (e.g. 712345)
+
+    ETFs (00xxxx, e.g. 0050, 00631L, 00981A) and stocks (4-digit) do not
+    match. The check is intentionally strict — we only want the well-known
+    warrant codespace, not anything that happens to be 6 digits.
+    """
+    if len(symbol) != 6 or not symbol.isdigit():
+        return False
+    return (symbol[0] == "0" and symbol[1] in "3456789") or symbol[0] == "7"
+
+
 def fetch_tw_with_probe(
     bare_symbol: str,
     start: str,
@@ -65,6 +82,13 @@ def fetch_tw_with_probe(
         market_repo.upsert(SymbolMarket(symbol=bare_symbol, market="tpex"))
         return tpex_rows
 
-    # Both empty: persist negative cache so future calls short-circuit.
+    # Both empty. For warrants (權證), skip the negative cache: a
+    # zero-trade window is the steady state, not a signal that the
+    # symbol is unknown. Future runs re-probe so that listings which
+    # start trading get picked up.
+    if is_tw_warrant(bare_symbol):
+        return []
+
+    # Genuine miss: persist negative cache so future calls short-circuit.
     market_repo.upsert(SymbolMarket(symbol=bare_symbol, market="unknown"))
     return []

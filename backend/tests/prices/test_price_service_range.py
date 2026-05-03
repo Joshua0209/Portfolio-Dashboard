@@ -235,3 +235,52 @@ def test_successful_fetch_resolves_open_dlq_row(price_repo, dlq):
     )
     assert n == 2
     assert dlq.count_open() == 0
+def test_warrant_empty_range_skips_dlq(price_repo, dlq, market_repo):
+    """Taiwan warrant codes (e.g. 042900) may legitimately have no
+    trades in a window — empty results are the steady state, not a
+    failure. The DLQ must stay empty so the operator isn't paged for
+    something that's working as designed."""
+    client = StubClient()  # both .TW and .TWO probes empty
+    n = price_service.fetch_and_store_range(
+        "042900",
+        "TWD",
+        date(2026, 4, 28),
+        date(2026, 4, 30),
+        price_repo=price_repo,
+        dlq=dlq,
+        client=client,
+        market_repo=market_repo,
+    )
+    assert n == 0
+    assert dlq.find_open() == []
+    assert market_repo.find("042900") is None
+def test_warrant_empty_resolves_existing_dlq(price_repo, dlq, market_repo):
+    """A DLQ row written before warrant detection existed should be
+    auto-resolved on the next backfill — otherwise the operator sees a
+    stale 'failed' indicator forever for an expected-empty symbol."""
+    dlq.insert(
+        FailedTask(
+            task_type="fetch_price",
+            payload={
+                "symbol": "042900",
+                "currency": "TWD",
+                "start": "2026-03-03",
+                "end": "2026-05-03",
+            },
+            error="no rows for 042900 in [2026-03-03..2026-05-03]; "
+                  "symbol may be delisted or unknown to yfinance",
+        )
+    )
+    client = StubClient()  # both probes empty
+    n = price_service.fetch_and_store_range(
+        "042900",
+        "TWD",
+        date(2026, 4, 28),
+        date(2026, 4, 30),
+        price_repo=price_repo,
+        dlq=dlq,
+        client=client,
+        market_repo=market_repo,
+    )
+    assert n == 0
+    assert dlq.count_open() == 0

@@ -26,7 +26,7 @@ from invest.persistence.repositories.price_repo import PriceRepo
 from invest.persistence.repositories.symbol_market_repo import (
     SymbolMarketRepo,
 )
-from invest.prices.tw_probe import fetch_tw_with_probe
+from invest.prices.tw_probe import fetch_tw_with_probe, is_tw_warrant
 
 
 _TASK_TYPE = "fetch_price"
@@ -115,6 +115,14 @@ def fetch_and_store(
         if _has_prior_history(price_repo, symbol):
             # Outcome B: silent miss. We've priced this symbol before,
             # so an empty result is almost always a holiday.
+            return None
+        if currency == "TWD" and is_tw_warrant(symbol):
+            # Outcome B': Taiwan warrant (權證) with no trades is the
+            # steady state, not a failure. Clear any DLQ row left over
+            # from before warrants were recognized as expected-empty.
+            existing = _open_task_for(dlq, symbol)
+            if existing is not None:
+                dlq.mark_resolved(existing.id)
             return None
         # Outcome C: log once.
         if _open_task_for(dlq, symbol) is None:
@@ -226,6 +234,14 @@ def fetch_and_store_range(
     if not rows:
         if _has_prior_history(price_repo, symbol):
             # Outcome B: silent miss.
+            return 0
+        if currency == "TWD" and is_tw_warrant(symbol):
+            # Outcome B': Taiwan warrant (權證) with no trades is the
+            # steady state, not a failure. Clear any DLQ row left over
+            # from before warrants were recognized as expected-empty.
+            existing = _open_task_for(dlq, symbol)
+            if existing is not None:
+                dlq.mark_resolved(existing.id)
             return 0
         # Outcome C: log once.
         if _open_task_for(dlq, symbol) is None:
