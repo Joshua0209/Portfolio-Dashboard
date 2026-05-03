@@ -10,7 +10,7 @@ Runs four checks against `data/dashboard.db` (populated by
       market verdict (twse-listed or tpex-listed). Foreign symbols are
       exempted: yfinance fetches them with their bare ticker, no router
       decision to make.
-  (c) fx_daily gaps — for every currency held, fx_daily covers every
+  (c) fx_rates gaps — for every currency held, fx_rates covers every
       held-position trading day with no gaps (forward-fill is acceptable
       *during derivation*, but the source rows must be dense)
   (d) most-recent month-end equity reconciliation — the derived
@@ -124,19 +124,23 @@ def check_symbol_market_coverage(
     return issues
 
 
-# --- Check (c): fx_daily gaps ---------------------------------------------
+# --- Check (c): fx_rates gaps ---------------------------------------------
 
 
 def check_fx_gaps(
     store: DailyStore, ccy: str, expected_dates: list[str]
 ) -> list[dict]:
     """`expected_dates`: weekday dates within the held-position window for
-    which `fx_daily` rows must exist.
+    which `fx_rates` rows must exist.
+
+    Phase 14.3b: schema is SQLModel-canonical (``fx_rates`` keyed on
+    base/quote/rate); this app always queries with quote='TWD'.
     """
     with store.connect_ro() as conn:
         present = {
             r[0] for r in conn.execute(
-                "SELECT date FROM fx_daily WHERE ccy = ?", (ccy,)
+                "SELECT date FROM fx_rates WHERE base = ? AND quote = 'TWD'",
+                (ccy,),
             ).fetchall()
         }
     missing = sorted(set(expected_dates) - present)

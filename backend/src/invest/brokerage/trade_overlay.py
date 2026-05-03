@@ -183,7 +183,7 @@ def _close_for(store: DailyStore, code: str, d: str) -> float | None:
 
 
 def _fx_for_date(store: DailyStore, ccy: str, d: str) -> float | None:
-    """Latest fx_daily.rate_to_twd for `ccy` on or before `d` (forward-fill).
+    """Latest fx_rates.rate for ``ccy``->TWD on or before ``d`` (forward-fill).
 
     Returns None when no FX row exists at all. The overlay's foreign
     leg is currently a no-op (the H-account is walled off behind HTTP
@@ -195,11 +195,12 @@ def _fx_for_date(store: DailyStore, ccy: str, d: str) -> float | None:
         return 1.0
     with store.connect_ro() as conn:
         row = conn.execute(
-            "SELECT rate_to_twd FROM fx_daily WHERE ccy = ? AND date <= ? "
+            "SELECT rate FROM fx_rates "
+            "WHERE base = ? AND quote = 'TWD' AND date <= ? "
             "ORDER BY date DESC LIMIT 1",
             (ccy, d),
         ).fetchone()
-    return row[0] if row else None
+    return float(row[0]) if row else None
 
 
 def _persist_overlay_trades(

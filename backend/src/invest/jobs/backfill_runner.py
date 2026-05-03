@@ -4,9 +4,9 @@ Walks the trade ledger and holdings tables in data/portfolio.json,
 computes a per-symbol fetch window per spec §6.1
 (BACKFILL_FLOOR=2025-08-01, [max(first_trade, FLOOR), max(last_trade,
 last_held_date)]), and pulls TW + foreign prices via
-app.price_sources.get_prices, FX rates via get_fx_rates, and benchmark
-prices via get_yfinance_prices. UPSERTs into the prices / fx_daily /
-positions_daily / portfolio_daily tables.
+``invest.prices.price_service``, FX rates via ``invest.prices.fx_provider``
+(Phase 14.3b), and benchmark prices via get_yfinance_prices. UPSERTs into
+the prices / fx_rates / positions_daily / portfolio_daily tables.
 
 Entry points:
   run_full_backfill() — orchestrates all four upstreams (recommended)
@@ -30,7 +30,7 @@ from typing import Any, Callable, Iterable, Iterator
 
 from invest.core import state as backfill_state
 from invest.persistence.daily_store import BACKFILL_FLOOR_DEFAULT, DailyStore
-from invest.prices.sources import get_fx_rates, get_prices, get_yfinance_prices
+from invest.prices.sources import get_yfinance_prices
 
 
 # --- Phase 14.3a: SQLModel-session helper for price_service routing -------
@@ -493,7 +493,7 @@ def _derive_positions_and_portfolio(
 ) -> dict[str, int]:
     """Walk every priced trading day, compute end-of-day qty per symbol
     from the trade ledger, multiply by close → mv_local, convert foreign
-    via fx_daily (forward-fill on weekend gaps), and aggregate to
+    via fx_rates (forward-fill on weekend gaps), and aggregate to
     portfolio_daily.equity_twd.
     """
     tw_codes = [e["code"] for e in iter_tw_symbols_with_metadata(portfolio)]
@@ -579,10 +579,14 @@ def _derive_positions_and_portfolio(
             ).fetchall()
         }
         fx_by_ccy: dict[str, list[tuple[str, float]]] = {}
+        # Phase 14.3b: read SQLModel-canonical `fx_rates` (base/quote/rate)
+        # but alias columns so the in-Python aggregator below keeps using
+        # ``ccy`` / ``rate_to_twd``.
         for r in conn.execute(
-            "SELECT ccy, date, rate_to_twd FROM fx_daily ORDER BY ccy, date"
+            "SELECT base AS ccy, date, rate AS rate_to_twd FROM fx_rates "
+            "WHERE quote = 'TWD' ORDER BY base, date"
         ).fetchall():
-            fx_by_ccy.setdefault(r[0], []).append((r[1], r[2]))
+            fx_by_ccy.setdefault(r[0], []).append((r[1], float(r[2])))
 
     if not priced_dates:
         return {"positions_rows": 0, "portfolio_rows": 0}
@@ -952,25 +956,48 @@ def _persist_symbol_prices(
     return len(rows)
 
 
-def _persist_fx_rows(store: DailyStore, ccy: str, rows: list[dict]) -> int:
-    """UPSERT fx_daily rows for one currency. Idempotent on (date, ccy) PK."""
-    if not rows:
-        return 0
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with store.connect_rw() as conn:
-        for r in rows:
-            conn.execute(
-                """
-                INSERT INTO fx_daily(date, ccy, rate_to_twd, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(date, ccy) DO UPDATE SET
-                    rate_to_twd = excluded.rate_to_twd,
-                    source = excluded.source,
-                    fetched_at = excluded.fetched_at
-                """,
-                (r["date"], r["ccy"], r["rate"], r["source"], now),
-            )
-    return len(rows)
+class _YFinanceFxClient:
+    """Module-function wrapper exposing the FxClient Protocol shape.
+
+    Symmetric to :class:`_YFinancePriceClient` (Phase 14.3a) — wraps
+    ``invest.prices.yfinance_client.fetch_fx`` so ``fx_provider`` can
+    be wired via constructor injection.
+    """
+
+    def fetch_fx(self, ccy: str, start: str, end: str) -> list[dict]:
+        from invest.prices import yfinance_client as _yfc
+
+        return _yfc.fetch_fx(ccy, start, end)
+
+
+def _fetch_range_via_fx_provider(
+    store: DailyStore,
+    ccy: str,
+    start: str,
+    end: str,
+) -> int:
+    """Adapt fx_provider.fetch_and_store_range to the store-backed
+    backfill loops.
+
+    Returns the count of FX rows persisted (0 on miss/failure or TWD
+    identity short-circuit). DLQ rows are written by fx_provider
+    inside the same session.
+    """
+    from invest.persistence.repositories.failed_task_repo import FailedTaskRepo
+    from invest.persistence.repositories.fx_repo import FxRepo
+    from invest.prices import fx_provider
+
+    start_d = date.fromisoformat(start)
+    end_d = date.fromisoformat(end)
+    with _with_session(store) as session:
+        return fx_provider.fetch_and_store_range(
+            ccy,
+            start_d,
+            end_d,
+            fx_repo=FxRepo(session),
+            dlq=FailedTaskRepo(session),
+            client=_YFinanceFxClient(),
+        )
 
 
 def run_fx_backfill(
@@ -979,9 +1006,13 @@ def run_fx_backfill(
     floor: str = BACKFILL_FLOOR_DEFAULT,
     today: str | None = None,
 ) -> dict[str, Any]:
-    """Populate fx_daily for every foreign currency in scope across
+    """Populate fx_rates for every foreign currency in scope across
     [floor, today]. Per spec §6.1, FX is dense across the whole equity-curve
     window, not per-symbol — the curve always needs a TWD reference.
+
+    Phase 14.3b: routes through ``fx_provider.fetch_and_store_range``
+    instead of ``get_fx_rates`` + ``_persist_fx_rows``. DLQ writes
+    happen inside ``fx_provider`` (SQLModel-shape).
     """
     portfolio_path = Path(portfolio_path)
     portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
@@ -991,15 +1022,7 @@ def run_fx_backfill(
     by_ccy: dict[str, int] = {}
     for ccy in sorted(_foreign_currencies_in_scope(portfolio)):
         log.info("fx backfill: %s [%s..%s]", ccy, floor, today)
-        rows = fetch_with_dlq(
-            store, "fx_rates", ccy,
-            lambda c=ccy, s=floor, e=today, t=today: get_fx_rates(
-                c, s, e, store=store, today=t,
-            ),
-        )
-        if rows is None:
-            continue
-        n = _persist_fx_rows(store, ccy, rows)
+        n = _fetch_range_via_fx_provider(store, ccy, floor, today)
         by_ccy[ccy] = n
         rows_written += n
 
@@ -1265,16 +1288,31 @@ def _build_tw_tasks(
 def _build_fx_tasks(
     store: DailyStore, portfolio: dict, floor: str, today: str,
 ) -> list[FetchTask]:
+    """Build FX fetch tasks routed through ``fx_provider.fetch_and_store_range``.
+
+    Phase 14.3b: same pattern as ``_build_tw_tasks`` (Phase 14.3a) — fetch_fn
+    opens a SQLModel session, calls fx_provider, and surfaces an N-placeholder
+    list to the orchestrator so the row counts plumb through. The
+    orchestrator's deferred-retry / circuit-breaker semantics for FX become
+    unreachable: fx_provider catches its own exceptions and writes a DLQ row
+    directly. Same trade-off the price-fetch tasks made in 14.3a.
+    """
     tasks: list[FetchTask] = []
     for ccy in sorted(_foreign_currencies_in_scope(portfolio)):
+
+        def _make_fetch(c: str, s: str, e: str):
+            def _fetch() -> list[dict]:
+                n = _fetch_range_via_fx_provider(store, c, s, e)
+                return [{}] * n
+            return _fetch
+
         tasks.append(FetchTask(
             upstream="fx",
             target=ccy,
             descriptor=f"{ccy} [{floor}..{today}]",
             dlq_task_type="fx_rates",
-            fetch_fn=(lambda c=ccy, s=floor, e=today:
-                      get_fx_rates(c, s, e, store=store, today=today)),
-            persist_fn=(lambda rows, c=ccy: _persist_fx_rows(store, c, rows)),
+            fetch_fn=_make_fetch(ccy, floor, today),
+            persist_fn=(lambda rows: len(rows)),
         ))
     return tasks
 

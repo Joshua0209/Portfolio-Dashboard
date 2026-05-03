@@ -32,7 +32,7 @@ BUSY_TIMEOUT_MS = 5000
 EXPECTED_TABLES: frozenset[str] = frozenset(
     {
         "prices",
-        "fx_daily",
+        "fx_rates",
         "symbol_market",
         "positions_daily",
         "portfolio_daily",
@@ -47,18 +47,11 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
 _SCHEMA_DDL = """
 -- Phase 14.3a: `prices` and `failed_tasks` are owned by SQLModel
 -- (invest.persistence.models.{price,failed_task}). DDL is created via
--- SQLModel.metadata.create_all in init_schema(). The legacy CREATE TABLE
--- blocks for those two tables were dropped in this phase — when the user
--- regens dashboard.db, the SQLModel-canonical schema lands instead.
-
-CREATE TABLE IF NOT EXISTS fx_daily (
-    date         TEXT NOT NULL,
-    ccy          TEXT NOT NULL,
-    rate_to_twd  REAL NOT NULL,
-    source       TEXT NOT NULL,
-    fetched_at   TEXT NOT NULL,
-    PRIMARY KEY (date, ccy)
-);
+-- SQLModel.metadata.create_all in init_schema().
+-- Phase 14.3b: `fx_rates` is owned by SQLModel
+-- (invest.persistence.models.fx_rate). The legacy `fx_daily` block was
+-- dropped — when the user regens dashboard.db, the SQLModel-canonical
+-- schema lands instead.
 
 CREATE TABLE IF NOT EXISTS symbol_market (
     symbol            TEXT PRIMARY KEY,
@@ -243,14 +236,16 @@ class DailyStore:
             finally:
                 conn.close()
 
-            # SQLModel-canonical tables for prices + failed_tasks (Phase 14.3a).
-            # Local imports avoid a circular dependency: the SQLModel models
-            # don't import from daily_store, but importing them at module
-            # top would tighten an already-fragile import order.
+            # SQLModel-canonical tables for prices + failed_tasks (Phase 14.3a)
+            # and fx_rates (Phase 14.3b). Local imports avoid a circular
+            # dependency: the SQLModel models don't import from daily_store,
+            # but importing them at module top would tighten an already-fragile
+            # import order.
             from sqlalchemy import create_engine
             from sqlmodel import SQLModel
 
             from invest.persistence.models.failed_task import FailedTask
+            from invest.persistence.models.fx_rate import FxRate
             from invest.persistence.models.price import Price
 
             engine = create_engine(
@@ -258,7 +253,12 @@ class DailyStore:
                 connect_args={"timeout": BUSY_TIMEOUT_MS / 1000},
             )
             SQLModel.metadata.create_all(
-                engine, tables=[Price.__table__, FailedTask.__table__]
+                engine,
+                tables=[
+                    Price.__table__,
+                    FailedTask.__table__,
+                    FxRate.__table__,
+                ],
             )
             engine.dispose()
         self._initialized = True
@@ -547,8 +547,18 @@ class DailyStore:
     def get_fx_series(
         self, ccy: str = "USD", start: str | None = None, end: str | None = None
     ) -> list[dict[str, Any]]:
-        """Daily FX-to-TWD rate for one currency from fx_daily."""
-        sql = "SELECT date, rate_to_twd FROM fx_daily WHERE ccy = ?"
+        """Daily FX-to-TWD rate for one currency from fx_rates.
+
+        Phase 14.3b: schema is now SQLModel-canonical (``fx_rates`` with
+        ``base``/``quote``/``rate``). The returned dict still uses
+        ``rate_to_twd`` as the alias key so the existing /api/fx router
+        and analytics/monthly.py reader stay byte-identical without
+        churn.
+        """
+        sql = (
+            "SELECT date, rate AS rate_to_twd FROM fx_rates "
+            "WHERE base = ? AND quote = 'TWD'"
+        )
         params: list[Any] = [ccy]
         if start:
             sql += " AND date >= ?"

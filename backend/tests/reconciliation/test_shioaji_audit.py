@@ -426,7 +426,7 @@ class TestRunOrchestrator:
         Mirrors the FastAPI startup order: SQLModel.create_all owns the
         `trades`, `reconcile_events`, `failed_tasks` tables; legacy
         DailyStore.init_schema only creates the regenerable cache
-        tables (prices, fx_daily, positions_daily, ...). We don't call
+        tables (positions_daily, portfolio_daily, ...). We don't call
         init_schema here — run() bootstraps the SQLModel shape itself.
         """
         import logging

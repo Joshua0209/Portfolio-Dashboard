@@ -271,15 +271,16 @@ def test_round_robin_interleaves_upstreams(
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
-    def fake_fx(ccy, start, end, store=None, today=None):
+    def fake_fx_range(store, ccy, start, end):
         visit_order.append("fx")
-        return [{"date": "2025-08-20", "ccy": ccy, "rate": 30.0,
-                 "source": "yfinance"}]
+        return 1
 
     monkeypatch.setattr(
         backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
     )
-    monkeypatch.setattr(backfill_runner, "get_fx_rates", fake_fx)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_fx_provider", fake_fx_range,
+    )
     # Skip benchmark fetches — they'd dominate the order.
     monkeypatch.setattr(
         backfill_runner, "get_yfinance_prices",
@@ -326,8 +327,8 @@ def test_deferred_retry_recovers_transient_failure(
         backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_fx_rates",
-        lambda ccy, s, e, store=None, today=None: [],
+        backfill_runner, "_fetch_range_via_fx_provider",
+        lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
         backfill_runner, "get_yfinance_prices",
@@ -370,8 +371,8 @@ def test_deferred_retry_writes_dlq_on_second_failure(
         backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_fx_rates",
-        lambda ccy, s, e, store=None, today=None: [],
+        backfill_runner, "_fetch_range_via_fx_provider",
+        lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
         backfill_runner, "get_yfinance_prices",
@@ -452,8 +453,8 @@ def test_circuit_breaker_trips_after_threshold_failures(
         backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_fx_rates",
-        lambda ccy, s, e, store=None, today=None: [],
+        backfill_runner, "_fetch_range_via_fx_provider",
+        lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
         backfill_runner, "get_yfinance_prices",
@@ -496,8 +497,8 @@ def test_circuit_breaker_disabled_with_high_threshold(
         backfill_runner, "_fetch_range_via_price_service", fake_fetch_range,
     )
     monkeypatch.setattr(
-        backfill_runner, "get_fx_rates",
-        lambda ccy, s, e, store=None, today=None: [],
+        backfill_runner, "_fetch_range_via_fx_provider",
+        lambda store, ccy, s, e: 0,
     )
     monkeypatch.setattr(
         backfill_runner, "get_yfinance_prices",

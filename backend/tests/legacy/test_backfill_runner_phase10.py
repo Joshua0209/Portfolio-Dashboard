@@ -83,13 +83,13 @@ def test_run_full_backfill_continues_after_per_symbol_failure(
             "symbol": symbol, "currency": currency, "source": "yfinance",
         }])
 
-    def fake_get_fx(ccy, start, end, store=None, today=None):
-        return []
-
     monkeypatch.setattr(
         backfill_runner, "_fetch_range_via_price_service", _fake_fetch_range,
     )
-    monkeypatch.setattr(backfill_runner, "get_fx_rates", fake_get_fx)
+    monkeypatch.setattr(
+        backfill_runner, "_fetch_range_via_fx_provider",
+        lambda store, ccy, s, e: 0,
+    )
     monkeypatch.setattr(
         backfill_runner, "get_yfinance_prices",
         lambda *a, **kw: [],

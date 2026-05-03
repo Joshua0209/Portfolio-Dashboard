@@ -76,11 +76,12 @@ def build_resolver(store: DailyStore) -> Callable[[FailedTask], Callable[[], Non
                 backfill_runner._persist_symbol_prices(store, target, rows)
             return _do
         if ttype == "fx_rates":
+            # Phase 14.3b: route through fx_provider.fetch_and_store_range,
+            # mirroring the price_service routing for tw/foreign upstreams.
             def _do() -> None:
-                rows = price_sources.get_fx_rates(
-                    target, floor, today, store=store, today=today,
+                backfill_runner._fetch_range_via_fx_provider(
+                    store, target, floor, today,
                 )
-                backfill_runner._persist_fx_rows(store, target, rows)
             return _do
         if ttype == "benchmark_prices":
             def _do() -> None:

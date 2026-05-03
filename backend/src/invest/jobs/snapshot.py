@@ -30,7 +30,7 @@ invariant.
 from __future__ import annotations
 
 import logging
-from datetime import date as _date, datetime, timedelta, timezone
+from datetime import date as _date, timedelta
 from typing import Any, Callable, Optional
 
 from sqlmodel import Session, desc, select
@@ -121,19 +121,16 @@ def _get_prices(
     return get_prices(symbol, ccy, start, end, store=store, today=today)
 
 
-def _get_fx_rates(
-    ccy: str,
-    start: str,
-    end: str,
-    store: DailyStore | None = None,
-    today: str | None = None,
-):
-    """Pass store + today so the set-minus path skips already-checked
-    dates and successful fetches mark their range — keeps incremental
-    runs from re-paying for cached FX days."""
-    from invest.prices.sources import get_fx_rates
+def _fetch_range_via_fx_provider(
+    store: DailyStore, ccy: str, start: str, end: str
+) -> int:
+    """Phase 14.3b: route incremental FX gap-fill through fx_provider.
 
-    return get_fx_rates(ccy, start, end, store=store, today=today)
+    Symmetric to ``_fetch_range_via_price_service`` for prices —
+    delegates to ``backfill_runner._fetch_range_via_fx_provider`` so the
+    same SQLModel session lifecycle and DLQ semantics apply.
+    """
+    return backfill_runner._fetch_range_via_fx_provider(store, ccy, start, end)
 
 
 def compute_increment_window(store: DailyStore) -> tuple[str, str] | None:
@@ -153,26 +150,6 @@ def compute_increment_window(store: DailyStore) -> tuple[str, str] | None:
     if last_known >= today:
         return None
     return (_next_day(last_known), today)
-
-
-def _persist_fx(store: DailyStore, ccy: str, rows: list[dict]) -> int:
-    if not rows:
-        return 0
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with store.connect_rw() as conn:
-        for r in rows:
-            conn.execute(
-                """
-                INSERT INTO fx_daily(date, ccy, rate_to_twd, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(date, ccy) DO UPDATE SET
-                    rate_to_twd = excluded.rate_to_twd,
-                    source = excluded.source,
-                    fetched_at = excluded.fetched_at
-                """,
-                (r["date"], ccy, r["rate"], r["source"], now),
-            )
-    return len(rows)
 
 
 def _held_tw_symbols(portfolio: dict) -> list[str]:
@@ -452,22 +429,14 @@ def run(store: DailyStore, portfolio: dict) -> dict[str, Any]:
                 new_dates.add(r["date"])
 
     # 3. FX (always at least USD, regardless of current foreign holdings)
+    # Phase 14.3b: routed through fx_provider.fetch_and_store_range.
+    # Per-ccy DLQ writes happen inside fx_provider.
     needed_ccys: set[str] = {"USD"}
     for _, ccy in _held_foreign_symbols(portfolio):
         if ccy and ccy != "TWD":
             needed_ccys.add(ccy)
     for ccy in sorted(needed_ccys):
-        rows = backfill_runner.fetch_with_dlq(
-            store,
-            "fx_rates",
-            ccy,
-            lambda c=ccy, s=start, e=end, t=end: _get_fx_rates(
-                c, s, e, store=store, today=t,
-            ),
-        )
-        if rows is None:
-            continue
-        new_rows += _persist_fx(store, ccy, rows)
+        new_rows += _fetch_range_via_fx_provider(store, ccy, start, end)
 
     # 4. Overlay symbol discovery + price pre-fetch (added 2026-05-01)
     # Two-pass orchestration: the price-fetcher above only knows about

@@ -3,7 +3,7 @@
 The script implements 4 integrity checks:
   (a) per-symbol gap detection in prices for every held symbol
   (b) symbol_market resolution coverage (no NULLs / no missing rows)
-  (c) fx_daily has no gaps in held-position window
+  (c) fx_rates has no gaps in held-position window
   (d) most-recent month-end portfolio_daily equity matches portfolio.json
 
 Each check returns a list of issues. The CLI exits 0 if all are empty,
@@ -51,11 +51,13 @@ def _seed_prices(store: DailyStore, symbol: str, dates: list[str], close: float 
 
 def _seed_fx(store: DailyStore, dates: list[str], rate: float = 32.0,
              ccy: str = "USD") -> None:
+    """Phase 14.3b: SQLModel-shape ``fx_rates`` (id PK + base/quote/rate)."""
     now = _now()
     with store.connect_rw() as conn:
         for d in dates:
             conn.execute(
-                "INSERT INTO fx_daily VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO fx_rates(date, base, quote, rate, source, ingested_at) "
+                "VALUES (?, ?, 'TWD', ?, ?, ?)",
                 (d, ccy, rate, "yfinance", now),
             )
 
@@ -125,7 +127,7 @@ def test_check_symbol_market_flags_unknown_market(store: DailyStore) -> None:
     assert issues[0]["market"] == "unknown"
 
 
-# --- Check (c): fx_daily gaps ------------------------------------------
+# --- Check (c): fx_rates gaps ------------------------------------------
 
 
 def test_check_fx_gaps_ok_when_dense(store: DailyStore) -> None:
